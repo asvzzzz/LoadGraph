@@ -328,7 +328,7 @@ std::vector<double> GraphPanel::ComputeYTicks(double minVal, double maxVal,
         case GraphYMode::Percent:
             steps = kPctSteps; stepsCount = 5; break;
         case GraphYMode::Gigabytes:
-            steps = kGbSteps;  stepsCount = 5; break;
+            steps = kGbSteps;  stepsCount = 9; break;
         case GraphYMode::Celsius:
             steps = kCelsiusSteps; stepsCount = 5; break;
         default: // Auto / RPM — use a generic step.
