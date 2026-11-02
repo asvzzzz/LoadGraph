@@ -558,9 +558,17 @@ void MainFrame::OnTimer(wxTimerEvent& /*evt*/)
         // Round to nearest integer to avoid fractional tick labels.
         const double totalGb = std::round(static_cast<double>(rm.totalBytes) /
                                           1073741824.0);
-        m_ramUsageGraph->SetYRange(0.0, totalGb);
         const double usedGb = static_cast<double>(rm.totalBytes - rm.freeBytes) /
                               1073741824.0;
+        // Log only on first tick to avoid spam.
+        static bool s_ramLogged = false;
+        if (!s_ramLogged)
+        {
+            s_ramLogged = true;
+            LOGI("RAM: total=%llu GB used=%.1f GB (percent=%.0f%%)",
+                 rm.totalBytes, usedGb, rm.loadPercent);
+        }
+        m_ramUsageGraph->SetYRange(0.0, totalGb);
         m_ramUsageGraph->AddPoint(usedGb);
     }
 
@@ -588,13 +596,34 @@ void MainFrame::OnTimer(wxTimerEvent& /*evt*/)
                                     1073741824.0);
                 pd.vramGraph->SetYRange(0.0, vramGb);
             }
-            pd.vramGraph->AddPoint(static_cast<double>(meta.vramUsedBytes) /
-                                   1073741824.0);
+            const double vramUsedGb = static_cast<double>(meta.vramUsedBytes) /
+                                      1073741824.0;
+            // Log only on first tick per GPU.
+            static bool s_vramLogged[4] = {};
+            if (!s_vramLogged[g])
+            {
+                s_vramLogged[g] = true;
+                LOGI("GPU %zu VRAM: total=%llu GB used=%.1f GB (percent=%.0f%%)",
+                     g, meta.vramTotalBytes, vramUsedGb, meta.vramLoadPercent);
+            }
+            pd.vramGraph->AddPoint(vramUsedGb);
         }
 
         if (pd.fanGraph && meta.fanPercent >= 0.0)
             pd.fanGraph->AddPoint(meta.fanPercent);
+
+        // Refresh all GPU panels to trigger repaint.
+        if (pd.loadGraph) pd.loadGraph->Refresh();
+        if (pd.tempGraph) pd.tempGraph->Refresh();
+        if (pd.vramGraph) pd.vramGraph->Refresh();
+        if (pd.fanGraph) pd.fanGraph->Refresh();
     }
+
+    // Refresh CPU/RAM panels.
+    if (m_cpuLoadGraph) m_cpuLoadGraph->Refresh();
+    if (m_ramUsageGraph) m_ramUsageGraph->Refresh();
+    if (m_cpuTempGraph) m_cpuTempGraph->Refresh();
+    if (m_cpuFanGraph) m_cpuFanGraph->Refresh();
 
     // ---- React to a live system light/dark scheme switch ----
     if (Theme::Update())
