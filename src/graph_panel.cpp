@@ -316,9 +316,9 @@ std::vector<double> GraphPanel::ComputeYTicks(double minVal, double maxVal,
     if (range <= 0.0) range = 1.0;
 
     // Target round step sizes per mode — ordered from largest to smallest.
-    // The algorithm picks the LARGEST step that still gives <= count intervals.
+    // Covers common memory sizes: 1GB, 2GB, 3GB, 4GB, 8GB, 12GB, 16GB, 24GB, 32GB, 48GB, 64GB, 128GB.
     static const double kPctSteps[]     = {25.0, 20.0, 10.0, 5.0, 2.0};
-    static const double kGbSteps[]      = {8.0, 4.0, 3.0, 2.0, 1.0};
+    static const double kGbSteps[]      = {64.0, 32.0, 24.0, 16.0, 8.0, 4.0, 3.0, 2.0, 1.0};
     static const double kCelsiusSteps[] = {25.0, 20.0, 10.0, 5.0, 2.0};
     const double* steps = nullptr;
     int stepsCount = 0;
