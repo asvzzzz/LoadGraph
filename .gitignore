@@ -1,0 +1,23 @@
+# Build output
+build/
+!.gitignore
+
+# Logs
+*.log
+
+# Screenshots
+shot_*.png
+
+# Backup executables
+*_bak.exe
+crash.log
+test.log
+
+# IDE
+.vs/
+*.suo
+*.user
+
+
+# Documentation (exclude from git)
+AGENTS.md
