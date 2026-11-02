@@ -336,16 +336,20 @@ std::vector<double> GraphPanel::ComputeYTicks(double minVal, double maxVal,
     }
 
     // Find the step that gives approximately count intervals.
-    // We want range/step to be close to count, but not exceed it by much.
+    // Choose the step whose interval count is closest to target count.
     double step = range;
+    double bestDiff = std::numeric_limits<double>::max();
     for (int i = 0; i < stepsCount; ++i)
     {
         double intervals = range / steps[i];
-        // Accept this step if it gives between 2 and count+1 intervals.
-        if (intervals >= 2.0 && intervals <= static_cast<double>(count + 1))
+        double diff = std::abs(intervals - static_cast<double>(count));
+        // Prefer steps that give between count-1 and count+1 intervals.
+        if (intervals >= static_cast<double>(count - 1) &&
+            intervals <= static_cast<double>(count + 1) &&
+            diff < bestDiff)
         {
+            bestDiff = diff;
             step = steps[i];
-            break;
         }
     }
 
