@@ -318,7 +318,7 @@ std::vector<double> GraphPanel::ComputeYTicks(double minVal, double maxVal,
     // Target round step sizes per mode — ordered from largest to smallest.
     // The algorithm picks the LARGEST step that still gives <= count intervals.
     static const double kPctSteps[]     = {25.0, 20.0, 10.0, 5.0, 2.0};
-    static const double kGbSteps[]      = {8.0, 4.0, 2.0, 1.0};
+    static const double kGbSteps[]      = {8.0, 4.0, 3.0, 2.0, 1.0};
     static const double kCelsiusSteps[] = {25.0, 20.0, 10.0, 5.0, 2.0};
     const double* steps = nullptr;
     int stepsCount = 0;
@@ -335,11 +335,14 @@ std::vector<double> GraphPanel::ComputeYTicks(double minVal, double maxVal,
             steps = kPctSteps; stepsCount = 5; break;
     }
 
-    // Find the largest step that still gives <= count intervals within the range.
+    // Find the step that gives approximately count intervals.
+    // We want range/step to be close to count, but not exceed it by much.
     double step = range;
     for (int i = 0; i < stepsCount; ++i)
     {
-        if (range / steps[i] <= static_cast<double>(count))
+        double intervals = range / steps[i];
+        // Accept this step if it gives between 2 and count+1 intervals.
+        if (intervals >= 2.0 && intervals <= static_cast<double>(count + 1))
         {
             step = steps[i];
             break;
