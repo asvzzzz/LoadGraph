@@ -205,20 +205,7 @@ void MainFrame::CreateUI()
         wxPanel* header = new wxPanel(this, wxID_ANY);
         header->SetBackgroundColour(Theme::Bg());
         m_header = header;
-        wxBoxSizer* hSizer = new wxBoxSizer(wxHORIZONTAL);
-
-        wxStaticText* stTitle = new wxStaticText(header, wxID_ANY,
-                                                 L"Performance Monitor",
-                                                 wxDefaultPosition, wxDefaultSize,
-                                                 wxALIGN_CENTER_VERTICAL);
-        stTitle->SetFont(wxFont(14, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL,
-                                wxFONTWEIGHT_BOLD));
-        stTitle->SetForegroundColour(Theme::Text());
-        AddThemedText(stTitle, true);
-
-        hSizer->Add(stTitle, 1, wxALIGN_CENTER_VERTICAL | wxLEFT, 16);
-        header->SetSizer(hSizer);
-        header->SetMinSize(wxSize(-1, 28));
+        header->SetMinSize(wxSize(-1, 2));
         mainSizer->Add(header, 0, wxEXPAND);
     }
 
