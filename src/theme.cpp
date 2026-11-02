@@ -64,7 +64,8 @@ wxColour Theme::SubText()
 
 wxColour Theme::Grid()
 {
-    return g_dark ? wxColour(70, 70, 70) : wxColour(235, 235, 235);
+    // Visible but subtle grid lines on both light and dark backgrounds.
+    return g_dark ? wxColour(85, 85, 85) : wxColour(220, 220, 220);
 }
 
 wxColour Theme::Border()

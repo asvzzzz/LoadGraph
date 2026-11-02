@@ -1,4 +1,5 @@
 ﻿#include "graph_panel.h"
+#include "logger.h"
 #include "theme.h"
 #include <wx/dcbuffer.h>
 #include <algorithm>
@@ -199,10 +200,11 @@ void GraphPanel::OnPaint(wxPaintEvent& /*evt*/)
 
     // Adaptive Y-axis tick count based on available plot height.
     // Keeps labels at least ~20 px apart so they never overlap after resize.
-    const int tickCount = (plotHeight < 40.0) ? 1 :
-                          (plotHeight < 80.0) ? 2 :
-                          (plotHeight < 130.0) ? 3 :
-                          (plotHeight < 200.0) ? 4 : 5;
+    // Minimum 4 ticks to ensure visible grid even on short panels.
+    const int tickCount = std::max(4, (plotHeight < 40.0) ? 1 :
+                                      (plotHeight < 80.0) ? 2 :
+                                      (plotHeight < 130.0) ? 3 :
+                                      (plotHeight < 200.0) ? 4 : 5);
 
     // Compute nice Y-axis tick values based on mode and available height.
     const auto yTicks = ComputeYTicks(yMin, yMax, tickCount, m_yMode);
@@ -313,10 +315,11 @@ std::vector<double> GraphPanel::ComputeYTicks(double minVal, double maxVal,
     double range = maxVal - minVal;
     if (range <= 0.0) range = 1.0;
 
-    // Target round step sizes per mode.
-    static const double kPctSteps[]   = {25.0, 20.0, 10.0, 5.0, 2.0};
-    static const double kGbSteps[]    = {32.0, 16.0, 8.0, 4.0, 2.0};
-    static const double kCelsiusSteps[] = {20.0, 20.0, 10.0, 5.0, 2.0};
+    // Target round step sizes per mode — ordered from largest to smallest.
+    // The algorithm picks the LARGEST step that still gives <= count intervals.
+    static const double kPctSteps[]     = {25.0, 20.0, 10.0, 5.0, 2.0};
+    static const double kGbSteps[]      = {8.0, 4.0, 2.0, 1.0};
+    static const double kCelsiusSteps[] = {25.0, 20.0, 10.0, 5.0, 2.0};
     const double* steps = nullptr;
     int stepsCount = 0;
 
@@ -332,7 +335,7 @@ std::vector<double> GraphPanel::ComputeYTicks(double minVal, double maxVal,
             steps = kPctSteps; stepsCount = 5; break;
     }
 
-    // Find the largest step that gives <= count intervals within the range.
+    // Find the largest step that still gives <= count intervals within the range.
     double step = range;
     for (int i = 0; i < stepsCount; ++i)
     {
@@ -343,7 +346,7 @@ std::vector<double> GraphPanel::ComputeYTicks(double minVal, double maxVal,
         }
     }
 
-    // Snap snapped-min/max to multiples of step.
+    // Snap min/max to multiples of step.
     double snapMin = std::floor(minVal / step) * step;
     double snapMax = std::ceil(maxVal / step) * step;
     if (snapMax <= snapMin) snapMax = snapMin + step;
@@ -351,12 +354,14 @@ std::vector<double> GraphPanel::ComputeYTicks(double minVal, double maxVal,
     for (double v = snapMin; v <= snapMax + step * 0.5; v += step)
         ticks.push_back(v);
 
-    // Ensure we always have at least 2 ticks (bottom and top).
-    if (ticks.size() < 2)
+    // Ensure we always have at least count ticks (bottom and top plus intermediates).
+    if (static_cast<int>(ticks.size()) < count)
     {
+        // Force uniform spacing to meet the minimum tick requirement.
         ticks.clear();
-        ticks.push_back(snapMin);
-        ticks.push_back(snapMax);
+        double forcedStep = (snapMax - snapMin) / static_cast<double>(count - 1);
+        for (int i = 0; i < count; ++i)
+            ticks.push_back(snapMin + forcedStep * i);
     }
 
     return ticks;
@@ -365,10 +370,7 @@ std::vector<double> GraphPanel::ComputeYTicks(double minVal, double maxVal,
 // Format a value for axis labels and the header readout.
 wxString GraphPanel::FormatValue(double val)
 {
-    if (std::abs(val) >= 100.0)
-        return wxString::Format("%.0f", val);
-    // Whole numbers without a fractional part print without decimals.
-    if (std::abs(val - std::round(val)) < 0.001)
-        return wxString::Format("%.0f", val);
-    return wxString::Format("%.1f", val);
+    // Round to nearest integer to avoid floating point artifacts.
+    long rounded = static_cast<long>(std::round(val));
+    return wxString::Format("%ld", rounded);
 }
