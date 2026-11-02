@@ -346,10 +346,15 @@ void MainFrame::BuildCpuSection(wxBoxSizer* container, wxWindow* parent)
 
         m_ramUsageGraph = new GraphPanel(parent, L"RAM Usage", L"GB");
         if (rm.totalBytes > 0)
-            m_ramUsageGraph->SetYRange(0.0, static_cast<double>(rm.totalBytes) /
-                                            1073741824.0);
+        {
+            const double totalGb = std::round(static_cast<double>(rm.totalBytes) /
+                                              1073741824.0);
+            m_ramUsageGraph->SetYRange(0.0, totalGb);
+        }
         else
+        {
             m_ramUsageGraph->SetYRange(0.0, 16.0);
+        }
         m_ramUsageGraph->SetYMode(GraphYMode::Gigabytes);
         row->Add(m_ramUsageGraph, 1, wxEXPAND | wxBOTTOM | wxLEFT, 8);
 
@@ -474,10 +479,12 @@ void MainFrame::BuildGpuSection(wxBoxSizer* container, wxWindow* parent)
 
         pd.vramGraph = new GraphPanel(parent, L"VRAM Usage", L"GB");
         // Clamp the axis to the real VRAM size when it is already known.
+        // Round to nearest integer to avoid fractional tick labels.
         if (gpus[g].vramTotalBytes > 0)
         {
-            pd.vramGraph->SetYRange(0.0, static_cast<double>(gpus[g].vramTotalBytes) /
-                                         1073741824.0);
+            const double vramGb = std::round(static_cast<double>(gpus[g].vramTotalBytes) /
+                                             1073741824.0);
+            pd.vramGraph->SetYRange(0.0, vramGb);
         }
         else
         {
@@ -548,7 +555,9 @@ void MainFrame::OnTimer(wxTimerEvent& /*evt*/)
     if (m_ramUsageGraph && rm.totalBytes > 0)
     {
         // Axis always spans the full physical RAM: 0..total GB.
-        const double totalGb = static_cast<double>(rm.totalBytes) / 1073741824.0;
+        // Round to nearest integer to avoid fractional tick labels.
+        const double totalGb = std::round(static_cast<double>(rm.totalBytes) /
+                                          1073741824.0);
         m_ramUsageGraph->SetYRange(0.0, totalGb);
         const double usedGb = static_cast<double>(rm.totalBytes - rm.freeBytes) /
                               1073741824.0;
@@ -571,10 +580,13 @@ void MainFrame::OnTimer(wxTimerEvent& /*evt*/)
         if (pd.vramGraph)
         {
             // Axis always spans the full VRAM: 0..total GB.
+            // Round to nearest integer to avoid fractional tick labels.
+            double vramGb = 16.0; // default fallback
             if (meta.vramTotalBytes > 0)
             {
-                pd.vramGraph->SetYRange(0.0,
-                    static_cast<double>(meta.vramTotalBytes) / 1073741824.0);
+                vramGb = std::round(static_cast<double>(meta.vramTotalBytes) /
+                                    1073741824.0);
+                pd.vramGraph->SetYRange(0.0, vramGb);
             }
             pd.vramGraph->AddPoint(static_cast<double>(meta.vramUsedBytes) /
                                    1073741824.0);
