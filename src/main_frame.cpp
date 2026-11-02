@@ -227,6 +227,7 @@ void MainFrame::CreateUI()
     // so their heights follow the frame height and no scrollbar is needed.
     wxPanel* content = new wxPanel(this, wxID_ANY);
     content->SetBackgroundColour(Theme::Bg());
+    content->SetBackgroundStyle(wxBG_STYLE_CUSTOM);
     m_content = content;
 
     wxBoxSizer* container = new wxBoxSizer(wxVERTICAL);

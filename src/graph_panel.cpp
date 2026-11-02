@@ -15,6 +15,8 @@ GraphPanel::GraphPanel(wxWindow* parent, const wxString& title, const wxString& 
     , m_title(title)
     , m_yLabel(yLabel)
 {
+    // Custom background style prevents flicker: OnPaint handles all painting.
+    SetBackgroundStyle(wxBG_STYLE_CUSTOM);
     SetBackgroundColour(Theme::Card());
     // Minimum size so the chart area stays readable but the row can shrink
     // when the window is resized vertically (no scrollbar needed).
