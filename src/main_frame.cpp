@@ -63,6 +63,8 @@ MainFrame::MainFrame(const wxString& title)
             wxDEFAULT_FRAME_STYLE | wxRESIZE_BORDER);
 
     LOGI("MainFrame constructor started.");
+    // 1.5x narrower than the previous 720 px minimum.
+    SetMinSize(wxSize(480, 540));
 
     try
     {
@@ -92,7 +94,7 @@ MainFrame::MainFrame(const wxString& title)
             LOGI("Initial GPU collect done: %zu GPUs found.", gm.size());
         }
 
-        LOGI("Creating UI...");
+        LOGI("About to create UI...");
         CreateUI();
         LOGI("UI created successfully.");
 
