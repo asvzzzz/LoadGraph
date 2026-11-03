@@ -2,18 +2,19 @@
 #define CPU_MONITOR_H
 
 #include "metrics_collector.h"
+#include "platform.h"
 
+#ifdef PLATFORM_WINDOWS
 // Keep windows.h from pulling winsock.h: later headers (wx via logger.h)
 // include winsock2.h, and the two cannot coexist in one translation unit.
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
-#endif
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
-
 #include <windows.h>
 #include <pdh.h>
+#endif
+
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -23,16 +24,15 @@ struct CpuMetrics
     double    loadPercent = 0.0;   // Overall CPU usage percentage [0.0, 100.0]
     double    temperature = -1.0;  // Temperature in Celsius, -1.0 means N/A
     int       fanRpm      = -1;    // Fan speed in RPM, -1 means N/A
-    ULONGLONG uptimeMs    = 0;     // System uptime in milliseconds
+    uint64_t  uptimeMs    = 0;     // System uptime in milliseconds
     std::wstring cpuName;          // CPU model name (empty if unavailable)
 };
 
 // Collects overall CPU load, temperature and fan speed.
-// Load uses the PDH counter "\Processor(_Total)\% Processor Time" - the same
-// source Task Manager displays, so values match. Falls back to GetSystemTimes()
-// if PDH is unavailable. No admin rights required for the load counter.
-// Temperature/fan use WMI and are queried defensively (guarded against
-// fastprox.dll crashes) - they fall back to "N/A" if unavailable.
+// Load uses the PDH counter "\Processor(_Total)\% Processor Time" on Windows -
+// the same source Task Manager displays, so values match. On Linux uses /proc/stat.
+// Temperature/fan use WMI (Windows) or /sys/class/thermal (Linux) and fall back
+// to "N/A" if unavailable.
 class CpuMonitor : public MetricsCollector
 {
 public:
@@ -42,18 +42,20 @@ public:
     // Get current CPU metrics (thread-safe copy).
     CpuMetrics GetMetrics();
 
+#ifdef PLATFORM_WINDOWS
     // Sample the CPU load right now via PDH (call from the GUI thread each
     // tick to avoid the ~1s phase lag of the background thread).
     // Returns the load percentage, or -1.0 on failure.
     double SampleLoad();
+#endif
 
-    // Read the CPU model name from WMI (Win32_Processor.Name). Called once at
-    // startup before the polling thread starts. The result is stored in m_metrics.cpuName.
+    // Read the CPU model name (called once at startup before polling starts).
     void QueryCpuName();
 
 protected:
     void Collect() override;
 
+#ifdef PLATFORM_WINDOWS
 private:
     bool QueryOverallLoad(double& loadPercent);
 
@@ -81,6 +83,10 @@ private:
     bool m_wmiTried   = false;
     bool m_wmiOk      = false;
     int  m_wmiCooldown = 0;
+#else
+private:
+    CpuMetrics m_metrics;
+#endif
 };
 
 #endif // CPU_MONITOR_H

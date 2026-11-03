@@ -2,7 +2,13 @@
 #define GPU_MONITOR_H
 
 #include "metrics_collector.h"
+#include "platform.h"
+
+#ifdef PLATFORM_WINDOWS
 #include <windows.h>
+#endif
+
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -12,8 +18,8 @@ struct GpuMetrics
     std::string name;            // GPU model name
     double      loadPercent     = 0.0;   // GPU usage percentage [0.0, 100.0]
     double      gpuFreqMhz      = 0.0;   // Current GPU core frequency in MHz
-    ULONGLONG   vramTotalBytes  = 0;     // Total VRAM
-    ULONGLONG   vramUsedBytes   = 0;     // Used VRAM
+    uint64_t    vramTotalBytes  = 0;     // Total VRAM
+    uint64_t    vramUsedBytes   = 0;     // Used VRAM
     double      vramLoadPercent = 0.0;   // VRAM usage percentage
     double      vramFreqMhz     = 0.0;   // Current VRAM frequency in MHz
     double      temperature     = -1.0;  // GPU temp in Celsius, -1.0 means N/A
@@ -22,9 +28,9 @@ struct GpuMetrics
 };
 
 // Collects GPU metrics for all Nvidia GPUs.
-// Primary source: NVML (nvml.dll, direct exports).
-// Fallback: NVAPI (nvapi64.dll, resolved via nvapi_QueryInterface).
-// Dynamically loads both libraries — falls back to empty list if unavailable.
+// Primary source: NVML (nvml.dll on Windows, libnvidia-ml.so on Linux).
+// Fallback: NVAPI (nvapi64.dll on Windows) — Windows only.
+// Dynamically loads the library — falls back to empty list if unavailable.
 class GpuMonitor : public MetricsCollector
 {
 public:
@@ -34,12 +40,13 @@ public:
     // Get current GPU metrics (thread-safe copy).
     std::vector<GpuMetrics> GetMetrics();
 
-    // Returns true if NVAPI was successfully loaded and at least one GPU found.
+    // Returns true if NVML/NVAPI was successfully loaded and at least one GPU found.
     bool IsAvailable() const;
 
 protected:
     void Collect() override;
 
+#ifdef PLATFORM_WINDOWS
 private:
     // NVML function pointer types (C ABI, exported directly from nvml.dll).
     using FnNvmlInit                    = int (__cdecl*)();
@@ -84,10 +91,6 @@ private:
     FnNvAPI_GPU_GetAllClockFrequencies m_fnGetAllClockFrequencies = nullptr;
     FnNvAPI_Unload                     m_fnUnload           = nullptr;
 
-    std::vector<GpuMetrics> m_metrics;
-    bool                    m_available    = false;  // NVAPI available
-    bool                    m_nvvmAvailable = false; // NVML available (primary source)
-
     bool LoadNvml();
     void FreeNvml();
     void CollectNvml();
@@ -95,6 +98,40 @@ private:
     bool LoadNvApi();
     void FreeNvApi();
     void CollectNvApi();
+#else
+private:
+    // Linux: only NVML via dlopen (no NVAPI).
+    using FnNvmlInit                    = int (*)();
+    using FnNvmlShutdown                = int (*)();
+    using FnNvmlDeviceGetCount          = int (*)(unsigned int*);
+    using FnNvmlDeviceGetHandleByIndex  = int (*)(unsigned int, void**);
+    using FnNvmlDeviceGetName           = int (*)(void*, char*, unsigned int);
+    using FnNvmlDeviceGetUtilizationRates = int (*)(void*, void*);
+    using FnNvmlDeviceGetMemoryInfo     = int (*)(void*, void*);
+    using FnNvmlDeviceGetTemperature    = int (*)(void*, unsigned int, unsigned int*);
+    using FnNvmlDeviceGetClockInfo      = int (*)(void*, unsigned int, unsigned int*);
+    using FnNvmlDeviceGetFanSpeed       = int (*)(void*, unsigned int*);
+
+    void*  m_hNvml   = nullptr;
+    FnNvmlInit                         m_fnNvmlInit          = nullptr;
+    FnNvmlShutdown                     m_fnNvmlShutdown      = nullptr;
+    FnNvmlDeviceGetCount               m_fnNvmlGetCount      = nullptr;
+    FnNvmlDeviceGetHandleByIndex       m_fnNvmlGetHandle     = nullptr;
+    FnNvmlDeviceGetName                m_fnNvmlGetName       = nullptr;
+    FnNvmlDeviceGetUtilizationRates    m_fnNvmlGetUsage      = nullptr;
+    FnNvmlDeviceGetMemoryInfo          m_fnNvmlGetMemory     = nullptr;
+    FnNvmlDeviceGetTemperature         m_fnNvmlGetTemp       = nullptr;
+    FnNvmlDeviceGetClockInfo           m_fnNvmlGetClock      = nullptr;
+    FnNvmlDeviceGetFanSpeed            m_fnNvmlGetFan        = nullptr;
+
+    bool LoadNvml();
+    void FreeNvml();
+    void CollectNvml();
+#endif
+
+    std::vector<GpuMetrics> m_metrics;
+    bool                    m_available     = false; // NVAPI available (Win) or last probe result
+    bool                    m_nvvmAvailable = false; // NVML available
 };
 
 #endif // GPU_MONITOR_H

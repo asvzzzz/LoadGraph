@@ -2,15 +2,21 @@
 #define RAM_MONITOR_H
 
 #include "metrics_collector.h"
+#include "platform.h"
+
+#ifdef PLATFORM_WINDOWS
 #include <windows.h>
+#endif
+
+#include <cstdint>
 #include <string>
 
 struct RamMetrics
 {
-    ULONGLONG totalBytes   = 0;
-    ULONGLONG freeBytes    = 0;
-    double    loadPercent  = 0.0;
-    int       speedMhz     = -1;
+    uint64_t totalBytes   = 0;
+    uint64_t freeBytes    = 0;
+    double   loadPercent  = 0.0;
+    int      speedMhz     = -1;
 };
 
 class RamMonitor : public MetricsCollector
