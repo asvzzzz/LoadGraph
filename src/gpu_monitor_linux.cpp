@@ -36,7 +36,14 @@ struct NvmlMemory
 
 GpuMonitor::GpuMonitor()
 {
-    m_nvvmAvailable = false;
+    // NVML is cross-platform and IS available under WSL2/Linux: NVIDIA ships
+    // /usr/lib/wsl/lib/libnvidia-ml.so.1 and nvidia-smi works there. NVAPI is
+    // Windows-only (no libnvapi.so exists for Linux), so only NVML is tried.
+    m_nvvmAvailable = LoadNvml();
+    if (m_nvvmAvailable)
+        LOGI("NVML loaded OK - GPU metrics will be collected (Linux/WSL).");
+    else
+        LOGI("NVML not available on this system - GPU graphs hidden.");
 }
 
 GpuMonitor::~GpuMonitor()
@@ -85,20 +92,23 @@ bool GpuMonitor::LoadNvml()
     }
     LOGI("NVML library loaded: %p", m_hNvml);
 
-#define RESOLVE(fn) \
-    m_fn##fn = reinterpret_cast<Fn##fn>(dlsym(m_hNvml, "nvml" #fn)); \
-    LOGI("  nvml" #fn " = %p", (void*)m_fn##fn);
+// Map a member to its REAL exported NVML symbol name. The names below match
+// the working Windows path (gpu_monitor.cpp); short forms like "nvmlGetCount"
+// do not exist in libnvidia-ml and would resolve to NULL.
+#define RESOLVE(fn, symbol) \
+    m_fn##fn = reinterpret_cast<Fn##fn>(dlsym(m_hNvml, symbol)); \
+    LOGI("  " symbol " = %p", (void*)m_fn##fn);
 
-    RESOLVE(Init);
-    RESOLVE(Shutdown);
-    RESOLVE(GetCount);
-    RESOLVE(GetHandle);
-    RESOLVE(GetName);
-    RESOLVE(GetUsage);
-    RESOLVE(GetMemory);
-    RESOLVE(GetTemp);
-    RESOLVE(GetClock);
-    RESOLVE(GetFan);
+    RESOLVE(Init,      "nvmlInit_v2");
+    RESOLVE(Shutdown,  "nvmlShutdown");
+    RESOLVE(GetCount,  "nvmlDeviceGetCount_v2");
+    RESOLVE(GetHandle, "nvmlDeviceGetHandleByIndex_v2");
+    RESOLVE(GetName,   "nvmlDeviceGetName");
+    RESOLVE(GetUsage,  "nvmlDeviceGetUtilizationRates");
+    RESOLVE(GetMemory, "nvmlDeviceGetMemoryInfo");
+    RESOLVE(GetTemp,   "nvmlDeviceGetTemperature");
+    RESOLVE(GetClock,  "nvmlDeviceGetClockInfo");
+    RESOLVE(GetFan,    "nvmlDeviceGetFanSpeed");
 
 #undef RESOLVE
 
