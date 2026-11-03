@@ -150,7 +150,7 @@ double CpuMonitor::SampleLoad()
         s_prevSystem = system;
         s_prevIdle = idle;
         s_first = false;
-        return 0.0;
+        return -1.0;
     }
 
     double dUser = user - s_prevUser;
@@ -164,10 +164,18 @@ double CpuMonitor::SampleLoad()
     s_prevIdle = idle;
 
     double total = dUser + dNice + dSystem + dIdle;
-    if (total <= 0.0) return 0.0;
+    if (total <= 0.0) return -1.0;
 
     // CPU usage = (total - idle) / total * 100
-    return (total - dIdle) / total * 100.0;
+    double load = (total - dIdle) / total * 100.0;
+
+    // Save to metrics for fallback in main_frame.cpp (same pattern as Windows).
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_metrics.loadPercent = load;
+    }
+
+    return load;
 }
 
 void CpuMonitor::QueryCpuName()
