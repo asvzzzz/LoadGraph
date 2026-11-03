@@ -14,38 +14,61 @@ elseif(WIN32)
     # Windows: prefer static build at known location.
     set(WX_CONFIG_PATH "C:/wxWidgets" CACHE PATH "wxWidgets installation root")
 else()
-    # Linux: use system wx-config.
+    # Linux: parse wx-config manually (system wxWidgets often lacks cmake config files).
     find_program(WX_CONFIG_EXECUTABLE wx-config-3.2)
     if(NOT WX_CONFIG_EXECUTABLE)
         find_program(WX_CONFIG_EXECUTABLE wx-config)
     endif()
-    if(WX_CONFIG_EXECUTABLE)
-        # Get the full cflags string (includes -I, -D defines like __WXGTK__).
-        execute_process(COMMAND ${WX_CONFIG_EXECUTABLE} --cflags
-                       OUTPUT_VARIABLE WX_CFLAGS
-                       RESULT_VARIABLE WX_CFLAGS_RESULT)
-        execute_process(COMMAND ${WX_CONFIG_EXECUTABLE} --libs
-                       OUTPUT_VARIABLE WX_LIBS_OUTPUT
-                       RESULT_VARIABLE WX_LIBS_RESULT)
-
-        if(NOT WX_CFLAGS_RESULT)
-            string(REGEX REPLACE "[\r\n]" " " WX_CFLAGS "${WX_CFLAGS}")
-            # Also populate include dirs for target_include_directories.
-            string(REGEX MATCHALL "-I[^ ]+" WX_INCLUDES "${WX_CFLAGS}")
-            foreach(inc ${WX_INCLUDES})
-                string(REPLACE "-I" "" inc_path "${inc}")
-                list(APPEND wxWidgets_INCLUDE_DIRS "${inc_path}")
-            endforeach()
-        endif()
-
-        if(NOT WX_LIBS_RESULT)
-            string(REGEX REPLACE "[\r\n]" " " WX_LIBS_OUTPUT "${WX_LIBS_OUTPUT}")
-            string(REGEX MATCHALL "-l[^ ]+" WX_LIBS_FOUND "${WX_LIBS_OUTPUT}")
-            foreach(lib ${WX_LIBS_FOUND})
-                list(APPEND wxWidgets_LIBRARIES ${lib})
-            endforeach()
-        endif()
+    if(NOT WX_CONFIG_EXECUTABLE)
+        message(FATAL_ERROR "wx-config not found. Install: sudo apt install libwxgtk3.2-dev")
     endif()
+    message(STATUS "Using wx-config: ${WX_CONFIG_EXECUTABLE}")
+
+    execute_process(COMMAND ${WX_CONFIG_EXECUTABLE} --cflags
+                   OUTPUT_VARIABLE WX_CFLAGS
+                   RESULT_VARIABLE WX_CFLAGS_RESULT)
+    if(NOT WX_CFLAGS_RESULT EQUAL 0)
+        message(FATAL_ERROR "wx-config --cflags failed")
+    endif()
+    string(STRIP "${WX_CFLAGS}" WX_CFLAGS)
+    message(STATUS "wxWidgets cflags: ${WX_CFLAGS}")
+
+    execute_process(COMMAND ${WX_CONFIG_EXECUTABLE} --libs
+                   OUTPUT_VARIABLE WX_LIBS_OUTPUT
+                   RESULT_VARIABLE WX_LIBS_RESULT)
+    if(NOT WX_LIBS_RESULT EQUAL 0)
+        message(FATAL_ERROR "wx-config --libs failed")
+    endif()
+    string(STRIP "${WX_LIBS_OUTPUT}" WX_LIBS_OUTPUT)
+    message(STATUS "wxWidgets libs: ${WX_LIBS_OUTPUT}")
+
+    # Parse cflags and libs using separate_arguments (handles quoting correctly).
+    separate_arguments(WX_CFLAGS_LIST NATIVE_COMMAND "${WX_CFLAGS}")
+    separate_arguments(WX_LIBS_LIST NATIVE_COMMAND "${WX_LIBS_OUTPUT}")
+
+    foreach(arg ${WX_CFLAGS_LIST})
+        if(arg MATCHES "^-I(.+)$")
+            list(APPEND wxWidgets_INCLUDE_DIRS "${CMAKE_MATCH_1}")
+        else()
+            # -D defines, -pthread, etc. must reach the compiler as compile options.
+            list(APPEND wxWidgets_COMPILE_OPTIONS "${arg}")
+        endif()
+    endforeach()
+
+    foreach(arg ${WX_LIBS_LIST})
+        if(arg MATCHES "^-l(.+)$")
+            list(APPEND wxWidgets_LIBRARIES "${CMAKE_MATCH_1}")
+        elseif(arg MATCHES "^-L(.+)$")
+            list(APPEND wxWidgets_LIBRARY_DIRS "${CMAKE_MATCH_1}")
+        else()
+            # Pass through flags like -pthread that linkers also need.
+            list(APPEND wxWidgets_LINK_OPTIONS "${arg}")
+        endif()
+    endforeach()
+
+    message(STATUS "wxWidgets include dirs: ${wxWidgets_INCLUDE_DIRS}")
+    message(STATUS "wxWidgets compile options: ${wxWidgets_COMPILE_OPTIONS}")
+    message(STATUS "wxWidgets libraries: ${wxWidgets_LIBRARIES}")
 endif()
 
 if(WIN32 AND DEFINED WX_CONFIG_PATH)
@@ -96,7 +119,7 @@ elseif(UNIX AND NOT APPLE)
     list(APPEND SOURCES
         src/cpu_monitor_linux.cpp
         src/ram_monitor_linux.cpp
-        src/gpu_monitor.cpp
+        src/gpu_monitor_linux.cpp
         src/graph_panel.h
         src/graph_panel.cpp
         src/theme_linux.cpp
@@ -145,10 +168,9 @@ if(WIN32)
 elseif(UNIX AND NOT APPLE)
     # Linux-specific settings.
     target_include_directories(${PROJECT_NAME} PRIVATE ${wxWidgets_INCLUDE_DIRS})
-    # Pass full wx-config cflags (defines like -D__WXGTK__ are required by wx/defs.h).
-    if(DEFINED WX_CFLAGS)
-        target_compile_options(${PROJECT_NAME} PRIVATE ${WX_CFLAGS})
-    endif()
+    target_link_directories(${PROJECT_NAME} PRIVATE ${wxWidgets_LIBRARY_DIRS})
+    target_compile_options(${PROJECT_NAME} PRIVATE ${wxWidgets_COMPILE_OPTIONS})
+    target_link_options(${PROJECT_NAME} PRIVATE ${wxWidgets_LINK_OPTIONS})
 
     find_library(NVML_LIB nvidia-ml PATHS /usr/lib/x86_64-linux-gnu /usr/local/cuda/lib64 /usr/lib)
 

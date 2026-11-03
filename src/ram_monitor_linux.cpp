@@ -32,11 +32,11 @@ namespace
                 key.pop_back();
 
             if (key == "MemTotal")
-                metrics.totalBytes = static_cast<ULONGLONG>(valueKb) * 1024ULL;
+                metrics.totalBytes = static_cast<uint64_t>(valueKb) * 1024ULL;
             else if (key == "MemAvailable")
-                metrics.freeBytes = static_cast<ULONGLONG>(valueKb) * 1024ULL;
+                metrics.freeBytes = static_cast<uint64_t>(valueKb) * 1024ULL;
             else if (key == "MemFree")
-                metrics.freeBytes = static_cast<ULONGLONG>(valueKb) * 1024ULL;
+                metrics.freeBytes = static_cast<uint64_t>(valueKb) * 1024ULL;
         }
 
         // Calculate load percent.

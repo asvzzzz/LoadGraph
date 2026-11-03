@@ -12,13 +12,13 @@ namespace
 {
     // Simple JSON-like parser (no external dependencies).
     // Extracts integer value for a given key from a simple config file.
-    bool ParseIntValue(const char* content, const char* key, int& out)
+    bool ParseIntValue(const std::string& content, const char* key, int& out)
     {
         std::string search = "\"";
         search += key;
         search += "\"";
 
-        size_t pos = strstr(content, search.c_str()) - content;
+        size_t pos = content.find(search);
         if (pos == std::string::npos) return false;
 
         // Find the colon after the key.
@@ -38,6 +38,8 @@ namespace
     }
 }
 
+namespace Config
+{
 bool LoadWindowPosition(int& x, int& y)
 {
     std::string path = GetAppConfigPath("position.json");
@@ -108,5 +110,7 @@ void SaveWindowPosition(int x, int y, int w, int h)
 
     LOGI("Saved position: (%d,%d) size=%dx%d", x, y, w, h);
 }
+
+} // namespace Config
 
 #endif // PLATFORM_LINUX

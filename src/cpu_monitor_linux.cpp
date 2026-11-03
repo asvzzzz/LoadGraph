@@ -4,6 +4,7 @@
 
 #ifdef PLATFORM_LINUX
 
+#include <cstdint>
 #include <fstream>
 #include <sstream>
 #include <ctime>
@@ -90,7 +91,7 @@ namespace
     }
 
     // Compute uptime in milliseconds from /proc/uptime.
-    ULONGLONG ReadUptimeMs()
+    uint64_t ReadUptimeMs()
     {
         std::string content;
         if (!ReadFileToString("/proc/uptime", content))
@@ -100,7 +101,7 @@ namespace
         try { seconds = std::stod(content); }
         catch (...) { return 0; }
 
-        return static_cast<ULONGLONG>(seconds * 1000.0);
+        return static_cast<uint64_t>(seconds * 1000.0);
     }
 } // anonymous namespace
 
@@ -124,6 +125,12 @@ CpuMonitor::CpuMonitor()
 
 CpuMonitor::~CpuMonitor()
 {
+}
+
+CpuMetrics CpuMonitor::GetMetrics()
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    return m_metrics;
 }
 
 double CpuMonitor::SampleLoad()
@@ -194,19 +201,19 @@ void CpuMonitor::Collect()
     // Leaving as N/A by default.
 }
 
+#ifdef PLATFORM_WINDOWS
 bool CpuMonitor::QueryOverallLoad(double& loadPercent)
 {
-    // Use SampleLoad() instead (PDH equivalent).
     loadPercent = SampleLoad();
     return loadPercent >= 0.0;
 }
 
 unsigned int CpuMonitor::ProbeWmiSensor(double& tempC, int& fanRpm)
 {
-    // Linux thermal probe - simplified version.
     tempC = ReadCpuTemperature();
-    fanRpm = -1; // Not available on most systems.
+    fanRpm = -1;
     return (tempC >= 0.0) ? 1 : 0;
 }
+#endif
 
 #endif // PLATFORM_LINUX

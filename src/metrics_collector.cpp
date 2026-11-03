@@ -1,6 +1,10 @@
 #include "metrics_collector.h"
+#include "platform.h"
 #include <chrono>
+
+#ifdef PLATFORM_WINDOWS
 #include <windows.h>
+#endif
 
 void MetricsCollector::PollLoop()
 {

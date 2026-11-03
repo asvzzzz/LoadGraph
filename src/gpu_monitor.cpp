@@ -1,4 +1,6 @@
+#ifdef PLATFORM_WINDOWS
 #include <winsock2.h>
+#endif
 #include "gpu_monitor.h"
 #include "logger.h"
 #include <cstdio>
@@ -520,3 +522,5 @@ void GpuMonitor::FreeNvApi()
         m_hNvApi = nullptr;
     }
 }
+
+#endif // PLATFORM_WINDOWS

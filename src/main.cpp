@@ -1,7 +1,11 @@
 #include <wx/wx.h>
+#include "platform.h"
 #include "logger.h"
 #include "main_frame.h"
 #include <cstdio>
+
+#ifdef PLATFORM_WINDOWS
+#include <windows.h>
 
 static void WriteCrashLog(const char* msg)
 {
@@ -28,15 +32,18 @@ LONG WINAPI TopLevelFilter(EXCEPTION_POINTERS* ep)
     WriteCrashLog(buf);
     return EXCEPTION_EXECUTE_HANDLER;
 }
+#endif
 
 class LoadGraphApp : public wxApp
 {
 public:
     bool OnInit() override
     {
+#ifdef PLATFORM_WINDOWS
         SetUnhandledExceptionFilter(TopLevelFilter);
+#endif
 
-        wxString logPath = wxGetCwd() + L"\\loadgraph.log";
+        wxString logPath = wxGetCwd() + "/loadgraph.log";
         Logger::Init(logPath);
         LOGI("Starting...");
         LOGI("wxWidgets %s", wxVERSION_STRING);
@@ -61,13 +68,17 @@ public:
         catch (const std::exception& e)
         {
             LOGE("Exception: %s", e.what());
+#ifdef PLATFORM_WINDOWS
             WriteCrashLog(e.what());
             WriteCrashLog("\n");
+#endif
             return false;
         }
         catch (...)
         {
+#ifdef PLATFORM_WINDOWS
             WriteCrashLog("Unknown exception!\n");
+#endif
             return false;
         }
     }

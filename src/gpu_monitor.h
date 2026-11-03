@@ -101,28 +101,28 @@ private:
 #else
 private:
     // Linux: only NVML via dlopen (no NVAPI).
-    using FnNvmlInit                    = int (*)();
-    using FnNvmlShutdown                = int (*)();
-    using FnNvmlDeviceGetCount          = int (*)(unsigned int*);
-    using FnNvmlDeviceGetHandleByIndex  = int (*)(unsigned int, void**);
-    using FnNvmlDeviceGetName           = int (*)(void*, char*, unsigned int);
-    using FnNvmlDeviceGetUtilizationRates = int (*)(void*, void*);
-    using FnNvmlDeviceGetMemoryInfo     = int (*)(void*, void*);
-    using FnNvmlDeviceGetTemperature    = int (*)(void*, unsigned int, unsigned int*);
-    using FnNvmlDeviceGetClockInfo      = int (*)(void*, unsigned int, unsigned int*);
-    using FnNvmlDeviceGetFanSpeed       = int (*)(void*, unsigned int*);
+    using FnInit            = int (*)();
+    using FnShutdown        = int (*)();
+    using FnGetCount        = int (*)(unsigned int*);
+    using FnGetHandle       = int (*)(unsigned int, void**);
+    using FnGetName         = int (*)(void*, char*, unsigned int);
+    using FnGetUsage        = int (*)(void*, void*);
+    using FnGetMemory       = int (*)(void*, void*);
+    using FnGetTemp         = int (*)(void*, unsigned int, unsigned int*);
+    using FnGetClock        = int (*)(void*, unsigned int, unsigned int*);
+    using FnGetFan          = int (*)(void*, unsigned int*);
 
     void*  m_hNvml   = nullptr;
-    FnNvmlInit                         m_fnNvmlInit          = nullptr;
-    FnNvmlShutdown                     m_fnNvmlShutdown      = nullptr;
-    FnNvmlDeviceGetCount               m_fnNvmlGetCount      = nullptr;
-    FnNvmlDeviceGetHandleByIndex       m_fnNvmlGetHandle     = nullptr;
-    FnNvmlDeviceGetName                m_fnNvmlGetName       = nullptr;
-    FnNvmlDeviceGetUtilizationRates    m_fnNvmlGetUsage      = nullptr;
-    FnNvmlDeviceGetMemoryInfo          m_fnNvmlGetMemory     = nullptr;
-    FnNvmlDeviceGetTemperature         m_fnNvmlGetTemp       = nullptr;
-    FnNvmlDeviceGetClockInfo           m_fnNvmlGetClock      = nullptr;
-    FnNvmlDeviceGetFanSpeed            m_fnNvmlGetFan        = nullptr;
+    FnInit       m_fnInit          = nullptr;
+    FnShutdown   m_fnShutdown      = nullptr;
+    FnGetCount   m_fnGetCount      = nullptr;
+    FnGetHandle  m_fnGetHandle     = nullptr;
+    FnGetName    m_fnGetName       = nullptr;
+    FnGetUsage   m_fnGetUsage      = nullptr;
+    FnGetMemory  m_fnGetMemory     = nullptr;
+    FnGetTemp    m_fnGetTemp       = nullptr;
+    FnGetClock   m_fnGetClock      = nullptr;
+    FnGetFan     m_fnGetFan        = nullptr;
 
     bool LoadNvml();
     void FreeNvml();

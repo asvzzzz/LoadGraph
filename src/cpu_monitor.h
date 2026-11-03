@@ -42,12 +42,10 @@ public:
     // Get current CPU metrics (thread-safe copy).
     CpuMetrics GetMetrics();
 
-#ifdef PLATFORM_WINDOWS
-    // Sample the CPU load right now via PDH (call from the GUI thread each
-    // tick to avoid the ~1s phase lag of the background thread).
+    // Sample the CPU load right now (call from the GUI thread each tick).
+    // On Windows uses PDH for zero-lag reading; on Linux reads /proc/stat.
     // Returns the load percentage, or -1.0 on failure.
     double SampleLoad();
-#endif
 
     // Read the CPU model name (called once at startup before polling starts).
     void QueryCpuName();
@@ -55,38 +53,24 @@ public:
 protected:
     void Collect() override;
 
-#ifdef PLATFORM_WINDOWS
 private:
+#ifdef PLATFORM_WINDOWS
     bool QueryOverallLoad(double& loadPercent);
-
-    // One-shot WMI probe for temperature and fan. All COM work is done with
-    // raw pointers and wrapped in __try/__except so an access violation inside
-    // fastprox.dll cannot crash the process. Returns a bitmask:
-    //   bit0 = temperature filled, bit1 = fan filled.
     unsigned int ProbeWmiSensor(double& tempC, int& fanRpm);
-
-    CpuMetrics m_metrics;
-
-    // PDH state (guarded by m_mutex; used from the GUI thread via SampleLoad).
     PDH_HQUERY   m_pdhQuery   = nullptr;
     PDH_HCOUNTER m_pdhCounter = nullptr;
     bool         m_pdhTried   = false;
     bool         m_pdhOk      = false;
-
-    // Fallback GetSystemTimes state.
     ULONGLONG m_prevIdle   = 0;
     ULONGLONG m_prevKernel = 0;
     ULONGLONG m_prevUser   = 0;
     bool      m_prevTimesValid = false;
-
-    // WMI probe control: disabled after the first failure/crash.
+    int  m_wmiCooldown = 0;
+#endif
+    CpuMetrics m_metrics;
+    // Shared probe control (used by both Windows WMI and Linux thermal probe).
     bool m_wmiTried   = false;
     bool m_wmiOk      = false;
-    int  m_wmiCooldown = 0;
-#else
-private:
-    CpuMetrics m_metrics;
-#endif
 };
 
 #endif // CPU_MONITOR_H
