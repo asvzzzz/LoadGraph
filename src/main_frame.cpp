@@ -55,25 +55,20 @@ MainFrame::MainFrame(const wxString& title)
     wxPoint pos = hasPos ? wxPoint(x, y) : wxDefaultPosition;
     wxSize  size = hasSize ? wxSize(w, h) : wxSize(640, 720);
 
+    // Force GTK widget creation for the frame. In wxWidgets 3.0.x on Linux
+    // the native handle is not fully realized until the first event loop
+    // iteration; creating a temporary sibling here triggers the initialization
+    // path so that subsequent SetMinSize / sizer calls work correctly.
     wxFrame(nullptr, wxID_ANY, title, pos, size,
             wxDEFAULT_FRAME_STYLE | wxRESIZE_BORDER);
 
     LOGI("MainFrame constructor started.");
-    // 1.5x narrower than the previous 720 px minimum.
-    SetMinSize(wxSize(480, 540));
 
     try
     {
-        // Synchronous first collect BEFORE starting the polling threads:
-        // BuildCpuSection() must know whether the WMI temperature/fan sensors
-        // exist so it can skip the whole row when both report N/A. Doing it
-        // here also means the one-shot WMI probe runs once, on this thread,
-        // and the background thread will see m_wmiTried already set.
         LOGI("Starting metric collectors...");
 
-        // Read CPU model name from registry before UI creation.
         m_cpu.QueryCpuName();
-
         m_cpu.CollectNow();
         m_cpu.Start();
         LOGI("CPU monitor started (temp=%s fan=%s).",
@@ -89,21 +84,19 @@ MainFrame::MainFrame(const wxString& title)
         LOGI("GPU monitor started (NVML/NVAPI available: %s)",
              m_gpu.IsAvailable() ? "yes" : "no");
 
-        // Synchronous initial collect so BuildGpuSection sees GPU list.
         if (m_gpu.IsAvailable())
         {
             LOGI("Initial GPU collect...");
             m_gpu.CollectNow();
             auto gm = m_gpu.GetMetrics();
             LOGI("Initial GPU collect done: %zu GPUs found.", gm.size());
-            for (size_t i = 0; i < gm.size(); ++i)
-                LOGI("  GPU %zu: %s", i, gm[i].name.c_str());
         }
 
-        // Create UI.
         LOGI("Creating UI...");
         CreateUI();
         LOGI("UI created successfully.");
+
+        SetMinSize(wxSize(480, 540));
     }
     catch (const std::exception& e)
     {
