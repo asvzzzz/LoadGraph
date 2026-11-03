@@ -1,14 +1,14 @@
 #include "main_frame.h"
+#include "platform.h"
+#include "config.h"
 #include "logger.h"
 #include "theme.h"
 #include "graph_panel.h"
 #include <wx/statline.h>
-#include <windows.h>
 
-// Registry key for saving/restoring window position and size.
-static const wchar_t* kRegPath = L"Software\\LoadGraph";
-static const wchar_t* kRegPos  = L"WindowPos";
-static const wchar_t* kRegSize = L"WindowSize";
+#ifdef PLATFORM_WINDOWS
+#include <windows.h>
+#endif
 
 wxBEGIN_EVENT_TABLE(MainFrame, wxFrame)
     EVT_TIMER(wxID_ANY, MainFrame::OnTimer)
@@ -43,68 +43,20 @@ static wxString FormatUptime(ULONGLONG totalSec)
 }
 
 // ----------------------------------------------------------------------------
-// Window position/size persistence via registry.
+// Window position/size persistence (cross-platform via Config).
 // ----------------------------------------------------------------------------
-static wxPoint LoadWindowPos()
-{
-    LONG val = 0;
-    DWORD size = sizeof(val);
-    if (RegGetValueW(HKEY_CURRENT_USER, kRegPath, kRegPos, RRF_RT_REG_DWORD,
-                     nullptr, &val, &size) != ERROR_SUCCESS)
-        return wxDefaultPosition;
-    // Encode x and y in a single DWORD: high word = x, low word = y.
-    int x = static_cast<short>(HIWORD(val));
-    int y = static_cast<short>(LOWORD(val));
-    return wxPoint(x, y);
-}
-
-static wxSize LoadWindowSize()
-{
-    LONG val = 0;
-    DWORD size = sizeof(val);
-    if (RegGetValueW(HKEY_CURRENT_USER, kRegPath, kRegSize, RRF_RT_REG_DWORD,
-                     nullptr, &val, &size) != ERROR_SUCCESS)
-        return wxSize(640, 720);
-    int w = static_cast<short>(HIWORD(val));
-    int h = static_cast<short>(LOWORD(val));
-    // Clamp to sane range.
-    if (w < 480)  w = 640;
-    if (h < 540)  h = 720;
-    return wxSize(w, h);
-}
-
-static void SaveWindowPos(const wxPoint& pos)
-{
-    HKEY hKey;
-    if (RegCreateKeyExW(HKEY_CURRENT_USER, kRegPath, 0, nullptr, 0,
-                        KEY_SET_VALUE, nullptr, &hKey, nullptr) == ERROR_SUCCESS)
-    {
-        int val = (static_cast<int>(pos.x) << 16) | (static_cast<unsigned short>(pos.y));
-        RegSetValueExW(hKey, kRegPos, 0, REG_DWORD,
-                       reinterpret_cast<const BYTE*>(&val), sizeof(val));
-        RegCloseKey(hKey);
-    }
-}
-
-static void SaveWindowSize(const wxSize& size)
-{
-    HKEY hKey;
-    if (RegCreateKeyExW(HKEY_CURRENT_USER, kRegPath, 0, nullptr, 0,
-                        KEY_SET_VALUE, nullptr, &hKey, nullptr) == ERROR_SUCCESS)
-    {
-        int val = (static_cast<int>(size.GetWidth()) << 16) |
-                  (static_cast<unsigned short>(size.GetHeight()));
-        RegSetValueExW(hKey, kRegSize, 0, REG_DWORD,
-                       reinterpret_cast<const BYTE*>(&val), sizeof(val));
-        RegCloseKey(hKey);
-    }
-}
-
 MainFrame::MainFrame(const wxString& title)
-    : wxFrame(nullptr, wxID_ANY, title,
-              LoadWindowPos(), LoadWindowSize(),
-              wxDEFAULT_FRAME_STYLE | wxRESIZE_BORDER)
 {
+    int x = 100, y = 100, w = 640, h = 720;
+    bool hasPos = Config::LoadWindowPosition(x, y);
+    bool hasSize = Config::LoadWindowSize(w, h);
+
+    wxPoint pos = hasPos ? wxPoint(x, y) : wxDefaultPosition;
+    wxSize  size = hasSize ? wxSize(w, h) : wxSize(640, 720);
+
+    wxFrame(nullptr, wxID_ANY, title, pos, size,
+            wxDEFAULT_FRAME_STYLE | wxRESIZE_BORDER);
+
     LOGI("MainFrame constructor started.");
     // 1.5x narrower than the previous 720 px minimum.
     SetMinSize(wxSize(480, 540));
@@ -181,8 +133,8 @@ MainFrame::~MainFrame()
 void MainFrame::OnClose(wxCloseEvent& evt)
 {
     // Remember the current position and size.
-    SaveWindowPos(GetPosition());
-    SaveWindowSize(GetSize());
+    Config::SaveWindowPosition(GetPosition().x, GetPosition().y,
+                               GetSize().GetWidth(), GetSize().GetHeight());
     LOGI("Saved window pos=%dx%d size=%dx%d.",
          GetPosition().x, GetPosition().y, GetSize().GetWidth(), GetSize().GetHeight());
     evt.Skip(); // allow the frame to actually close
