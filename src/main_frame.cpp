@@ -413,15 +413,6 @@ void MainFrame::BuildCpuSection(wxBoxSizer* container, wxWindow* parent)
 // ----------------------------------------------------------------------------
 void MainFrame::BuildGpuSection(wxBoxSizer* container, wxWindow* parent)
 {
-    {
-        wxStaticText* st = new wxStaticText(parent, wxID_ANY, L"GPU");
-        st->SetFont(wxFont(11, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL,
-                           wxFONTWEIGHT_BOLD));
-        st->SetForegroundColour(Theme::Text());
-        AddThemedText(st, true);
-        container->Add(st, 0, wxTOP | wxBOTTOM, 2);
-    }
-
     if (!m_gpu.IsAvailable())
     {
         wxStaticText* info = new wxStaticText(parent, wxID_ANY,
