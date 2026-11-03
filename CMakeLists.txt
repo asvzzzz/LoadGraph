@@ -20,15 +20,26 @@ else()
         find_program(WX_CONFIG_EXECUTABLE wx-config)
     endif()
     if(WX_CONFIG_EXECUTABLE)
-        execute_process(COMMAND ${WX_CONFIG_EXECUTABLE} --libs --cflags
-                       OUTPUT_VARIABLE WX_CONFIG_OUTPUT
-                       RESULT_VARIABLE WX_CONFIG_RESULT)
-        if(NOT WX_CONFIG_RESULT)
-            string(REGEX REPLACE "[\r\n]" " " WX_CONFIG_OUTPUT "${WX_CONFIG_OUTPUT}")
-            # Parse libs and cflags.
-            string(REGEX MATCHALL "-L[^ ]+" WX_LIB_DIRS "${WX_CONFIG_OUTPUT}")
-            string(REGEX MATCHALL "-l[^ ]+" WX_LIBS_FOUND "${WX_CONFIG_OUTPUT}")
-            string(REGEX MATCHALL "-I[^ ]+" WX_INCLUDES "${WX_CONFIG_OUTPUT}")
+        # Get includes and libs separately to keep them clean.
+        execute_process(COMMAND ${WX_CONFIG_EXECUTABLE} --cflags
+                       OUTPUT_VARIABLE WX_CFLAGS
+                       RESULT_VARIABLE WX_CFLAGS_RESULT)
+        execute_process(COMMAND ${WX_CONFIG_EXECUTABLE} --libs
+                       OUTPUT_VARIABLE WX_LIBS_OUTPUT
+                       RESULT_VARIABLE WX_LIBS_RESULT)
+
+        if(NOT WX_CFLAGS_RESULT)
+            string(REGEX REPLACE "[\r\n]" " " WX_CFLAGS "${WX_CFLAGS}")
+            string(REGEX MATCHALL "-I[^ ]+" WX_INCLUDES "${WX_CFLAGS}")
+            foreach(inc ${WX_INCLUDES})
+                string(REPLACE "-I" "" inc_path "${inc}")
+                list(APPEND wxWidgets_INCLUDE_DIRS "${inc_path}")
+            endforeach()
+        endif()
+
+        if(NOT WX_LIBS_RESULT)
+            string(REGEX REPLACE "[\r\n]" " " WX_LIBS_OUTPUT "${WX_LIBS_OUTPUT}")
+            string(REGEX MATCHALL "-l[^ ]+" WX_LIBS_FOUND "${WX_LIBS_OUTPUT}")
             foreach(lib ${WX_LIBS_FOUND})
                 list(APPEND wxWidgets_LIBRARIES ${lib})
             endforeach()
@@ -132,8 +143,10 @@ if(WIN32)
     target_link_options(${PROJECT_NAME} PRIVATE /SUBSYSTEM:WINDOWS)
 elseif(UNIX AND NOT APPLE)
     # Linux-specific settings.
+    target_include_directories(${PROJECT_NAME} PRIVATE ${wxWidgets_INCLUDE_DIRS})
+
     find_library(NVML_LIB nvidia-ml PATHS /usr/lib/x86_64-linux-gnu /usr/local/cuda/lib64 /usr/lib)
-    
+
     set(LINUX_LIBS pthread dl)
     if(NVML_LIB)
         list(APPEND LINUX_LIBS ${NVML_LIB})
