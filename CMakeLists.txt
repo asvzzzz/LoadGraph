@@ -20,7 +20,7 @@ else()
         find_program(WX_CONFIG_EXECUTABLE wx-config)
     endif()
     if(WX_CONFIG_EXECUTABLE)
-        # Get includes and libs separately to keep them clean.
+        # Get the full cflags string (includes -I, -D defines like __WXGTK__).
         execute_process(COMMAND ${WX_CONFIG_EXECUTABLE} --cflags
                        OUTPUT_VARIABLE WX_CFLAGS
                        RESULT_VARIABLE WX_CFLAGS_RESULT)
@@ -30,6 +30,7 @@ else()
 
         if(NOT WX_CFLAGS_RESULT)
             string(REGEX REPLACE "[\r\n]" " " WX_CFLAGS "${WX_CFLAGS}")
+            # Also populate include dirs for target_include_directories.
             string(REGEX MATCHALL "-I[^ ]+" WX_INCLUDES "${WX_CFLAGS}")
             foreach(inc ${WX_INCLUDES})
                 string(REPLACE "-I" "" inc_path "${inc}")
@@ -144,6 +145,10 @@ if(WIN32)
 elseif(UNIX AND NOT APPLE)
     # Linux-specific settings.
     target_include_directories(${PROJECT_NAME} PRIVATE ${wxWidgets_INCLUDE_DIRS})
+    # Pass full wx-config cflags (defines like -D__WXGTK__ are required by wx/defs.h).
+    if(DEFINED WX_CFLAGS)
+        target_compile_options(${PROJECT_NAME} PRIVATE ${WX_CFLAGS})
+    endif()
 
     find_library(NVML_LIB nvidia-ml PATHS /usr/lib/x86_64-linux-gnu /usr/local/cuda/lib64 /usr/lib)
 
