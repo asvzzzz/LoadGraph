@@ -23,7 +23,7 @@ class RamMonitor : public MetricsCollector
 {
 public:
     RamMonitor();
-    ~RamMonitor() override;
+    ~RamMonitor() override = default;
     RamMetrics GetMetrics();
 protected:
     void Collect() override;

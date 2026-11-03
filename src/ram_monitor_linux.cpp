@@ -56,9 +56,7 @@ RamMonitor::RamMonitor()
     LOGI("RAM monitor initializing (Linux /proc/meminfo)...");
 }
 
-RamMonitor::~RamMonitor()
-{
-}
+
 
 RamMetrics RamMonitor::GetMetrics()
 {

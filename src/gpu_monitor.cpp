@@ -522,5 +522,3 @@ void GpuMonitor::FreeNvApi()
         m_hNvApi = nullptr;
     }
 }
-
-#endif // PLATFORM_WINDOWS
