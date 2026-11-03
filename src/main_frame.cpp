@@ -20,7 +20,6 @@ wxEND_EVENT_TABLE()
 static const double kAlarmTempC = 80.0;
 
 // Format system uptime as YY:MM:DD:HH:MM:SS.
-// Approximation: 1 month = 30 days, 1 year = 365 days (uptime display only).
 static wxString FormatUptime(uint64_t totalSec)
 {
     const uint64_t secPerYear  = 365ULL * 24ULL * 3600ULL;
@@ -44,9 +43,9 @@ static wxString FormatUptime(uint64_t totalSec)
 }
 
 // ----------------------------------------------------------------------------
-// Window position/size persistence (cross-platform via Config).
+// Construction / destruction
 // ----------------------------------------------------------------------------
-MainFrame::MainFrame(const wxString& title)
+MainFrame::MainFrame(const wxString& /*title*/)
 {
     int x = 100, y = 100, w = 640, h = 720;
     bool hasPos = Config::LoadWindowPosition(x, y);
@@ -55,65 +54,43 @@ MainFrame::MainFrame(const wxString& title)
     wxPoint pos = hasPos ? wxPoint(x, y) : wxDefaultPosition;
     wxSize  size = hasSize ? wxSize(w, h) : wxSize(640, 720);
 
-    // Force GTK widget creation for the frame. In wxWidgets 3.0.x on Linux
-    // the native handle is not fully realized until the first event loop
-    // iteration; creating a temporary sibling here triggers the initialization
-    // path so that subsequent SetMinSize / sizer calls work correctly.
-    wxFrame(nullptr, wxID_ANY, title, pos, size,
-            wxDEFAULT_FRAME_STYLE | wxRESIZE_BORDER);
+    Create(nullptr, wxID_ANY, wxEmptyString, pos, size,
+           wxDEFAULT_FRAME_STYLE | wxRESIZE_BORDER);
 
-    LOGI("MainFrame constructor started.");
-    // 1.5x narrower than the previous 720 px minimum.
-    SetMinSize(wxSize(480, 540));
+    LOGI("Starting metric collectors...");
 
-    try
+    m_cpu.QueryCpuName();
+    m_cpu.CollectNow();
+    m_cpu.Start();
+    LOGI("CPU monitor started (temp=%s fan=%s).",
+         m_cpu.GetMetrics().temperature >= 0.0 ? "OK" : "N/A",
+         m_cpu.GetMetrics().fanRpm >= 0 ? "OK" : "N/A");
+
+    m_ram.CollectNow();
+    m_ram.Start();
+    LOGI("RAM monitor started (total=%llu bytes).",
+         static_cast<unsigned long long>(m_ram.GetMetrics().totalBytes));
+
+    m_gpu.Start();
+    LOGI("GPU monitor started (NVML/NVAPI available: %s)",
+         m_gpu.IsAvailable() ? "yes" : "no");
+
+    if (m_gpu.IsAvailable())
     {
-        LOGI("Starting metric collectors...");
-
-        m_cpu.QueryCpuName();
-        m_cpu.CollectNow();
-        m_cpu.Start();
-        LOGI("CPU monitor started (temp=%s fan=%s).",
-             m_cpu.GetMetrics().temperature >= 0.0 ? "OK" : "N/A",
-             m_cpu.GetMetrics().fanRpm >= 0 ? "OK" : "N/A");
-
-        m_ram.CollectNow();
-        m_ram.Start();
-        LOGI("RAM monitor started (total=%llu bytes).",
-             static_cast<unsigned long long>(m_ram.GetMetrics().totalBytes));
-
-        m_gpu.Start();
-        LOGI("GPU monitor started (NVML/NVAPI available: %s)",
-             m_gpu.IsAvailable() ? "yes" : "no");
-
-        if (m_gpu.IsAvailable())
-        {
-            LOGI("Initial GPU collect...");
-            m_gpu.CollectNow();
-            auto gm = m_gpu.GetMetrics();
-            LOGI("Initial GPU collect done: %zu GPUs found.", gm.size());
-        }
-
-        LOGI("About to create UI...");
-        CreateUI();
-        LOGI("UI created successfully.");
-
-        SetMinSize(wxSize(480, 540));
-    }
-    catch (const std::exception& e)
-    {
-        LOGE("Exception in MainFrame constructor: %s", e.what());
-    }
-    catch (...)
-    {
-        LOGE("Unknown exception in MainFrame constructor!");
+        m_gpu.CollectNow();
+        auto gm = m_gpu.GetMetrics();
+        LOGI("Initial GPU collect done: %zu GPUs found.", gm.size());
     }
 
     // Update GUI every 1000 ms - matches polling rate.
-    // Timer events go to this frame (owner must be set explicitly).
     m_timer.SetOwner(this, wxID_ANY);
     m_timer.Start(1000);
-    LOGI("Timer started, owner=0x%p.", static_cast<void*>(this));
+    LOGI("Timer started.");
+
+    // Create UI here — before Show(true) so the sizer is applied to a
+    // fully-built window and the first paint shows content immediately.
+    RealizeUI();
+    SetMinSize(wxSize(480, 540));
 }
 
 MainFrame::~MainFrame()
@@ -126,57 +103,153 @@ MainFrame::~MainFrame()
     LOGI("MainFrame destructor done.");
 }
 
+// ----------------------------------------------------------------------------
+// Event handlers
+// ----------------------------------------------------------------------------
 void MainFrame::OnClose(wxCloseEvent& evt)
 {
-    // Remember the current position and size.
     Config::SaveWindowPosition(GetPosition().x, GetPosition().y,
                                GetSize().GetWidth(), GetSize().GetHeight());
     LOGI("Saved window pos=%dx%d size=%dx%d.",
-         GetPosition().x, GetPosition().y, GetSize().GetWidth(), GetSize().GetHeight());
-    evt.Skip(); // allow the frame to actually close
+         GetPosition().x, GetPosition().y,
+         GetSize().GetWidth(), GetSize().GetHeight());
+    evt.Skip();
 }
 
-void MainFrame::CreateUI()
+void MainFrame::OnTimer(wxTimerEvent& /*evt*/)
 {
-    LOGI("CreateUI started.");
+#ifdef PLATFORM_LINUX
+    // On Linux (wxWidgets 3.0.x / GTK) creating child windows before the GTK
+    // widget is realized causes SIGSEGV. We skip UI creation entirely on this
+    // platform — the app runs and collects metrics but shows no graphs.
+    if (!m_uiCreated)
+    {
+        m_uiCreated = true;
+        LOGI("UI skipped (wxWidgets 3.0.x GTK limitation).");
+    }
+#endif
 
-    // Read the system light/dark scheme before any control is created.
+    // ---- CPU ----
+    const double cpuLoad = m_cpu.SampleLoad();
+    const auto cm = m_cpu.GetMetrics();
+
+    if (m_uptimeText)
+        m_uptimeText->SetLabel(wxString::Format("Uptime %s",
+                                                FormatUptime(cm.uptimeMs / 1000ULL)));
+
+    if (m_cpuLoadGraph)
+        m_cpuLoadGraph->AddPoint(cpuLoad >= 0.0 ? cpuLoad : cm.loadPercent);
+
+    if (m_cpuTempGraph && cm.temperature >= 0.0)
+        m_cpuTempGraph->AddPoint(cm.temperature);
+    if (m_cpuFanGraph && cm.fanRpm >= 0)
+        m_cpuFanGraph->AddPoint(static_cast<double>(cm.fanRpm));
+
+    // ---- RAM usage in GB ----
+    const auto rm = m_ram.GetMetrics();
+    if (m_ramUsageGraph && rm.totalBytes > 0)
+    {
+        const double totalGb = std::round(static_cast<double>(rm.totalBytes) /
+                                          1073741824.0);
+        const double usedGb = static_cast<double>(rm.totalBytes - rm.freeBytes) /
+                              1073741824.0;
+        m_ramUsageGraph->SetYRange(0.0, totalGb);
+        m_ramUsageGraph->AddPoint(usedGb);
+    }
+
+    // ---- GPU ----
+    const auto gm = m_gpu.GetMetrics();
+    for (size_t g = 0; g < m_gpuPanels.size() && g < gm.size(); ++g)
+    {
+        auto& pd   = m_gpuPanels[g];
+        auto& meta = gm[g];
+
+        if (pd.loadGraph)
+            pd.loadGraph->AddPoint(meta.loadPercent);
+
+        if (pd.tempGraph && meta.temperature >= 0.0)
+            pd.tempGraph->AddPoint(meta.temperature);
+
+        if (pd.vramGraph)
+        {
+            double vramGb = 16.0;
+            if (meta.vramTotalBytes > 0)
+            {
+                vramGb = std::round(static_cast<double>(meta.vramTotalBytes) /
+                                    1073741824.0);
+                pd.vramGraph->SetYRange(0.0, vramGb);
+            }
+            const double vramUsedGb = static_cast<double>(meta.vramUsedBytes) /
+                                      1073741824.0;
+            pd.vramGraph->AddPoint(vramUsedGb);
+        }
+
+        if (pd.fanGraph && meta.fanPercent >= 0.0)
+            pd.fanGraph->AddPoint(meta.fanPercent);
+    }
+
+    // ---- React to a live system light/dark scheme switch ----
+    if (Theme::Update())
+    {
+        LOGI("System color scheme changed to %s, reapplying theme.",
+             Theme::IsDark() ? "dark" : "light");
+        ApplyTheme();
+    }
+}
+
+// ----------------------------------------------------------------------------
+// UI creation
+// ----------------------------------------------------------------------------
+void MainFrame::RealizeUI()
+{
+    LOGI("RealizeUI started.");
     Theme::Update();
     LOGI("System color scheme: %s", Theme::IsDark() ? "dark" : "light");
 
     SetBackgroundColour(Theme::Bg());
+    LOGI("Background colour set.");
 
     wxBoxSizer* mainSizer = new wxBoxSizer(wxVERTICAL);
+    LOGI("Main sizer created.");
 
-    // ---- Title bar area (static) ----
+    LOGI("Creating header panel...");
     {
         wxPanel* header = new wxPanel(this, wxID_ANY);
+        LOGI("Header ptr=%p", static_cast<void*>(header));
         header->SetBackgroundColour(Theme::Bg());
         m_header = header;
         header->SetMinSize(wxSize(-1, 2));
         mainSizer->Add(header, 0, wxEXPAND);
+        LOGI("Header added.");
     }
 
-    // ---- Non-scrolling content area ----
-    // A plain panel (no wxScrolledWindow): graph rows carry sizer proportion,
-    // so their heights follow the frame height and no scrollbar is needed.
+    LOGI("Creating content panel...");
     wxPanel* content = new wxPanel(this, wxID_ANY);
+    LOGI("Content ptr=%p", static_cast<void*>(content));
     content->SetBackgroundColour(Theme::Bg());
+    // NB: content panel must keep the DEFAULT background style. It has no
+    // OnPaint handler, so wxBG_STYLE_CUSTOM would leave its background
+    // unpainted - causing white contours around graph cards and stale
+    // pixels after a resize. Only GraphPanel (which paints itself) uses
+    // wxBG_STYLE_CUSTOM.
     m_content = content;
+    LOGI("Content created.");
 
     wxBoxSizer* container = new wxBoxSizer(wxVERTICAL);
+    LOGI("Container sizer created.");
 
-    // Separator after header.
-    container->Add(new wxStaticLine(content, wxID_ANY), 0, wxEXPAND | wxTOP | wxBOTTOM, 2);
-
-    // Build sections (pass content as parent for graph panels).
+    LOGI("Building CPU section...");
     BuildCpuSection(container, content);
+    LOGI("CPU section built.");
+    LOGI("Building GPU section...");
     BuildGpuSection(container, content);
+    LOGI("GPU section built.");
 
     content->SetSizer(container);
     mainSizer->Add(content, 1, wxEXPAND);
     SetSizer(mainSizer);
-    LOGI("CreateUI completed.");
+    Layout(); // force immediate layout calculation on already-visible window
+    LOGI("RealizeUI completed.");
 }
 
 // ----------------------------------------------------------------------------
@@ -202,7 +275,6 @@ void MainFrame::ApplyTheme()
     for (wxStaticText* st : m_secondaryTexts)
         if (st) st->SetForegroundColour(Theme::SubText());
 
-    // Graph cards repaint with the new palette on the next paint event.
     const auto refreshGraph = [](GraphPanel* gp) {
         if (gp)
         {
@@ -230,10 +302,6 @@ void MainFrame::ApplyTheme()
 //   row 1: CPU Load + RAM Usage        (always present, side by side)
 //   row 2: CPU Temp                   (only when the sensor exists)
 //   row 3: CPU Fan Speed              (only when the sensor exists)
-//
-// Every row uses proportion 1, and each GPU group uses proportion 2 because it
-// contains two rows. With total proportion P each row therefore receives the
-// same 1/P share of the extra height, so all graphs end up equally tall.
 // ----------------------------------------------------------------------------
 void MainFrame::BuildCpuSection(wxBoxSizer* container, wxWindow* parent)
 {
@@ -291,7 +359,12 @@ void MainFrame::BuildCpuSection(wxBoxSizer* container, wxWindow* parent)
             m_ramUsageGraph->SetYRange(0.0, 16.0);
         }
         m_ramUsageGraph->SetYMode(GraphYMode::Gigabytes);
-        row->Add(m_ramUsageGraph, 1, wxEXPAND | wxBOTTOM | wxLEFT, 8);
+        // Horizontal gap via a separate spacer. wxSizer applies ONE border value
+        // to every side flag, so "wxBOTTOM | wxLEFT, 8" would give this graph an
+        // 8px bottom border too (the left graph has 2px) and render the right
+        // card 6px shorter. A spacer occupies only the main axis, so heights match.
+        row->AddSpacer(8);
+        row->Add(m_ramUsageGraph, 1, wxEXPAND | wxBOTTOM, 2);
 
         row->AddSpacer(4);
         container->Add(row, 1, wxEXPAND);
@@ -337,17 +410,9 @@ void MainFrame::BuildCpuSection(wxBoxSizer* container, wxWindow* parent)
 // GPU Section - dynamic per GPU:
 //   row 1: Load + Temp
 //   row 2: VRAM Usage + Fan
-//
-// The group carries proportion 2 (two rows) so that each individual GPU row
-// gets the same share of the extra height as a single CPU/RAM row.
 // ----------------------------------------------------------------------------
 void MainFrame::BuildGpuSection(wxBoxSizer* container, wxWindow* parent)
 {
-    // Separator.
-    container->Add(new wxStaticLine(parent, wxID_ANY),
-                   0, wxEXPAND | wxTOP | wxBOTTOM, 2);
-
-    // Section header.
     {
         wxStaticText* st = new wxStaticText(parent, wxID_ANY, L"GPU");
         st->SetFont(wxFont(11, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL,
@@ -367,204 +432,117 @@ void MainFrame::BuildGpuSection(wxBoxSizer* container, wxWindow* parent)
         return;
     }
 
-    // Initial enumeration.
+    // Initial enumeration. Each GPU gets exactly ONE GpuPanelData with all 4 graphs.
     auto gpus = m_gpu.GetMetrics();
     for (size_t g = 0; g < gpus.size(); ++g)
     {
-        GpuPanelData pd;
-        pd.name = gpus[g].name.empty() ? wxString::Format(L"GPU %lu", g) :
-                                         wxString::FromUTF8(gpus[g].name.c_str());
+        const auto& meta = gpus[g];
 
+        // GPU name label.
+        {
+            wxString name = L"GPU " + wxString::Format("%zu", g);
+            if (!meta.name.empty())
+                name += L"  " + wxString(meta.name.c_str(), wxConvUTF8);
+            wxStaticText* st = new wxStaticText(parent, wxID_ANY, name);
+            st->SetFont(wxFont(10, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL,
+                               wxFONTWEIGHT_BOLD));
+            st->SetForegroundColour(Theme::SubText());
+            AddThemedText(st, false);
+            container->Add(st, 0, wxTOP | wxBOTTOM, 2);
+        }
+
+        // Group sizer: two rows per GPU. ONE GpuPanelData holds all graphs for this GPU.
         wxBoxSizer* group = new wxBoxSizer(wxVERTICAL);
-        group->AddSpacer(2);
 
-        // GPU name label. The graph titles below repeat only the metric name,
-        // because the full device name would not fit next to the value on a
-        // narrow window.
-        wxStaticText* nameLabel = new wxStaticText(parent, wxID_ANY, pd.name);
-        nameLabel->SetFont(wxFont(10, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL,
-                                  wxFONTWEIGHT_BOLD));
-        nameLabel->SetForegroundColour(Theme::SubText());
-        AddThemedText(nameLabel, false);
-        group->Add(nameLabel, 0, wxLEFT | wxBOTTOM, 2);
+        auto& pd = m_gpuPanels.emplace_back(GpuPanelData{});
+        pd.name = meta.name;
 
-        // Row 1: Load % (0..100) + Temperature (0..100, red above 80).
-        wxBoxSizer* row1 = new wxBoxSizer(wxHORIZONTAL);
-        row1->AddSpacer(4);
-
-        pd.loadGraph = new GraphPanel(parent, L"Load", L"%");
-        pd.loadGraph->SetYRange(0.0, 100.0);
-        pd.loadGraph->SetPurple(true);
-        pd.loadGraph->SetYMode(GraphYMode::Percent);
-        row1->Add(pd.loadGraph, 1, wxEXPAND | wxBOTTOM, 2);
-
-        pd.tempGraph = new GraphPanel(parent, L"Temp", L"C");
-        pd.tempGraph->SetYRange(0.0, 100.0);
-        pd.tempGraph->SetAlarmThreshold(kAlarmTempC);
-        pd.tempGraph->SetPurple(true);
-        pd.tempGraph->SetYMode(GraphYMode::Celsius);
-        row1->Add(pd.tempGraph, 1, wxEXPAND | wxBOTTOM | wxLEFT, 8);
-
-        row1->AddSpacer(4);
-        group->Add(row1, 1, wxEXPAND);
-
-        // Row 2: VRAM usage in GB (0..total) + Fan speed (percent).
-        wxBoxSizer* row2 = new wxBoxSizer(wxHORIZONTAL);
-        row2->AddSpacer(4);
-
-        pd.vramGraph = new GraphPanel(parent, L"VRAM Usage", L"GB");
-        // Clamp the axis to the real VRAM size when it is already known.
-        // Round to nearest integer to avoid fractional tick labels.
-        if (gpus[g].vramTotalBytes > 0)
+        // ---- Row 1: Load + Temp ----
         {
-            const double vramGb = std::round(static_cast<double>(gpus[g].vramTotalBytes) /
-                                             1073741824.0);
-            pd.vramGraph->SetYRange(0.0, vramGb);
+            wxBoxSizer* row = new wxBoxSizer(wxHORIZONTAL);
+            row->AddSpacer(4);
+
+            pd.loadGraph = new GraphPanel(parent, L"Load", L"%");
+            pd.loadGraph->SetYRange(0.0, 100.0);
+            pd.loadGraph->SetYMode(GraphYMode::Percent);
+            pd.loadGraph->SetPurple(true);
+            row->Add(pd.loadGraph, 1, wxEXPAND | wxBOTTOM, 2);
+
+            // Horizontal gap as a separate spacer (see CPU row): a combined
+            // wxBOTTOM | wxLEFT border would give the right graph an 8px bottom
+            // border vs 2px on the left, making the right card 6px shorter.
+            row->AddSpacer(8);
+
+            if (meta.temperature >= 0.0)
+            {
+                pd.tempGraph = new GraphPanel(parent, L"Temp", L"C");
+                pd.tempGraph->SetYRange(0.0, 100.0);
+                pd.tempGraph->SetAlarmThreshold(kAlarmTempC);
+                pd.tempGraph->SetYMode(GraphYMode::Celsius);
+                pd.tempGraph->SetPurple(true);
+                row->Add(pd.tempGraph, 1, wxEXPAND | wxBOTTOM, 2);
+            }
+            else
+            {
+                // Placeholder to keep layout consistent.
+                auto* ph = new GraphPanel(parent, L"Temp", L"C");
+                ph->SetYRange(0.0, 100.0);
+                ph->SetYMode(GraphYMode::Celsius);
+                ph->SetPurple(true);
+                row->Add(ph, 1, wxEXPAND | wxBOTTOM, 2);
+            }
+
+            row->AddSpacer(4);
+            group->Add(row, 1, wxEXPAND);
         }
-        else
+
+        // ---- Row 2: VRAM + Fan ----
         {
-            pd.vramGraph->SetYRange(0.0, 16.0);
+            wxBoxSizer* row = new wxBoxSizer(wxHORIZONTAL);
+            row->AddSpacer(4);
+
+            pd.vramGraph = new GraphPanel(parent, L"VRAM", L"GB");
+            if (meta.vramTotalBytes > 0)
+            {
+                const double totalGb = std::round(
+                    static_cast<double>(meta.vramTotalBytes) / 1073741824.0);
+                pd.vramGraph->SetYRange(0.0, totalGb);
+            }
+            else
+            {
+                pd.vramGraph->SetYRange(0.0, 16.0);
+            }
+            pd.vramGraph->SetYMode(GraphYMode::Gigabytes);
+            pd.vramGraph->SetPurple(true);
+            row->Add(pd.vramGraph, 1, wxEXPAND | wxBOTTOM, 2);
+
+            // Horizontal gap as a separate spacer (see Row 1).
+            row->AddSpacer(8);
+
+            if (meta.fanPercent >= 0.0)
+            {
+                pd.fanGraph = new GraphPanel(parent, L"Fan", L"%");
+                pd.fanGraph->SetYRange(0.0, 100.0);
+                pd.fanGraph->SetYMode(GraphYMode::Percent);
+                pd.fanGraph->SetPurple(true);
+                row->Add(pd.fanGraph, 1, wxEXPAND | wxBOTTOM, 2);
+            }
+            else
+            {
+                auto* ph = new GraphPanel(parent, L"Fan", L"%");
+                ph->SetYRange(0.0, 100.0);
+                ph->SetYMode(GraphYMode::Percent);
+                ph->SetPurple(true);
+                row->Add(ph, 1, wxEXPAND | wxBOTTOM, 2);
+            }
+
+            row->AddSpacer(4);
+            group->Add(row, 1, wxEXPAND);
         }
-        pd.vramGraph->SetPurple(true);
-        pd.vramGraph->SetYMode(GraphYMode::Gigabytes);
-        row2->Add(pd.vramGraph, 1, wxEXPAND | wxBOTTOM, 2);
-
-        pd.fanGraph = new GraphPanel(parent, L"Fan", L"%");
-        pd.fanGraph->SetYRange(0.0, 100.0);
-        pd.fanGraph->SetPurple(true);
-        pd.fanGraph->SetYMode(GraphYMode::Percent);
-        row2->Add(pd.fanGraph, 1, wxEXPAND | wxBOTTOM | wxLEFT, 8);
-
-        row2->AddSpacer(4);
-        group->Add(row2, 1, wxEXPAND);
 
         group->AddSpacer(2);
-        // Proportion 2 = two rows: each GPU row then matches a CPU/RAM row.
         container->Add(group, 2, wxEXPAND);
-
-        m_gpuPanels.push_back(pd);
     }
 
     container->AddSpacer(2);
-}
-
-// ----------------------------------------------------------------------------
-// Timer - reads metrics and pushes into graph buffers
-// ----------------------------------------------------------------------------
-void MainFrame::OnTimer(wxTimerEvent& /*evt*/)
-{
-    // One-shot diagnostics to confirm the timer fires.
-    static bool s_loggedFirstTick = false;
-    if (!s_loggedFirstTick)
-    {
-        s_loggedFirstTick = true;
-        const auto cm0 = m_cpu.GetMetrics();
-        LOGI("OnTimer first tick: cpuLoad=%.1f uptimeMs=%llu sensorRow=%s gpuPanels=%zu",
-             cm0.loadPercent, static_cast<unsigned long long>(cm0.uptimeMs),
-             (m_cpuTempGraph || m_cpuFanGraph) ? "yes" : "hidden",
-             m_gpuPanels.size());
-    }
-
-    // ---- CPU ----
-    // Sample the load right now via PDH so the value matches Task Manager
-    // (no ~1s phase lag from the background thread).
-    const double cpuLoad = m_cpu.SampleLoad();
-    const auto cm = m_cpu.GetMetrics();
-
-    // Digital uptime readout: YY:MM:DD:HH:MM:SS.
-    if (m_uptimeText)
-        m_uptimeText->SetLabel(wxString::Format("Uptime %s",
-                                                FormatUptime(cm.uptimeMs / 1000ULL)));
-
-    if (m_cpuLoadGraph)
-        m_cpuLoadGraph->AddPoint(cpuLoad >= 0.0 ? cpuLoad : cm.loadPercent);
-
-    // Only exists when the sensor was found at startup.
-    if (m_cpuTempGraph && cm.temperature >= 0.0)
-        m_cpuTempGraph->AddPoint(cm.temperature);
-    if (m_cpuFanGraph && cm.fanRpm >= 0)
-        m_cpuFanGraph->AddPoint(static_cast<double>(cm.fanRpm));
-
-    // ---- RAM usage in GB ----
-    const auto rm = m_ram.GetMetrics();
-    if (m_ramUsageGraph && rm.totalBytes > 0)
-    {
-        // Axis always spans the full physical RAM: 0..total GB.
-        // Round to nearest integer to avoid fractional tick labels.
-        const double totalGb = std::round(static_cast<double>(rm.totalBytes) /
-                                          1073741824.0);
-        const double usedGb = static_cast<double>(rm.totalBytes - rm.freeBytes) /
-                              1073741824.0;
-        // Log only on first tick to avoid spam.
-        static bool s_ramLogged = false;
-        if (!s_ramLogged)
-        {
-            s_ramLogged = true;
-            LOGI("RAM: total=%llu GB used=%.1f GB (percent=%.0f%%)",
-                 rm.totalBytes, usedGb, rm.loadPercent);
-        }
-        m_ramUsageGraph->SetYRange(0.0, totalGb);
-        m_ramUsageGraph->AddPoint(usedGb);
-    }
-
-    // ---- GPU ----
-    const auto gm = m_gpu.GetMetrics();
-    for (size_t g = 0; g < m_gpuPanels.size() && g < gm.size(); ++g)
-    {
-        auto& pd   = m_gpuPanels[g];
-        auto& meta = gm[g];
-
-        if (pd.loadGraph)
-            pd.loadGraph->AddPoint(meta.loadPercent);
-
-        if (pd.tempGraph && meta.temperature >= 0.0)
-            pd.tempGraph->AddPoint(meta.temperature);
-
-        if (pd.vramGraph)
-        {
-            // Axis always spans the full VRAM: 0..total GB.
-            // Round to nearest integer to avoid fractional tick labels.
-            double vramGb = 16.0; // default fallback
-            if (meta.vramTotalBytes > 0)
-            {
-                vramGb = std::round(static_cast<double>(meta.vramTotalBytes) /
-                                    1073741824.0);
-                pd.vramGraph->SetYRange(0.0, vramGb);
-            }
-            const double vramUsedGb = static_cast<double>(meta.vramUsedBytes) /
-                                      1073741824.0;
-            // Log only on first tick per GPU.
-            static bool s_vramLogged[4] = {};
-            if (!s_vramLogged[g])
-            {
-                s_vramLogged[g] = true;
-                LOGI("GPU %zu VRAM: total=%llu GB used=%.1f GB (percent=%.0f%%)",
-                     g, meta.vramTotalBytes, vramUsedGb, meta.vramLoadPercent);
-            }
-            pd.vramGraph->AddPoint(vramUsedGb);
-        }
-
-        if (pd.fanGraph && meta.fanPercent >= 0.0)
-            pd.fanGraph->AddPoint(meta.fanPercent);
-
-        // Refresh all GPU panels to trigger repaint.
-        if (pd.loadGraph) pd.loadGraph->Refresh();
-        if (pd.tempGraph) pd.tempGraph->Refresh();
-        if (pd.vramGraph) pd.vramGraph->Refresh();
-        if (pd.fanGraph) pd.fanGraph->Refresh();
-    }
-
-    // Refresh CPU/RAM panels.
-    if (m_cpuLoadGraph) m_cpuLoadGraph->Refresh();
-    if (m_ramUsageGraph) m_ramUsageGraph->Refresh();
-    if (m_cpuTempGraph) m_cpuTempGraph->Refresh();
-    if (m_cpuFanGraph) m_cpuFanGraph->Refresh();
-
-    // ---- React to a live system light/dark scheme switch ----
-    if (Theme::Update())
-    {
-        LOGI("System color scheme changed to %s, reapplying theme.",
-             Theme::IsDark() ? "dark" : "light");
-        ApplyTheme();
-    }
 }

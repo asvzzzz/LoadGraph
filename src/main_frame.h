@@ -10,19 +10,16 @@
 #include "graph_panel.h"
 
 // Main application window. Resizable, contains CPU / RAM / GPU metric panels.
-// The layout is a plain (non-scrolling) panel: every graph row uses a sizer
-// proportion, so graph heights follow the window height and everything stays
-// visible without a scrollbar.
 class MainFrame : public wxFrame
 {
 public:
     explicit MainFrame(const wxString& title);
     ~MainFrame() override;
 
-private:
-    // Create the window layout.
-    void CreateUI();
+    // Create the window layout (called on Windows after Show).
+    void RealizeUI();
 
+private:
     // Timer callback - reads metrics and refreshes graph panels.
     void OnTimer(wxTimerEvent& evt);
 
@@ -58,30 +55,33 @@ private:
     wxWindow*   m_header = nullptr;
 
     // Labels that must be recolored when the system theme changes.
-    std::vector<wxStaticText*> m_primaryTexts;   // titles / section headers
-    std::vector<wxStaticText*> m_secondaryTexts; // GPU names / hints
+    std::vector<wxStaticText*> m_primaryTexts;
+    std::vector<wxStaticText*> m_secondaryTexts;
 
     // ---- CPU / RAM row (always present) ----
-    GraphPanel* m_cpuLoadGraph  = nullptr; // CPU load, %, 0..100
-    GraphPanel* m_ramUsageGraph = nullptr; // RAM used, GB, 0..total
+    GraphPanel* m_cpuLoadGraph  = nullptr;
+    GraphPanel* m_ramUsageGraph = nullptr;
 
-    // ---- CPU sensor row (created only when the sensors exist) ----
-    GraphPanel* m_cpuTempGraph  = nullptr; // CPU temp, C, 0..100
-    GraphPanel* m_cpuFanGraph   = nullptr; // CPU fan, RPM, auto scale
+    // ---- CPU sensor row (created only when sensors exist) ----
+    GraphPanel* m_cpuTempGraph  = nullptr;
+    GraphPanel* m_cpuFanGraph   = nullptr;
 
-    // ---- Uptime label (digital display, no graph) ----
+    // ---- Uptime label ----
     wxStaticText* m_uptimeText = nullptr;
 
     // ---- GPU panels ----
     struct GpuPanelData
     {
         wxString    name;
-        GraphPanel* loadGraph = nullptr; // load, %, 0..100
-        GraphPanel* tempGraph = nullptr; // temp, C, 0..100
-        GraphPanel* vramGraph = nullptr; // VRAM used, GB, 0..total
-        GraphPanel* fanGraph  = nullptr; // fan, percent, 0..100
+        GraphPanel* loadGraph = nullptr;
+        GraphPanel* tempGraph = nullptr;
+        GraphPanel* vramGraph = nullptr;
+        GraphPanel* fanGraph  = nullptr;
     };
     std::vector<GpuPanelData> m_gpuPanels;
+
+    // UI created flag (Linux: deferred to first timer tick).
+    bool    m_uiCreated = false;
 
     wxDECLARE_EVENT_TABLE();
 };

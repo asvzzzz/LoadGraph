@@ -1,5 +1,7 @@
 # Build output
 build/
+build_linux/
+cmake_install.cmake
 !.gitignore
 
 # Logs

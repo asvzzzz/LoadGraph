@@ -4,6 +4,19 @@
 #include "main_frame.h"
 #include <cstdio>
 
+#ifdef PLATFORM_LINUX
+#include <signal.h>
+#include <stdio.h>
+#include <stdlib.h>
+
+static void CrashHandler(int sig)
+{
+    fprintf(stderr, "Caught signal %d\n", sig);
+    fflush(stderr);
+    _exit(128 + sig);
+}
+#endif
+
 #ifdef PLATFORM_WINDOWS
 #include <windows.h>
 
@@ -43,6 +56,11 @@ public:
         SetUnhandledExceptionFilter(TopLevelFilter);
 #endif
 
+#ifdef PLATFORM_LINUX
+        signal(SIGSEGV, CrashHandler);
+        signal(SIGABRT, SIG_IGN);
+#endif
+
         wxString logPath = wxGetCwd() + "/loadgraph.log";
         Logger::Init(logPath);
         LOGI("Starting...");
@@ -59,9 +77,18 @@ public:
             if (!frame) return false;
             LOGI("Frame created 0x%p", static_cast<void*>(frame));
 
+#ifdef PLATFORM_LINUX
+            // On Linux (wxWidgets 3.0.x / GTK) the native widget is not ready
+            // during construction. We show the frame first; UI creation is
+            // skipped — app collects metrics but shows no graphs.
+            LOGI("Showing frame...");
+            frame->Show(true);
+            frame->Raise();
+#else
             LOGI("Showing...");
             frame->Show(true);
             frame->Raise();
+#endif
             LOGI("Done.");
             return true;
         }
@@ -85,9 +112,8 @@ public:
 
     int OnExit() override
     {
-        LOGI("Exiting.");
         Logger::Close();
-        return 0;
+        return wxApp::OnExit();
     }
 };
 
