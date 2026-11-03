@@ -22,20 +22,23 @@ namespace
             return false;
 
         std::istringstream iss(content);
-        std::string key;
-        long long valueKb = 0;
-
-        while (iss >> key >> valueKb)
+        std::string line;
+        while (std::getline(iss, line))
         {
-            // Remove trailing colon from key if present.
-            if (!key.empty() && key.back() == ':')
-                key.pop_back();
+            size_t colon = line.find(':');
+            if (colon == std::string::npos) continue;
+
+            std::string key = line.substr(0, colon);
+            size_t valStart = line.find_first_of("0123456789-", colon + 1);
+            if (valStart == std::string::npos) continue;
+
+            long long valueKb = 0;
+            try { valueKb = std::stoll(line.substr(valStart)); }
+            catch (...) { continue; }
 
             if (key == "MemTotal")
                 metrics.totalBytes = static_cast<uint64_t>(valueKb) * 1024ULL;
-            else if (key == "MemAvailable")
-                metrics.freeBytes = static_cast<uint64_t>(valueKb) * 1024ULL;
-            else if (key == "MemFree")
+            else if (key == "MemAvailable" || key == "MemFree")
                 metrics.freeBytes = static_cast<uint64_t>(valueKb) * 1024ULL;
         }
 

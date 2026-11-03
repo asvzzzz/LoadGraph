@@ -36,11 +36,7 @@ struct NvmlMemory
 
 GpuMonitor::GpuMonitor()
 {
-    m_nvvmAvailable = LoadNvml();
-    if (m_nvvmAvailable)
-        LOGI("NVML loaded OK via dlopen, will be used as primary GPU source.");
-    else
-        LOGI("NVML not available on Linux — GPU monitoring disabled.");
+    m_nvvmAvailable = false;
 }
 
 GpuMonitor::~GpuMonitor()
@@ -108,7 +104,6 @@ bool GpuMonitor::LoadNvml()
 
     if (!m_fnInit || !m_fnGetCount || !m_fnGetHandle)
     {
-        LOGI("Critical NVML functions not found.");
         FreeNvml();
         return false;
     }

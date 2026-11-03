@@ -58,14 +58,13 @@ inline bool ReadFileToString(const char* path, std::string& out)
     if (!f) return false;
 #endif
 
-    fseek(f, 0, SEEK_END);
-    long len = ftell(f);
-    fseek(f, 0, SEEK_SET);
-
-    out.resize(static_cast<size_t>(len));
-    size_t read = fread(&out[0], 1, static_cast<size_t>(len), f);
+    // Read until EOF — works correctly for virtual filesystems like /proc.
+    char buf[4096];
+    size_t n;
+    while ((n = fread(buf, 1, sizeof(buf), f)) > 0)
+        out.append(buf, n);
     fclose(f);
-    return read == static_cast<size_t>(len);
+    return !out.empty();
 }
 
 // Helper to get the XDG config directory on Linux.

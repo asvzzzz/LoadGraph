@@ -5,6 +5,7 @@
 #include "theme.h"
 #include "graph_panel.h"
 #include <wx/statline.h>
+#include <cstdint>
 
 #ifdef PLATFORM_WINDOWS
 #include <windows.h>
@@ -20,18 +21,18 @@ static const double kAlarmTempC = 80.0;
 
 // Format system uptime as YY:MM:DD:HH:MM:SS.
 // Approximation: 1 month = 30 days, 1 year = 365 days (uptime display only).
-static wxString FormatUptime(ULONGLONG totalSec)
+static wxString FormatUptime(uint64_t totalSec)
 {
-    const ULONGLONG secPerYear  = 365ULL * 24ULL * 3600ULL;
-    const ULONGLONG secPerMonth = 30ULL * 24ULL * 3600ULL;
-    const ULONGLONG secPerDay   = 24ULL * 3600ULL;
+    const uint64_t secPerYear  = 365ULL * 24ULL * 3600ULL;
+    const uint64_t secPerMonth = 30ULL * 24ULL * 3600ULL;
+    const uint64_t secPerDay   = 24ULL * 3600ULL;
 
-    ULONGLONG yy = totalSec / secPerYear;  totalSec %= secPerYear;
-    ULONGLONG mm = totalSec / secPerMonth; totalSec %= secPerMonth;
-    ULONGLONG dd = totalSec / secPerDay;   totalSec %= secPerDay;
-    ULONGLONG hh = totalSec / 3600ULL;     totalSec %= 3600ULL;
-    ULONGLONG mi = totalSec / 60ULL;
-    ULONGLONG ss = totalSec % 60ULL;
+    uint64_t yy = totalSec / secPerYear;  totalSec %= secPerYear;
+    uint64_t mm = totalSec / secPerMonth; totalSec %= secPerMonth;
+    uint64_t dd = totalSec / secPerDay;   totalSec %= secPerDay;
+    uint64_t hh = totalSec / 3600ULL;     totalSec %= 3600ULL;
+    uint64_t mi = totalSec / 60ULL;
+    uint64_t ss = totalSec % 60ULL;
 
     return wxString::Format("%02lu:%02lu:%02lu:%02lu:%02lu:%02lu",
                             static_cast<unsigned long>(yy),
@@ -377,7 +378,7 @@ void MainFrame::BuildGpuSection(wxBoxSizer* container, wxWindow* parent)
     {
         GpuPanelData pd;
         pd.name = gpus[g].name.empty() ? wxString::Format(L"GPU %lu", g) :
-                                         wxString::FromUTF8(gpus[g].name);
+                                         wxString::FromUTF8(gpus[g].name.c_str());
 
         wxBoxSizer* group = new wxBoxSizer(wxVERTICAL);
         group->AddSpacer(2);

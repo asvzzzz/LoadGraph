@@ -1,5 +1,6 @@
 #include "metrics_collector.h"
 #include "platform.h"
+#include "logger.h"
 #include <chrono>
 
 #ifdef PLATFORM_WINDOWS
