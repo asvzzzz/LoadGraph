@@ -237,6 +237,62 @@ namespace PowerTable
         { nullptr,             0 }
     };
 
+    // ---- NVIDIA Professional / Datacenter (added after consumer GPUs) ----
+    // These are queried first because their names contain "RTX"/"Tesla"/"A"/"H"
+    // which could shadow shorter consumer matches if placed after.
+    static const struct { const char* name; uint32_t tdp; } kServerGpuTdp[] =
+    {
+        // ---- H-series (Hopper, 2023+) ----
+        { "H200",              700 },
+        { "H100 80GB",         700 },
+        { "H100",              700 },
+        { "H100 NVL",          700 },
+
+        // ---- A-series (Ampere datacenter) ----
+        { "A6000",             300 },
+        { "A40",               300 },
+        { "A100 80GB",         300 },
+        { "A100 40GB",         250 },
+        { "A100",              300 },
+        { "A30",               200 },
+        { "A10",               175 },
+        { "A2",                75  },
+
+        // ---- RTX professional (Ampere/Ada) ----
+        { "RTX 6000 Ada",      300 },
+        { "RTX 4000 SFF Ada",  180 },
+        { "RTX 4000 Ada",      140 },
+        { "RTX A6000",         300 },
+        { "RTX A5000",         230 },
+        { "RTX A4000",         140 },
+        { "RTX A2000",         70  },
+        { "RTX A2000 12GB",    70  },
+
+        // ---- Tesla (Volta) ----
+        { "Tesla V100 32GB",   300 },
+        { "Tesla V100 16GB",   250 },
+        { "Tesla V100",        300 },
+        { "V100 32GB",         300 },
+        { "V100 16GB",         250 },
+        { "V100",              300 },
+
+        // ---- Tesla (Turing) ----
+        { "Tesla T4",          70  },
+        { "T4",                70  },
+
+        // ---- Quadro (legacy professional) ----
+        { "Quadro RTX 8000",   295 },
+        { "Quadro RTX 6000",   295 },
+        { "Quadro RTX 5000",   230 },
+        { "Quadro RTX 4000",   130 },
+        { "Quadro P6000",      250 },
+        { "Quadro P5000",      180 },
+        { "Quadro P4000",      75  },
+
+        // Fallback
+        { nullptr,             0 }
+    };
+
     // Case-insensitive substring search (ASCII only, GPU/CPU names are ASCII).
     static bool ContainsNoCase(const char* haystack, const char* needle)
     {
@@ -336,6 +392,12 @@ namespace PowerTable
         {
             if (ContainsNoCase(gpuName.c_str(), kGpuTdp[i].name))
                 return kGpuTdp[i].tdp;
+        }
+        // Server / professional GPUs not in the consumer table.
+        for (int i = 0; kServerGpuTdp[i].name; ++i)
+        {
+            if (ContainsNoCase(gpuName.c_str(), kServerGpuTdp[i].name))
+                return kServerGpuTdp[i].tdp;
         }
         return 0; // not found - caller uses NVML limit or estimate
     }

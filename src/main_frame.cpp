@@ -517,15 +517,16 @@ void MainFrame::AdjustHeight(const std::string& key, bool showingItem)
     }
     else
     {
-        // Shrink by the measured height of this specific row.
-        auto hit = m_rowHeights.find(key);
-        if (hit != m_rowHeights.end() && hit->second > 0)
-        {
-            const int minH = 540;
-            const int newH = std::max(cur.GetHeight() - hit->second, minH);
-            if (newH < cur.GetHeight())
-                SetSize(pos.x, pos.y, cur.GetWidth(), newH);
-        }
+        // Use Fit() on the frame so wxSizer properly excludes hidden children
+        // and recalculates the natural size. Then clamp to minimum.
+        // Fit() only shrinks — it never makes the window larger than needed,
+        // so we restore from m_lastFullSize in the showingItem branch above.
+        const wxSize minSz = GetMinSize();
+        Fit();
+        const wxSize after = GetSize();
+        if (after.GetHeight() < minSz.GetHeight())
+            SetSize(pos.x, pos.y, std::max(after.GetWidth(), minSz.GetWidth()),
+                    minSz.GetHeight());
     }
 }
 
