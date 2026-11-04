@@ -14,6 +14,7 @@
 #include <pdh.h>
 #endif
 
+#include <atomic>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -68,11 +69,23 @@ private:
     ULONGLONG m_prevUser   = 0;
     bool      m_prevTimesValid = false;
     int  m_wmiCooldown = 0;
+    // Optional real CPU package power sensor (LibreHardwareMonitor /
+    // OpenHardwareMonitor WMI namespace). Probed once, then read each tick.
+    bool        m_powerLhmTried = false;
+    bool        m_powerLhmOk    = false;
+    std::wstring m_powerLhmNs;          // namespace that exposed the sensor
 #endif
     CpuMetrics m_metrics;
     // Shared probe control (used by both Windows WMI and Linux thermal probe).
     bool m_wmiTried   = false;
     bool m_wmiOk      = false;
+    // Physical core count for the idle-floor power estimate (0 = unknown).
+    // Written once at startup (QueryCpuName / constructor) before polling
+    // starts, read from SampleLoad() - atomic for cross-thread visibility.
+    std::atomic<uint32_t> m_coreCount{0};
+    // True while a real power sensor (LHM WMI or Linux RAPL) supplies
+    // powerWatts; SampleLoad() then skips the load x TDP estimate.
+    std::atomic<bool> m_powerReal{false};
 };
 
 #endif // CPU_MONITOR_H

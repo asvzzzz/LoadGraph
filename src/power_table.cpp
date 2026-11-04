@@ -139,6 +139,14 @@ namespace PowerTable
         { "GTX 1050",          75  },
         { "GT 1030",           30  },
 
+        // ---- GTX 16 series (Super/Ti variants first) ----
+        { "GTX 1660 Super",    125 },
+        { "GTX 1660 Ti",       120 },
+        { "GTX 1660",          120 },
+        { "GTX 1650 Super",    100 },
+        { "GTX 1650",          75  },
+        { "GTX 1630",          75  },
+
         // ---- GTX 900 series ----
         { "GTX 980 Ti",        250 },
         { "GTX 965M",          60  },
@@ -189,6 +197,10 @@ namespace PowerTable
         { "GTX 275",           219 },
         { "GTX 260",           182 },
 
+        // ---- TITAN (only the dual-GPU Z differs) ----
+        { "TITAN Z",           375 },
+        { "TITAN",             250 },
+
         // ---- GeForce 8/9 series ----
         { "9800 GX2",          256 },
         { "9800 GTX",          140 },
@@ -196,6 +208,30 @@ namespace PowerTable
         { "8800 GTX",          150 },
         { "8800 GTS",          144 },
         { "8800 GT",           105 },
+
+        // ---- Low-end GT 500/600/700 (no nvmlDeviceGetPowerManagementLimit
+        // on these cards, so the static TDP is the only source).
+        // NB: this group must stay AFTER "GeForce 8/9 series" - otherwise the
+        // "9800 GT" pattern would shadow "9800 GTX" (140 W) and match it first.
+        { "GT 740",            64  },
+        { "GT 730",            49  },
+        { "GT 720",            19  },
+        { "GT 710",            19  },
+        { "GT 640",            65  },
+        { "GT 635",            35  },
+        { "GT 630",            65  },
+        { "GT 620",            49  },
+        { "GT 610",            29  },
+        { "GT 520",            29  },
+
+        // ---- Legacy low-end GeForce (2009-2010, TDP from NVIDIA specs) ----
+        { "GeForce 210",       30  },
+        { "8400 GS",           40  },
+        { "9500 GT",           50  },
+        { "9600 GSO",          84  },
+        { "9800 GT",           125 },
+        { "GTS 450",           106 },
+        { "GTS 250",           150 },
 
         // Fallback
         { nullptr,             0 }
@@ -302,5 +338,40 @@ namespace PowerTable
                 return kGpuTdp[i].tdp;
         }
         return 0; // not found - caller uses NVML limit or estimate
+    }
+
+    double EstimateCpuPowerWatts(double loadPercent, uint32_t tdpWatts,
+                                 uint32_t physicalCores)
+    {
+        // Unknown CPU -> conservative default, matches GetCpuTdp() fallback.
+        if (tdpWatts == 0)
+            tdpWatts = 125;
+
+        const double tdp = static_cast<double>(tdpWatts);
+
+        // Idle floor: static leakage grows with core count (~2.5 W/core) but
+        // never exceeds 35% of TDP; unknown core count -> 25% of TDP.
+        double idle;
+        if (physicalCores > 0)
+        {
+            const double byCap    = 0.35 * tdp;
+            const double byCores  = 2.5 * static_cast<double>(physicalCores);
+            idle = (byCap < byCores) ? byCap : byCores;
+        }
+        else
+        {
+            idle = 0.25 * tdp;
+        }
+        if (idle >= tdp)
+            idle = 0.25 * tdp;
+
+        // Clamp load (NaN-safe: NaN fails both comparisons and becomes 0).
+        if (!(loadPercent > 0.0)) loadPercent = 0.0;
+        if (loadPercent > 100.0)  loadPercent = 100.0;
+
+        double watts = idle + loadPercent / 100.0 * (tdp - idle);
+        if (watts > tdp)
+            watts = tdp;
+        return watts;
     }
 }

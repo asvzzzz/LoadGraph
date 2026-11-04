@@ -7,10 +7,13 @@
 
 #include <chrono>
 #include <cstdint>
+#include <cstdlib>
 #include <fstream>
 #include <sstream>
 #include <ctime>
 #include <algorithm>
+#include <set>
+#include <utility>
 
 // ----------------------------------------------------------------------------
 // Linux-specific CPU monitor implementation.
@@ -149,6 +152,61 @@ namespace
         return family + "_" + model;
     }
 
+    // Count unique physical cores from /proc/cpuinfo ("physical id" + "core id"
+    // pairs, one pair per physical core regardless of hyperthreading).
+    // Used by the idle-floor power estimate (P_idle scales with core count).
+    // Falls back to the logical processor count when the fields are absent
+    // (ARM, some VMs/WSL); returns 0 only if /proc/cpuinfo is unreadable.
+    uint32_t CountPhysicalCores()
+    {
+        std::string content;
+        if (!ReadFileToString("/proc/cpuinfo", content))
+            return 0;
+
+        std::set<std::pair<int, int>> cores;
+        int processors = 0;
+
+        std::istringstream iss(content);
+        std::string line;
+        int physId = -1, coreId = -1;
+        while (std::getline(iss, line))
+        {
+            if (line.empty())
+            {
+                if (physId >= 0 && coreId >= 0)
+                    cores.insert(std::make_pair(physId, coreId));
+                physId = coreId = -1;
+                continue;
+            }
+
+            if (line.compare(0, 9, "processor") == 0)
+                ++processors;
+
+            const size_t colon = line.find(':');
+            if (colon == std::string::npos)
+                continue;
+
+            // Key is everything left of ':', trailing spaces/tabs trimmed.
+            std::string key = line.substr(0, colon);
+            const size_t keyEnd = key.find_last_not_of(" \t");
+            if (keyEnd == std::string::npos)
+                continue;
+            key.erase(keyEnd + 1);
+
+            const int value = std::atoi(line.c_str() + colon + 1);
+            if (key == "physical id")
+                physId = value;
+            else if (key == "core id")
+                coreId = value;
+        }
+        if (physId >= 0 && coreId >= 0)
+            cores.insert(std::make_pair(physId, coreId));
+
+        if (!cores.empty())
+            return static_cast<uint32_t>(cores.size());
+        return (processors > 0) ? static_cast<uint32_t>(processors) : 0;
+    }
+
     // RAPL package energy counter state. The counter is monotonic in microjoules
     // and wraps at max_energy_range_uj; power = deltaE / deltaTime.
     // Only SampleLoad() (GUI thread, 1000 ms tick) touches this state, so no
@@ -200,7 +258,7 @@ namespace
             }
             else
             {
-                LOGI("RAPL unavailable - CPU power uses load x TDP estimate.");
+                LOGI("RAPL unavailable - CPU power uses idle-floor estimate.");
             }
         }
         if (!s_rapl.valid)
@@ -268,6 +326,12 @@ CpuMonitor::CpuMonitor()
         LOGI("CPU family/model unavailable, TDP default: 125 W");
     }
 
+    // Physical core count feeds the idle-floor power estimate (used when the
+    // RAPL counter is unavailable, e.g. under WSL2).
+    const uint32_t cores = CountPhysicalCores();
+    m_coreCount.store(cores, std::memory_order_relaxed);
+    LOGI("Physical cores detected: %u", cores);
+
     // Initial uptime read.
     m_metrics.uptimeMs = ReadUptimeMs();
 }
@@ -318,20 +382,28 @@ double CpuMonitor::SampleLoad()
     // CPU usage = (total - idle) / total * 100
     double load = (total - dIdle) / total * 100.0;
 
-    // CPU power: RAPL energy delta when readable, otherwise load% x TDP.
-    // The RAPL file read happens outside the lock (I/O), values are stored
-    // together with loadPercent under the mutex for GetMetrics().
+    // CPU power: RAPL energy delta when readable, otherwise the idle-floor
+    // estimate (plain load x TDP showed ~1 W at idle under WSL2 where RAPL is
+    // not exposed). The RAPL file read happens outside the lock (I/O); all
+    // m_metrics writes happen under the mutex for GetMetrics().
     {
         double watts = ReadRaplPowerWatts();
-        if (watts < 0.0)
-        {
-            const double tdp = (m_metrics.tdpWatts > 0.0) ? m_metrics.tdpWatts : 125.0;
-            watts = load * tdp / 100.0;
-        }
+        // Exactly 0.0 W over a 1 s window means a stuck/bogus reading -
+        // fall back to the estimate instead of drawing a flat zero line.
+        const bool real = (watts > 0.0);
 
         std::lock_guard<std::mutex> lock(m_mutex);
         m_metrics.loadPercent = load;
-        m_metrics.powerWatts  = watts;
+        if (!real)
+        {
+            const double tdp = (m_metrics.tdpWatts > 0.0) ? m_metrics.tdpWatts : 125.0;
+            watts = PowerTable::EstimateCpuPowerWatts(
+                load,
+                static_cast<uint32_t>(tdp + 0.5),
+                m_coreCount.load(std::memory_order_relaxed));
+        }
+        m_metrics.powerWatts = watts;
+        m_powerReal.store(real, std::memory_order_relaxed);
     }
 
     return load;
@@ -344,24 +416,41 @@ void CpuMonitor::QueryCpuName()
 
 void CpuMonitor::Collect()
 {
-    // Update uptime.
-    m_metrics.uptimeMs = ReadUptimeMs();
+    const uint64_t uptimeMs = ReadUptimeMs();
 
-    // Temperature (one-shot probe, same as Windows WMI approach).
+    // Temperature: availability is probed once (guarded); after a successful
+    // probe the sysfs value is re-read every tick - a file read is cheap and
+    // keeps the graph live (the previous one-shot read froze it at the value
+    // from startup). A failed re-read keeps the last known value.
+    double temp = -1.0;
+    bool   probe = false;
     if (!m_wmiTried)
     {
         m_wmiTried = true;
-        double temp = ReadCpuTemperature();
-        if (temp >= 0.0)
-        {
-            m_metrics.temperature = temp;
-            LOGI("CPU temp sensor found: %.1f C", temp);
-        }
-        else
-        {
-            LOGI("CPU temp sensor unavailable");
-        }
+        temp = ReadCpuTemperature();
         m_wmiOk = (temp >= 0.0);
+        probe = true;
+    }
+    else if (m_wmiOk)
+    {
+        temp = ReadCpuTemperature();
+    }
+
+    // All writes to m_metrics must hold the mutex: GetMetrics() reads it from
+    // the GUI thread (data race otherwise).
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_metrics.uptimeMs = uptimeMs;
+        if (temp >= 0.0)
+            m_metrics.temperature = temp;
+    }
+
+    if (probe)
+    {
+        if (m_wmiOk)
+            LOGI("CPU temp sensor found: %.1f C", temp);
+        else
+            LOGI("CPU temp sensor unavailable");
     }
 
     // Fan speed - not commonly available on Linux desktops without special drivers.

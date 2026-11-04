@@ -19,6 +19,18 @@ namespace PowerTable
     // Look up NVIDIA GPU TDP by device name substring.
     // Returns TDP in watts, or 0 if not found (caller uses NVML limit or estimate).
     uint32_t GetGpuTdp(const std::string& gpuName);
+
+    // Estimate CPU power draw (watts) from load% when no real counter is
+    // available (Windows has no user-mode RAPL; Linux RAPL is root-only or
+    // missing in WSL). Models the idle floor: even at 0% load a CPU still
+    // draws static leakage and uncore power, so pure load x TDP reports ~1 W
+    // at idle while the real package draw is tens of watts.
+    //   P = P_idle + load% * (TDP - P_idle)
+    //   P_idle = min(0.35 * TDP, 2.5 W * physicalCores)
+    // physicalCores = 0 -> fallback P_idle = 0.25 * TDP.
+    // The result is clamped to [0, TDP]; loadPercent is clamped to [0, 100].
+    double EstimateCpuPowerWatts(double loadPercent, uint32_t tdpWatts,
+                                 uint32_t physicalCores);
 }
 
 #endif // POWER_TABLE_H

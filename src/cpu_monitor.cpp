@@ -133,6 +133,46 @@ static bool QueryWmiValueRaw(const wchar_t* ns, const wchar_t* query,
     return ok;
 }
 
+// WQL for the CPU package power sensor exposed by LibreHardwareMonitor /
+// OpenHardwareMonitor. NB: WQL has no LIMIT clause - the first row of the
+// result set is taken instead.
+static const wchar_t kPowerSensorQuery[] =
+    L"SELECT Value FROM Sensor WHERE SensorType='Power' AND Name='CPU Package'";
+
+// Detect the number of physical CPU cores via GetLogicalProcessorInformation.
+// Used by the idle-floor power estimate (P_idle scales with core count).
+// The XP-era API is used on purpose: it needs no _WIN32_WINNT >= 0x0601 guard,
+// so the code compiles with both MSVC and MinGW out of the box.
+// Returns 0 on failure (caller falls back to 25% of TDP).
+static uint32_t DetectPhysicalCoreCount()
+{
+    DWORD len = 0;
+    // First call only queries the required buffer size and fails with
+    // ERROR_INSUFFICIENT_BUFFER (a TRUE return would mean "no processors").
+    if (GetLogicalProcessorInformation(nullptr, &len) ||
+        GetLastError() != ERROR_INSUFFICIENT_BUFFER || len == 0)
+        return 0;
+
+    // +1 element: the required size may grow between the two calls.
+    const size_t capacity = len / sizeof(SYSTEM_LOGICAL_PROCESSOR_INFORMATION) + 1;
+    std::vector<SYSTEM_LOGICAL_PROCESSOR_INFORMATION> info(capacity);
+    if (!GetLogicalProcessorInformation(info.data(), &len))
+        return 0;
+
+    // One RelationProcessorCore entry per physical core (hyperthread
+    // siblings share the same entry).
+    uint32_t cores = 0;
+    const size_t usable = len / sizeof(SYSTEM_LOGICAL_PROCESSOR_INFORMATION);
+    for (size_t i = 0; i < usable && i < capacity; ++i)
+    {
+        if (info[i].Relationship == RelationProcessorCore)
+            ++cores;
+    }
+    // Systems with > 64 logical processors are not covered by this API;
+    // returning 0 makes the estimate use the 25% TDP fallback.
+    return cores;
+}
+
 CpuMonitor::CpuMonitor()
 {
 }
@@ -213,10 +253,17 @@ double CpuMonitor::SampleLoad()
     {
         std::lock_guard<std::mutex> lock(m_mutex);
         m_metrics.loadPercent = load;
-        // CPU power estimate: load% x TDP. Windows has no RAPL counter without
-        // a kernel driver, so the static table is the best available source.
-        const double tdp = (m_metrics.tdpWatts > 0.0) ? m_metrics.tdpWatts : 125.0;
-        m_metrics.powerWatts = load * tdp / 100.0;
+        // CPU power: a real sensor (LHM WMI) wins; otherwise use the idle-floor
+        // estimate P_idle + load% * (TDP - P_idle). Plain load x TDP reported
+        // ~1 W at idle because a loaded-out CPU still draws static power.
+        if (!m_powerReal.load(std::memory_order_relaxed))
+        {
+            const double tdp = (m_metrics.tdpWatts > 0.0) ? m_metrics.tdpWatts : 125.0;
+            m_metrics.powerWatts = PowerTable::EstimateCpuPowerWatts(
+                load,
+                static_cast<uint32_t>(tdp + 0.5),
+                m_coreCount.load(std::memory_order_relaxed));
+        }
     }
 
     return load;
@@ -225,7 +272,10 @@ double CpuMonitor::SampleLoad()
 void CpuMonitor::Collect()
 {
     // Temperature / fan: probe WMI once (guarded). If it fails or crashes we
-    // permanently disable it and keep showing "N/A".
+    // permanently disable it and keep showing "N/A". After a successful probe
+    // the values are re-read every 5th tick (m_wmiCooldown), otherwise they
+    // would stay frozen at the startup reading - but without paying the WMI
+    // round-trip cost every single second.
     double temp = -1.0;
     int    fan  = -1;
     unsigned int filled = 0;
@@ -239,13 +289,72 @@ void CpuMonitor::Collect()
              (filled & 1u) ? "OK" : "N/A",
              (filled & 2u) ? "OK" : "N/A");
     }
+    else if (m_wmiOk)
+    {
+        if (m_wmiCooldown <= 0)
+        {
+            filled = ProbeWmiSensor(temp, fan);
+            m_wmiCooldown = 5;
+        }
+        else
+        {
+            --m_wmiCooldown;
+        }
+    }
+
+    // Optional real CPU package power from LibreHardwareMonitor /
+    // OpenHardwareMonitor. The namespace is probed once (guarded, SEH-safe
+    // QueryWmiValueRaw); while the sensor lives its value is read every tick
+    // and suppresses the estimate (m_powerReal). If LHM is closed mid-run the
+    // code falls back to the idle-floor estimate.
+    double power = -1.0;
+    if (!m_powerLhmTried)
+    {
+        m_powerLhmTried = true;
+        static const wchar_t* kPowerNs[] = { L"root\\LHM", L"root\\OpenHardwareMonitor" };
+        const size_t nsCount = sizeof(kPowerNs) / sizeof(kPowerNs[0]);
+        for (size_t i = 0; i < nsCount && !m_powerLhmOk; ++i)
+        {
+            double v = -1.0;
+            if (QueryWmiValueRaw(kPowerNs[i], kPowerSensorQuery, L"Value", v) && v > 0.0)
+            {
+                m_powerLhmNs  = kPowerNs[i];
+                m_powerLhmOk  = true;
+                power         = v;
+                LOGI("CPU power sensor found (%S): %.1f W", kPowerNs[i], v);
+            }
+        }
+        if (!m_powerLhmOk)
+            LOGI("CPU power sensor unavailable - using idle-floor estimate.");
+    }
+    else if (m_powerLhmOk)
+    {
+        double v = -1.0;
+        if (QueryWmiValueRaw(m_powerLhmNs.c_str(), kPowerSensorQuery, L"Value", v) && v > 0.0)
+        {
+            power = v;
+        }
+        else
+        {
+            m_powerLhmOk = false;
+            m_powerReal.store(false, std::memory_order_relaxed);
+            LOGI("CPU power sensor lost - using idle-floor estimate.");
+        }
+    }
 
     // All writes to m_metrics must hold the mutex: GetMetrics() reads it from
     // the GUI thread (data race otherwise).
-    std::lock_guard<std::mutex> lock(m_mutex);
-    m_metrics.uptimeMs = GetTickCount64();
-    if (filled & 1u) m_metrics.temperature = temp;
-    if (filled & 2u) m_metrics.fanRpm      = fan;
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_metrics.uptimeMs = GetTickCount64();
+        if (filled & 1u) m_metrics.temperature = temp;
+        if (filled & 2u) m_metrics.fanRpm      = fan;
+        if (power > 0.0)
+        {
+            m_metrics.powerWatts = power;
+            m_powerReal.store(true, std::memory_order_relaxed);
+        }
+    }
 }
 
 // Legacy GetSystemTimes-based load, kept as a fallback when PDH is unavailable.
@@ -322,13 +431,22 @@ unsigned int CpuMonitor::ProbeWmiSensor(double& tempC, int& fanRpm)
     }
 
     // --- Source 2: OpenHardwareMonitor / LibreHardwareMonitor WMI namespace ---
-    // Temperature (skip if already obtained).
+    // Temperature (skip if already obtained). Prefer the CPU package sensor so
+    // a GPU temperature row cannot be picked up as CPU temperature. WQL has no
+    // LIMIT clause - the first row of the result set is taken instead.
     if (!(filled & 1u))
     {
         double v = -1.0;
         if (QueryWmiValueRaw(L"root\\OpenHardwareMonitor",
-                             L"SELECT Value FROM Sensor WHERE SensorType='Temperature' LIMIT 1",
+                             L"SELECT Value FROM Sensor WHERE SensorType='Temperature' AND Name='CPU Package'",
                              L"Value", v) && v > 0.0 && v < 150.0)
+        {
+            tempC = v;
+            filled |= 1u;
+        }
+        else if (QueryWmiValueRaw(L"root\\OpenHardwareMonitor",
+                                  L"SELECT Value FROM Sensor WHERE SensorType='Temperature'",
+                                  L"Value", v) && v > 0.0 && v < 150.0)
         {
             tempC = v;
             filled |= 1u;
@@ -339,7 +457,7 @@ unsigned int CpuMonitor::ProbeWmiSensor(double& tempC, int& fanRpm)
     {
         double v = -1.0;
         if (QueryWmiValueRaw(L"root\\OpenHardwareMonitor",
-                             L"SELECT Value FROM Sensor WHERE SensorType='Fan' LIMIT 1",
+                             L"SELECT Value FROM Sensor WHERE SensorType='Fan'",
                              L"Value", v) && v > 0.0)
         {
             fanRpm = static_cast<int>(v + 0.5);
@@ -388,4 +506,10 @@ void CpuMonitor::QueryCpuName()
         m_metrics.tdpWatts = tdp;
     }
     LOGI("CPU TDP table lookup: %.0f W (name='%s')", tdp, nameA.c_str());
+
+    // Physical core count feeds the idle-floor power estimate; detected once
+    // before the polling threads start.
+    const uint32_t cores = DetectPhysicalCoreCount();
+    m_coreCount.store(cores, std::memory_order_relaxed);
+    LOGI("Physical cores detected: %u", cores);
 }
