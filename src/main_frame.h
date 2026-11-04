@@ -4,6 +4,7 @@
 #include <wx/wx.h>
 #include <wx/sizer.h>
 #include <wx/timer.h>
+#include <map>
 #include "cpu_monitor.h"
 #include "ram_monitor.h"
 #include "gpu_monitor.h"
@@ -88,6 +89,15 @@ private:
         GraphPanel* powerGraph = nullptr;
     };
     std::vector<GpuPanelData> m_gpuPanels;
+
+    // View menu state persistence. Keys map to graph panel pointers so the
+    // toggle handler can show/hide a specific chart on demand.
+    std::map<std::string, GraphPanel*> m_viewToggles;
+    std::map<int, std::string>         m_menuIdToKey;
+
+    void BuildViewMenu(wxMenuBar* menuBar,
+                       const std::map<std::string, bool>& initialState);
+    void OnViewToggle(wxCommandEvent& evt);
 
     // UI created flag (Linux: deferred to first timer tick).
     bool    m_uiCreated = false;

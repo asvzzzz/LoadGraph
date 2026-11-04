@@ -349,13 +349,13 @@ namespace PowerTable
 
         const double tdp = static_cast<double>(tdpWatts);
 
-        // Idle floor: static leakage grows with core count (~2.5 W/core) but
-        // never exceeds 35% of TDP; unknown core count -> 25% of TDP.
+        // Idle floor: static leakage grows with core count (~1.5 W/core) but
+        // never exceeds 30% of TDP; unknown core count -> 25% of TDP.
         double idle;
         if (physicalCores > 0)
         {
-            const double byCap    = 0.35 * tdp;
-            const double byCores  = 2.5 * static_cast<double>(physicalCores);
+            const double byCap    = 0.30 * tdp;
+            const double byCores  = 1.5 * static_cast<double>(physicalCores);
             idle = (byCap < byCores) ? byCap : byCores;
         }
         else

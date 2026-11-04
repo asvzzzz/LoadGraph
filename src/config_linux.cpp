@@ -111,6 +111,62 @@ void SaveWindowPosition(int x, int y, int w, int h)
     LOGI("Saved position: (%d,%d) size=%dx%d", x, y, w, h);
 }
 
+bool Config::LoadViewMenuState(std::map<std::string, bool>& out)
+{
+    std::string path = GetAppConfigPath("view_state.json");
+    if (path.empty()) return false;
+
+    std::string content;
+    if (!ReadFileToString(path.c_str(), content))
+        return false;
+
+    // Simple JSON parser: look for "key": 0|1 pairs.
+    size_t pos = 0;
+    while (pos < content.size())
+    {
+        size_t keyStart = content.find('"', pos);
+        if (keyStart == std::string::npos) break;
+        size_t keyEnd = content.find('"', keyStart + 1);
+        if (keyEnd == std::string::npos) break;
+        std::string key = content.substr(keyStart + 1, keyEnd - keyStart - 1);
+
+        // Find ':' after the key.
+        size_t colon = content.find(':', keyEnd);
+        if (colon == std::string::npos) { pos = keyEnd + 1; continue; }
+
+        // Find 0 or 1 after optional whitespace.
+        size_t numStart = content.find_first_of("01", colon + 1);
+        bool val = (numStart != std::string::npos && content[numStart] == '1');
+        out[key] = val;
+        pos = numStart + 1;
+    }
+    return !out.empty();
+}
+
+void Config::SaveViewMenuState(const std::map<std::string, bool>& state)
+{
+    std::string path = GetAppConfigPath("view_state.json");
+    if (path.empty()) return;
+
+    EnsureDirectoryExists(path);
+
+    std::ofstream f(path.c_str());
+    if (!f.is_open())
+    {
+        LOGE("Failed to save view state to %s", path.c_str());
+        return;
+    }
+    f << "{\n";
+    bool first = true;
+    for (const auto& kv : state)
+    {
+        if (!first) f << ",\n";
+        f << "    \"" << kv.first << "\": " << (kv.second ? "1" : "0");
+        first = false;
+    }
+    f << "\n}\n";
+}
+
 } // namespace Config
 
 #endif // PLATFORM_LINUX

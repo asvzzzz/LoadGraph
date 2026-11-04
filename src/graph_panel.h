@@ -36,6 +36,12 @@ public:
     // Switch the Y axis back to automatic data-driven scaling.
     void ResetYRange();
 
+    // Override the adaptive tick count used in OnPaint. When set (> 0) the
+    // graph always draws exactly this many horizontal grid labels regardless
+    // of panel height (useful for Total Power where we want a fixed 4-tick
+    // layout with a ceiling-rounded Y max). Default -1 = auto-adaptive.
+    void SetTickCount(int count);
+
     // Draw the line red once the last value is strictly greater than threshold.
     // Pass a negative value to disable the alarm coloring.
     void SetAlarmThreshold(double threshold);
@@ -81,6 +87,9 @@ private:
 
     // Y-axis tick spacing mode. Controls how the axis labels are computed.
     GraphYMode m_yMode = GraphYMode::Auto;
+
+    // Explicit tick count override (-1 = auto).
+    int m_tickCount = -1;
 };
 
 #endif // GRAPH_PANEL_H

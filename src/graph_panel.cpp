@@ -51,6 +51,12 @@ void GraphPanel::ResetYRange()
     m_fixedRange = false;
 }
 
+void GraphPanel::SetTickCount(int count)
+{
+    // Zero or negative disables the override (falls back to auto).
+    m_tickCount = (count > 0) ? count : -1;
+}
+
 void GraphPanel::SetAlarmThreshold(double threshold)
 {
     m_alarmThreshold = threshold;
@@ -205,13 +211,16 @@ void GraphPanel::OnPaint(wxPaintEvent& /*evt*/)
         return plotBottom - plotHeight * (v - yMin) / ySpan;
     };
 
-    // Adaptive Y-axis tick count based on available plot height.
-    // Keeps labels at least ~20 px apart so they never overlap after resize.
-    // Minimum 4 ticks to ensure visible grid even on short panels.
-    const int tickCount = std::max(4, (plotHeight < 40.0) ? 1 :
-                                      (plotHeight < 80.0) ? 2 :
-                                      (plotHeight < 130.0) ? 3 :
-                                      (plotHeight < 200.0) ? 4 : 5);
+    // Adaptive Y-axis tick count based on available plot height — unless the
+    // caller explicitly requested a fixed number via SetTickCount().
+    int tickCount = -1;
+    if (m_tickCount > 0)
+        tickCount = m_tickCount;
+    else
+        tickCount = std::max(4, (plotHeight < 40.0) ? 1 :
+                                  (plotHeight < 80.0) ? 2 :
+                                  (plotHeight < 130.0) ? 3 :
+                                  (plotHeight < 200.0) ? 4 : 5);
 
     // Compute nice Y-axis tick values based on mode and available height.
     const auto yTicks = ComputeYTicks(yMin, yMax, tickCount, m_yMode);

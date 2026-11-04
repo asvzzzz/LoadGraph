@@ -46,7 +46,7 @@ static wxString FormatUptime(uint64_t totalSec)
 // ----------------------------------------------------------------------------
 // Construction / destruction
 // ----------------------------------------------------------------------------
-MainFrame::MainFrame(const wxString& /*title*/)
+MainFrame::MainFrame(const wxString& title)
 {
     int x = 100, y = 100, w = 640, h = 720;
     bool hasPos = Config::LoadWindowPosition(x, y);
@@ -55,8 +55,17 @@ MainFrame::MainFrame(const wxString& /*title*/)
     wxPoint pos = hasPos ? wxPoint(x, y) : wxDefaultPosition;
     wxSize  size = hasSize ? wxSize(w, h) : wxSize(640, 720);
 
-    Create(nullptr, wxID_ANY, wxEmptyString, pos, size,
+    Create(nullptr, wxID_ANY, title, pos, size,
            wxDEFAULT_FRAME_STYLE | wxRESIZE_BORDER);
+
+    // Application icon — loaded from a PNG in the current working directory.
+    // Fails silently when the file is missing (no crash).
+    {
+        wxString iconPath = wxGetCwd() + "/" + "loadgraph.png";
+        wxIcon icon(iconPath);
+        if (icon.IsOk())
+            SetIcon(icon);
+    }
 
     LOGI("Starting metric collectors...");
 
@@ -92,6 +101,21 @@ MainFrame::MainFrame(const wxString& /*title*/)
     // fully-built window and the first paint shows content immediately.
     RealizeUI();
     SetMinSize(wxSize(480, 540));
+
+    // Apply saved View menu state (hidden graphs restored from previous run).
+    std::map<std::string, bool> viewState;
+    Config::LoadViewMenuState(viewState);
+    for (const auto& kv : m_viewToggles)
+    {
+        auto it = viewState.find(kv.first);
+        bool show = (it == viewState.end()) ? true : it->second;
+        kv.second->Show(show);
+    }
+
+    // Build the View menu with checkboxes for every graph panel.
+    wxMenuBar* menuBar = new wxMenuBar;
+    BuildViewMenu(menuBar, viewState);
+    SetMenuBar(menuBar);
 }
 
 MainFrame::~MainFrame()
@@ -333,6 +357,76 @@ void MainFrame::ApplyTheme()
     Refresh();
 }
 
+void MainFrame::BuildViewMenu(wxMenuBar* menuBar,
+                               const std::map<std::string, bool>& initialState)
+{
+    wxMenu* viewMenu = new wxMenu;
+    for (const auto& kv : m_viewToggles)
+    {
+        wxMenuItem* item = viewMenu->Append(wxID_ANY, kv.first);
+        auto it = initialState.find(kv.first);
+        bool show = (it == initialState.end()) ? true : it->second;
+        item->Check(show);
+        m_menuIdToKey[item->GetId()] = kv.first;
+        Connect(item->GetId(), wxEVT_MENU,
+                wxCommandEventHandler(MainFrame::OnViewToggle));
+    }
+    viewMenu->AppendSeparator();
+    {
+        wxMenuItem* all = viewMenu->Append(wxID_ANY, L"Show all");
+        Connect(all->GetId(), wxEVT_MENU,
+                wxCommandEventHandler(MainFrame::OnViewToggle));
+        m_menuIdToKey[all->GetId()] = "__show_all__";
+    }
+    {
+        wxMenuItem* none = viewMenu->Append(wxID_ANY, L"Hide all");
+        Connect(none->GetId(), wxEVT_MENU,
+                wxCommandEventHandler(MainFrame::OnViewToggle));
+        m_menuIdToKey[none->GetId()] = "__hide_all__";
+    }
+    menuBar->Append(viewMenu, L"&View");
+}
+
+void MainFrame::OnViewToggle(wxCommandEvent& evt)
+{
+    auto it = m_menuIdToKey.find(evt.GetId());
+    if (it == m_menuIdToKey.end()) return;
+    const std::string key = it->second;
+
+    std::map<std::string, bool> state;
+    Config::LoadViewMenuState(state);
+
+    if (key == "__show_all__")
+    {
+        for (const auto& kv : m_viewToggles)
+        {
+            kv.second->Show(true);
+            state[kv.first] = true;
+        }
+    }
+    else if (key == "__hide_all__")
+    {
+        for (const auto& kv : m_viewToggles)
+        {
+            kv.second->Show(false);
+            state[kv.first] = false;
+        }
+    }
+    else
+    {
+        auto pit = m_viewToggles.find(key);
+        if (pit != m_viewToggles.end())
+        {
+            bool show = !evt.IsChecked(); // toggle: item already flipped by wx.
+            pit->second->Show(show);
+            state[key] = show;
+        }
+    }
+
+    this->Layout();
+    Config::SaveViewMenuState(state);
+}
+
 // ----------------------------------------------------------------------------
 // CPU / RAM block:
 //   row 1: CPU Load + RAM Usage        (always present, side by side)
@@ -382,6 +476,7 @@ void MainFrame::BuildCpuSection(wxBoxSizer* container, wxWindow* parent)
         m_cpuLoadGraph->SetYRange(0.0, 100.0);
         m_cpuLoadGraph->SetYMode(GraphYMode::Percent);
         row->Add(m_cpuLoadGraph, 1, wxEXPAND | wxBOTTOM, 2);
+        m_viewToggles["cpu_load"] = m_cpuLoadGraph;
 
         m_ramUsageGraph = new GraphPanel(parent, L"RAM Usage", L"GB");
         if (rm.totalBytes > 0)
@@ -401,6 +496,7 @@ void MainFrame::BuildCpuSection(wxBoxSizer* container, wxWindow* parent)
         // card 6px shorter. A spacer occupies only the main axis, so heights match.
         row->AddSpacer(8);
         row->Add(m_ramUsageGraph, 1, wxEXPAND | wxBOTTOM, 2);
+        m_viewToggles["ram_usage"] = m_ramUsageGraph;
 
         row->AddSpacer(4);
         container->Add(row, 1, wxEXPAND);
@@ -419,6 +515,7 @@ void MainFrame::BuildCpuSection(wxBoxSizer* container, wxWindow* parent)
         row->AddSpacer(4);
         container->Add(row, 1, wxEXPAND);
         container->AddSpacer(2);
+        m_viewToggles["cpu_power"] = m_cpuPowerGraph;
     }
 
     // ---- Row 2: CPU Temp (only when available) ----
@@ -437,6 +534,7 @@ void MainFrame::BuildCpuSection(wxBoxSizer* container, wxWindow* parent)
         row->AddSpacer(4);
         container->Add(row, 1, wxEXPAND);
         container->AddSpacer(2);
+        m_viewToggles["cpu_temp"] = m_cpuTempGraph;
     }
 
     // ---- Row 3: CPU Fan Speed (only when available) ----
@@ -449,6 +547,7 @@ void MainFrame::BuildCpuSection(wxBoxSizer* container, wxWindow* parent)
         row->AddSpacer(4);
         container->Add(row, 1, wxEXPAND);
         container->AddSpacer(2);
+        m_viewToggles["cpu_fan"] = m_cpuFanGraph;
     }
     else if (!hasTemp)
     {
@@ -514,6 +613,7 @@ void MainFrame::BuildGpuSection(wxBoxSizer* container, wxWindow* parent)
             pd.loadGraph->SetYMode(GraphYMode::Percent);
             pd.loadGraph->SetPurple(true);
             row->Add(pd.loadGraph, 1, wxEXPAND | wxBOTTOM, 2);
+            m_viewToggles["gpu_" + std::to_string(g) + "_load"] = pd.loadGraph;
 
             // Horizontal gap as a separate spacer (see CPU row): a combined
             // wxBOTTOM | wxLEFT border would give the right graph an 8px bottom
@@ -528,6 +628,7 @@ void MainFrame::BuildGpuSection(wxBoxSizer* container, wxWindow* parent)
                 pd.tempGraph->SetYMode(GraphYMode::Celsius);
                 pd.tempGraph->SetPurple(true);
                 row->Add(pd.tempGraph, 1, wxEXPAND | wxBOTTOM, 2);
+                m_viewToggles["gpu_" + std::to_string(g) + "_temp"] = pd.tempGraph;
             }
             else
             {
@@ -562,6 +663,7 @@ void MainFrame::BuildGpuSection(wxBoxSizer* container, wxWindow* parent)
             pd.vramGraph->SetYMode(GraphYMode::Gigabytes);
             pd.vramGraph->SetPurple(true);
             row->Add(pd.vramGraph, 1, wxEXPAND | wxBOTTOM, 2);
+            m_viewToggles["gpu_" + std::to_string(g) + "_vram"] = pd.vramGraph;
 
             // Horizontal gap as a separate spacer (see Row 1).
             row->AddSpacer(8);
@@ -573,6 +675,7 @@ void MainFrame::BuildGpuSection(wxBoxSizer* container, wxWindow* parent)
                 pd.fanGraph->SetYMode(GraphYMode::Percent);
                 pd.fanGraph->SetPurple(true);
                 row->Add(pd.fanGraph, 1, wxEXPAND | wxBOTTOM, 2);
+                m_viewToggles["gpu_" + std::to_string(g) + "_fan"] = pd.fanGraph;
             }
             else
             {
@@ -603,6 +706,7 @@ void MainFrame::BuildGpuSection(wxBoxSizer* container, wxWindow* parent)
             pd.powerGraph->SetYMode(GraphYMode::Watts);
             pd.powerGraph->SetPurple(true);
             row->Add(pd.powerGraph, 1, wxEXPAND | wxBOTTOM, 2);
+            m_viewToggles["gpu_" + std::to_string(g) + "_power"] = pd.powerGraph;
 
             row->AddSpacer(4);
             group->Add(row, 1, wxEXPAND);
@@ -620,7 +724,8 @@ void MainFrame::BuildGpuSection(wxBoxSizer* container, wxWindow* parent)
 // ----------------------------------------------------------------------------
 void MainFrame::BuildTotalPowerRow(wxBoxSizer* container, wxWindow* parent)
 {
-    // Y axis maximum: CPU TDP + every GPU power limit/TDP fallback.
+    // Y axis maximum: CPU TDP + every GPU power limit/TDP fallback, then
+    // snapped up to the next clean multiple of 50 (avoids ugly tick labels).
     double maxY = 0.0;
     const auto cm = m_cpu.GetMetrics();
     maxY += (cm.tdpWatts > 0.0) ? cm.tdpWatts : 125.0;
@@ -635,14 +740,19 @@ void MainFrame::BuildTotalPowerRow(wxBoxSizer* container, wxWindow* parent)
             gMax = 100.0;
         maxY += gMax;
     }
+    maxY = std::ceil(maxY / 50.0) * 50.0;
 
     wxBoxSizer* row = new wxBoxSizer(wxHORIZONTAL);
     row->AddSpacer(4);
     m_totalPowerGraph = new GraphPanel(parent, L"Total Power (CPU + GPU)", L"W");
     m_totalPowerGraph->SetYRange(0.0, maxY);
     m_totalPowerGraph->SetYMode(GraphYMode::Watts);
+    // Four evenly-spaced labels: 0, max/3, 2*max/3, max — gives a clean layout
+    // regardless of panel height.
+    m_totalPowerGraph->SetTickCount(4);
     row->Add(m_totalPowerGraph, 1, wxEXPAND | wxBOTTOM, 2);
     row->AddSpacer(4);
     container->Add(row, 1, wxEXPAND);
     container->AddSpacer(2);
+    m_viewToggles["total_power"] = m_totalPowerGraph;
 }

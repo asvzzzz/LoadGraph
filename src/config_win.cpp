@@ -87,4 +87,55 @@ void Config::SaveWindowPosition(int x, int y, int w, int h)
     LOGI("Saved position: (%d,%d) size=%dx%d", x, y, w, h);
 }
 
+bool Config::LoadViewMenuState(std::map<std::string, bool>& out)
+{
+    // Read all view_* keys from the registry; missing key -> true (default).
+    HKEY hKey;
+    if (RegOpenKeyExW(HKEY_CURRENT_USER, kRegPath, 0, KEY_READ, &hKey) != ERROR_SUCCESS)
+        return false;
+
+    DWORD idx = 0;
+    wchar_t name[128] = {};
+    DWORD nSize = sizeof(name);
+    bool any = false;
+    while (RegEnumValueW(hKey, idx, name, &nSize, nullptr, nullptr, nullptr, nullptr) == ERROR_SUCCESS)
+    {
+        if (wcsncmp(name, L"view_", 5) == 0)
+        {
+            std::string key;
+            for (size_t i = 5; name[i]; ++i)
+                key += static_cast<char>(name[i]); // ASCII-safe: keys are ASCII.
+            DWORD val = 0, vsz = sizeof(val);
+            if (RegGetValueW(hKey, nullptr, name, RRF_RT_REG_DWORD, nullptr, &val, &vsz) == ERROR_SUCCESS)
+                out[key] = (val != 0);
+            else
+                out[key] = true;
+            any = true;
+        }
+        nSize = sizeof(name);
+        ++idx;
+    }
+    RegCloseKey(hKey);
+    return any;
+}
+
+void Config::SaveViewMenuState(const std::map<std::string, bool>& state)
+{
+    HKEY hKey;
+    if (RegCreateKeyExW(HKEY_CURRENT_USER, kRegPath, 0, nullptr, 0,
+                        KEY_SET_VALUE, nullptr, &hKey, nullptr) != ERROR_SUCCESS)
+        return;
+
+    for (const auto& kv : state)
+    {
+        std::wstring wkey = L"view_";
+        for (char c : kv.first)
+            wkey += static_cast<wchar_t>(c);
+        DWORD val = kv.second ? 1u : 0u;
+        RegSetValueExW(hKey, wkey.c_str(), 0, REG_DWORD,
+                       reinterpret_cast<const BYTE*>(&val), sizeof(val));
+    }
+    RegCloseKey(hKey);
+}
+
 #endif // PLATFORM_WINDOWS
