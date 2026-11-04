@@ -289,6 +289,38 @@ namespace PowerTable
         { "Quadro P5000",      180 },
         { "Quadro P4000",      75  },
 
+        // ---- Tesla (Pascal) ----
+        { "Tesla P40",         250 },
+        { "Tesla P4",          75  },
+        { "Tesla P100 SXM2",   300 },
+        { "Tesla P100 PCIe",   250 },
+        { "Tesla P100",        300 },
+        { "P40",               250 },
+        { "P4",                75  },
+        { "P100",              300 },
+
+        // ---- Tesla (Maxwell) ----
+        { "Tesla M60",         375 },
+        { "Tesla M4",          75  },
+        { "Tesla M40 24GB",    300 },
+        { "Tesla M40 12GB",    250 },
+        { "M60",               375 },
+        { "M40",               300 },
+
+        // ---- Tesla (Kepler) ----
+        { "Tesla K80",         375 },
+        { "Tesla K40m",        235 },
+        { "Tesla K40s",        235 },
+        { "Tesla K40",         235 },
+        { "Tesla K20X",        225 },
+        { "Tesla K20M",        225 },
+        { "K80",               375 },
+        { "K40m",              235 },
+        { "K40s",              235 },
+        { "K40",               235 },
+        { "K20X",              225 },
+        { "K20M",              225 },
+
         // Fallback
         { nullptr,             0 }
     };
