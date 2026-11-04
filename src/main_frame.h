@@ -120,11 +120,8 @@ private:
     void MeasureRows();
     // Adjust window height after a visibility toggle without moving position.
     void AdjustHeight(const std::string& key, bool showingItem);
-    // Recursively collect visible windows and their sizes.
-    void CollectVisibleWindows(wxBoxSizer* sizer,
-                                std::vector<std::pair<wxWindow*, wxSize>>& out);
-    // Recursively sum natural (min-size) visible heights in a sizer tree.
-    int ComputeVisibleHeightNatural(wxBoxSizer* sizer);
+    // Recursively zero proportions in nested sizers.
+    void ZeroProportionsRecursive(wxBoxSizer* sizer);
 
     // UI created flag (Linux: deferred to first timer tick).
     bool    m_uiCreated = false;

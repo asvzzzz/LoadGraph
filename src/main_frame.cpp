@@ -413,15 +413,25 @@ void MainFrame::BuildViewMenu(wxMenuBar* menuBar,
                 wxCommandEventHandler(MainFrame::OnViewToggle));
     }
 
+    LOGI("View menu built: %zu items", m_menuIdToKey.size());
+    for (const auto& kv : m_menuIdToKey)
+        LOGI("  id=%d -> '%s'", kv.first, kv.second.c_str());
+
     viewMenu->AppendSeparator();
     menuBar->Append(viewMenu, L"&View");
 }
 
 void MainFrame::OnViewToggle(wxCommandEvent& evt)
 {
+    LOGI("OnViewToggle id=%d isChecked=%d", evt.GetId(), evt.IsChecked());
     auto it = m_menuIdToKey.find(evt.GetId());
-    if (it == m_menuIdToKey.end()) return;
+    if (it == m_menuIdToKey.end())
+    {
+        LOGI("  key NOT FOUND in m_menuIdToKey");
+        return;
+    }
     const std::string key = it->second;
+    LOGI("  key=%s", key.c_str());
 
     std::map<std::string, bool> state;
     Config::LoadViewMenuState(state);
@@ -511,7 +521,8 @@ void MainFrame::AdjustHeight(const std::string& key, bool showingItem)
 
     if (showingItem)
     {
-        // Restore to the remembered full size.
+        LOGI("AdjustHeight [%s] SHOW: restore %dx%d", key.c_str(),
+             m_lastFullSize.GetWidth(), m_lastFullSize.GetHeight());
         if (m_lastFullSize.GetHeight() > cur.GetHeight())
             SetSize(pos.x, pos.y, m_lastFullSize.GetWidth(), m_lastFullSize.GetHeight());
         return;
@@ -521,85 +532,52 @@ void MainFrame::AdjustHeight(const std::string& key, bool showingItem)
     wxBoxSizer* container = dynamic_cast<wxBoxSizer*>(m_content->GetSizer());
     if (!container) return;
 
-    // Temporarily set all visible panels to their natural (min) size so that
-    // Layout() computes the compact height without proportion-based expansion.
-    std::vector<std::pair<wxWindow*, wxSize>> savedSizes;
-    CollectVisibleWindows(container, savedSizes);
+    LOGI("AdjustHeight [%s] HIDE: cur=%dx%d lastFull=%dx%d", key.c_str(),
+         cur.GetWidth(), cur.GetHeight(), m_lastFullSize.GetWidth(), m_lastFullSize.GetHeight());
 
-    for (auto& p : savedSizes)
-    {
-        p.first->SetMinSize(p.second);
-        p.first->SetSize(p.second);
-    }
-
-    container->Layout();
-    this->Layout();
-
-    int neededH = 0;
+    // Save proportions on ALL items (visible and hidden), then zero them out.
+    struct ItemState { wxSizerItem* item; int prop; };
+    std::vector<ItemState> saved;
     for (size_t i = 0; i < container->GetItemCount(); ++i)
     {
         wxSizerItem* item = container->GetItem(i);
-        wxWindow* win = item->GetWindow();
-        if (!win || !win->IsShown()) continue;
-
-        wxBoxSizer* child = dynamic_cast<wxBoxSizer*>(win->GetSizer());
-        if (child)
-            neededH += ComputeVisibleHeightNatural(child);
-        else
-            neededH += std::max(win->GetSize().GetHeight(), 1);
-
-        if (!win)
-            neededH += std::max(item->GetMinSize().GetHeight(), 2);
+        saved.push_back({ item, item->GetProportion() });
+        item->SetProportion(0);
     }
+    // Recurse into nested sizers of visible windows.
+    ZeroProportionsRecursive(container);
 
-    // Restore original sizes.
-    for (auto& p : savedSizes)
-    {
-        p.first->SetMinSize(wxSize(-1, -1));
-        p.first->SetSize(p.second);
-    }
+    // Fit the content panel to its natural (min-size) size.
+    m_content->Fit();
+    const int newH = m_content->GetSize().GetHeight();
+
+    // Restore proportions.
+    for (auto& s : saved)
+        s.item->SetProportion(s.prop);
 
     const wxSize minSz = GetMinSize();
-    const int newH = std::max(neededH, minSz.GetHeight());
-    if (newH != cur.GetHeight())
-        SetSize(pos.x, pos.y, cur.GetWidth(), newH);
+    const int finalH = std::max(newH, minSz.GetHeight());
+    LOGI("  contentFit=%d minH=%d -> newH=%d (diff %d)",
+         newH, minSz.GetHeight(), finalH, cur.GetHeight() - finalH);
+    if (finalH != cur.GetHeight())
+        SetSize(pos.x, pos.y, cur.GetWidth(), finalH);
 }
 
-// Recursively collect all visible windows and their current sizes.
-void MainFrame::CollectVisibleWindows(wxBoxSizer* sizer,
-                                       std::vector<std::pair<wxWindow*, wxSize>>& out)
+// Recursively zero proportions on all items in nested sizers.
+void MainFrame::ZeroProportionsRecursive(wxBoxSizer* sizer)
 {
     for (size_t i = 0; i < sizer->GetItemCount(); ++i)
     {
         wxSizerItem* item = sizer->GetItem(i);
+        if (item->GetProportion() != 0)
+            item->SetProportion(0);
         wxWindow* win = item->GetWindow();
-        if (!win || !win->IsShown()) continue;
-        out.push_back({ win, win->GetSize() });
-        wxBoxSizer* child = dynamic_cast<wxBoxSizer*>(win->GetSizer());
-        if (child) CollectVisibleWindows(child, out);
+        if (win && win->IsShown())
+        {
+            wxBoxSizer* child = dynamic_cast<wxBoxSizer*>(win->GetSizer());
+            if (child) ZeroProportionsRecursive(child);
+        }
     }
-}
-
-// Recursively sum NATURAL (min-size-based) visible heights.
-int MainFrame::ComputeVisibleHeightNatural(wxBoxSizer* sizer)
-{
-    int h = 0;
-    for (size_t i = 0; i < sizer->GetItemCount(); ++i)
-    {
-        wxSizerItem* item = sizer->GetItem(i);
-        wxWindow* win = item->GetWindow();
-        if (!win || !win->IsShown()) continue;
-
-        wxBoxSizer* child = dynamic_cast<wxBoxSizer*>(win->GetSizer());
-        if (child)
-            h += ComputeVisibleHeightNatural(child);
-        else
-            h += std::max(item->GetMinSize().GetHeight(), 1);
-
-        if (!win)
-            h += std::max(item->GetMinSize().GetHeight(), 2);
-    }
-    return h;
 }
 
 // ----------------------------------------------------------------------------
