@@ -1,4 +1,5 @@
 #include "cpu_monitor.h"
+#include "power_table.h"
 #include "logger.h"
 
 #ifndef WIN32_LEAN_AND_MEAN
@@ -212,6 +213,10 @@ double CpuMonitor::SampleLoad()
     {
         std::lock_guard<std::mutex> lock(m_mutex);
         m_metrics.loadPercent = load;
+        // CPU power estimate: load% x TDP. Windows has no RAPL counter without
+        // a kernel driver, so the static table is the best available source.
+        const double tdp = (m_metrics.tdpWatts > 0.0) ? m_metrics.tdpWatts : 125.0;
+        m_metrics.powerWatts = load * tdp / 100.0;
     }
 
     return load;
@@ -349,6 +354,8 @@ unsigned int CpuMonitor::ProbeWmiSensor(double& tempC, int& fanRpm)
 // This is fast and doesn't block the UI thread like WMI can.
 void CpuMonitor::QueryCpuName()
 {
+    // CPU model name from registry (fast, no WMI round-trip).
+    std::string nameA; // ASCII copy of the name for the TDP table lookup
     HKEY hKey;
     if (RegOpenKeyExW(HKEY_LOCAL_MACHINE,
                       L"HARDWARE\\DESCRIPTION\\System\\CentralProcessor\\0",
@@ -366,4 +373,19 @@ void CpuMonitor::QueryCpuName()
         }
         RegCloseKey(hKey);
     }
+
+    // CPU names are ASCII; narrow char-by-char (no locale conversion needed).
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        for (const wchar_t* p = m_metrics.cpuName.c_str(); *p; ++p)
+            nameA += static_cast<char>(*p);
+    }
+
+    // Resolve the TDP limit once from the static table (unknown CPU -> 125 W).
+    const double tdp = static_cast<double>(PowerTable::GetCpuTdpByName(nameA));
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_metrics.tdpWatts = tdp;
+    }
+    LOGI("CPU TDP table lookup: %.0f W (name='%s')", tdp, nameA.c_str());
 }

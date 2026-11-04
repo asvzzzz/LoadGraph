@@ -327,6 +327,7 @@ std::vector<double> GraphPanel::ComputeYTicks(double minVal, double maxVal,
     static const double kPctSteps[]     = {25.0, 20.0, 10.0, 5.0, 2.0};
     static const double kGbSteps[]      = {64.0, 32.0, 24.0, 16.0, 8.0, 4.0, 3.0, 2.0, 1.0};
     static const double kCelsiusSteps[] = {25.0, 20.0, 10.0, 5.0, 2.0};
+    static const double kWattsSteps[]   = {100.0, 50.0, 40.0, 25.0, 20.0, 10.0, 5.0, 2.0, 1.0};
     const double* steps = nullptr;
     int stepsCount = 0;
 
@@ -338,6 +339,8 @@ std::vector<double> GraphPanel::ComputeYTicks(double minVal, double maxVal,
             steps = kGbSteps;  stepsCount = 9; break;
         case GraphYMode::Celsius:
             steps = kCelsiusSteps; stepsCount = 5; break;
+        case GraphYMode::Watts:
+            steps = kWattsSteps; stepsCount = 9; break;
         default: // Auto / RPM — use a generic step.
             steps = kPctSteps; stepsCount = 5; break;
     }

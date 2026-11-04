@@ -32,13 +32,15 @@ private:
     // Register a label for theme recoloring (primary = title color).
     void AddThemedText(wxStaticText* st, bool primary);
 
-    // Build the CPU/RAM block: one row with CPU Load + RAM Usage, and a second
-    // row with CPU Temp + CPU Fan Speed that is omitted entirely when both
-    // sensors report N/A.
+    // Build the CPU/RAM block: row with CPU Load + RAM Usage, CPU Power row,
+    // and CPU Temp / CPU Fan rows omitted entirely when both sensors report N/A.
     void BuildCpuSection(wxBoxSizer* container, wxWindow* parent);
 
-    // Build GPU section (dynamic per-GPU: load/temp row, vram/fan row).
+    // Build GPU section (dynamic per-GPU: load/temp row, vram/fan row, power row).
     void BuildGpuSection(wxBoxSizer* container, wxWindow* parent);
+
+    // Build the total power row (CPU + all GPUs) at the bottom of the window.
+    void BuildTotalPowerRow(wxBoxSizer* container, wxWindow* parent);
 
     // Monitoring objects.
     CpuMonitor  m_cpu;
@@ -66,6 +68,12 @@ private:
     GraphPanel* m_cpuTempGraph  = nullptr;
     GraphPanel* m_cpuFanGraph   = nullptr;
 
+    // ---- CPU power row (watts) ----
+    GraphPanel* m_cpuPowerGraph = nullptr;
+
+    // ---- Total CPU + GPU power row (watts, bottom of the window) ----
+    GraphPanel* m_totalPowerGraph = nullptr;
+
     // ---- Uptime label ----
     wxStaticText* m_uptimeText = nullptr;
 
@@ -73,10 +81,11 @@ private:
     struct GpuPanelData
     {
         wxString    name;
-        GraphPanel* loadGraph = nullptr;
-        GraphPanel* tempGraph = nullptr;
-        GraphPanel* vramGraph = nullptr;
-        GraphPanel* fanGraph  = nullptr;
+        GraphPanel* loadGraph  = nullptr;
+        GraphPanel* tempGraph  = nullptr;
+        GraphPanel* vramGraph  = nullptr;
+        GraphPanel* fanGraph   = nullptr;
+        GraphPanel* powerGraph = nullptr;
     };
     std::vector<GpuPanelData> m_gpuPanels;
 

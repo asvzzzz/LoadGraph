@@ -4,6 +4,7 @@
 #include "logger.h"
 #include "theme.h"
 #include "graph_panel.h"
+#include "power_table.h"
 #include <wx/statline.h>
 #include <cstdint>
 
@@ -145,6 +146,10 @@ void MainFrame::OnTimer(wxTimerEvent& /*evt*/)
     if (m_cpuFanGraph && cm.fanRpm >= 0)
         m_cpuFanGraph->AddPoint(static_cast<double>(cm.fanRpm));
 
+    // ---- CPU power (watts) ----
+    if (m_cpuPowerGraph && cm.powerWatts >= 0.0)
+        m_cpuPowerGraph->AddPoint(cm.powerWatts);
+
     // ---- RAM usage in GB ----
     const auto rm = m_ram.GetMetrics();
     if (m_ramUsageGraph && rm.totalBytes > 0)
@@ -186,6 +191,31 @@ void MainFrame::OnTimer(wxTimerEvent& /*evt*/)
 
         if (pd.fanGraph && meta.fanPercent >= 0.0)
             pd.fanGraph->AddPoint(meta.fanPercent);
+
+        if (pd.powerGraph && meta.powerWatts >= 0.0)
+            pd.powerGraph->AddPoint(meta.powerWatts);
+    }
+
+    // ---- Total power: CPU + every GPU (watts) ----
+    if (m_totalPowerGraph)
+    {
+        double total = 0.0;
+        bool   any   = false;
+        if (cm.powerWatts >= 0.0)
+        {
+            total += cm.powerWatts;
+            any = true;
+        }
+        for (const auto& meta : gm)
+        {
+            if (meta.powerWatts >= 0.0)
+            {
+                total += meta.powerWatts;
+                any = true;
+            }
+        }
+        if (any)
+            m_totalPowerGraph->AddPoint(total);
     }
 
     // ---- React to a live system light/dark scheme switch ----
@@ -244,6 +274,9 @@ void MainFrame::RealizeUI()
     LOGI("Building GPU section...");
     BuildGpuSection(container, content);
     LOGI("GPU section built.");
+    LOGI("Building total power row...");
+    BuildTotalPowerRow(container, content);
+    LOGI("Total power row built.");
 
     content->SetSizer(container);
     mainSizer->Add(content, 1, wxEXPAND);
@@ -286,12 +319,15 @@ void MainFrame::ApplyTheme()
     refreshGraph(m_ramUsageGraph);
     refreshGraph(m_cpuTempGraph);
     refreshGraph(m_cpuFanGraph);
+    refreshGraph(m_cpuPowerGraph);
+    refreshGraph(m_totalPowerGraph);
     for (const auto& pd : m_gpuPanels)
     {
         refreshGraph(pd.loadGraph);
         refreshGraph(pd.tempGraph);
         refreshGraph(pd.vramGraph);
         refreshGraph(pd.fanGraph);
+        refreshGraph(pd.powerGraph);
     }
 
     Refresh();
@@ -366,6 +402,20 @@ void MainFrame::BuildCpuSection(wxBoxSizer* container, wxWindow* parent)
         row->AddSpacer(8);
         row->Add(m_ramUsageGraph, 1, wxEXPAND | wxBOTTOM, 2);
 
+        row->AddSpacer(4);
+        container->Add(row, 1, wxEXPAND);
+        container->AddSpacer(2);
+    }
+
+    // ---- CPU Power (watts, full width row) ----
+    {
+        wxBoxSizer* row = new wxBoxSizer(wxHORIZONTAL);
+        row->AddSpacer(4);
+        m_cpuPowerGraph = new GraphPanel(parent, L"CPU Power", L"W");
+        const double cpuTdp = (cm.tdpWatts > 0.0) ? cm.tdpWatts : 125.0;
+        m_cpuPowerGraph->SetYRange(0.0, cpuTdp);
+        m_cpuPowerGraph->SetYMode(GraphYMode::Watts);
+        row->Add(m_cpuPowerGraph, 1, wxEXPAND | wxBOTTOM, 2);
         row->AddSpacer(4);
         container->Add(row, 1, wxEXPAND);
         container->AddSpacer(2);
@@ -537,9 +587,62 @@ void MainFrame::BuildGpuSection(wxBoxSizer* container, wxWindow* parent)
             group->Add(row, 1, wxEXPAND);
         }
 
+        // ---- Row 3: Power draw (watts, full width of the GPU group) ----
+        {
+            wxBoxSizer* row = new wxBoxSizer(wxHORIZONTAL);
+            row->AddSpacer(4);
+
+            pd.powerGraph = new GraphPanel(parent, L"Power", L"W");
+            // Y maximum: NVML power limit, falling back to the static TDP table.
+            double gpuMax = meta.powerLimitWatts;
+            if (gpuMax <= 0.0)
+                gpuMax = static_cast<double>(PowerTable::GetGpuTdp(meta.name));
+            if (gpuMax <= 0.0)
+                gpuMax = 100.0;
+            pd.powerGraph->SetYRange(0.0, gpuMax);
+            pd.powerGraph->SetYMode(GraphYMode::Watts);
+            pd.powerGraph->SetPurple(true);
+            row->Add(pd.powerGraph, 1, wxEXPAND | wxBOTTOM, 2);
+
+            row->AddSpacer(4);
+            group->Add(row, 1, wxEXPAND);
+        }
+
         group->AddSpacer(2);
         container->Add(group, 2, wxEXPAND);
     }
 
+    container->AddSpacer(2);
+}
+
+// ----------------------------------------------------------------------------
+// Total Power row - sum of CPU and every GPU power draw, full window width.
+// ----------------------------------------------------------------------------
+void MainFrame::BuildTotalPowerRow(wxBoxSizer* container, wxWindow* parent)
+{
+    // Y axis maximum: CPU TDP + every GPU power limit/TDP fallback.
+    double maxY = 0.0;
+    const auto cm = m_cpu.GetMetrics();
+    maxY += (cm.tdpWatts > 0.0) ? cm.tdpWatts : 125.0;
+
+    const auto gpus = m_gpu.GetMetrics();
+    for (const auto& meta : gpus)
+    {
+        double gMax = meta.powerLimitWatts;
+        if (gMax <= 0.0)
+            gMax = static_cast<double>(PowerTable::GetGpuTdp(meta.name));
+        if (gMax <= 0.0)
+            gMax = 100.0;
+        maxY += gMax;
+    }
+
+    wxBoxSizer* row = new wxBoxSizer(wxHORIZONTAL);
+    row->AddSpacer(4);
+    m_totalPowerGraph = new GraphPanel(parent, L"Total Power (CPU + GPU)", L"W");
+    m_totalPowerGraph->SetYRange(0.0, maxY);
+    m_totalPowerGraph->SetYMode(GraphYMode::Watts);
+    row->Add(m_totalPowerGraph, 1, wxEXPAND | wxBOTTOM, 2);
+    row->AddSpacer(4);
+    container->Add(row, 1, wxEXPAND);
     container->AddSpacer(2);
 }

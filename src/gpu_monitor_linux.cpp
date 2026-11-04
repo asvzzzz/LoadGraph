@@ -1,4 +1,5 @@
 #include "gpu_monitor.h"
+#include "power_table.h"
 #include "platform.h"
 #include "logger.h"
 #include <cstdio>
@@ -109,6 +110,8 @@ bool GpuMonitor::LoadNvml()
     RESOLVE(GetTemp,   "nvmlDeviceGetTemperature");
     RESOLVE(GetClock,  "nvmlDeviceGetClockInfo");
     RESOLVE(GetFan,    "nvmlDeviceGetFanSpeed");
+    RESOLVE(GetPower,      "nvmlDeviceGetPowerUsage");
+    RESOLVE(GetPowerLimit, "nvmlDeviceGetPowerManagementLimit");
 
 #undef RESOLVE
 
@@ -158,6 +161,8 @@ void GpuMonitor::FreeNvml()
     m_fnGetTemp   = nullptr;
     m_fnGetClock  = nullptr;
     m_fnGetFan    = nullptr;
+    m_fnGetPower  = nullptr;
+    m_fnGetPowerLimit = nullptr;
 }
 
 void GpuMonitor::CollectNvml()
@@ -229,6 +234,30 @@ void GpuMonitor::CollectNvml()
             unsigned int fanPct = 0;
             if (m_fnGetFan(hDevice, &fanPct) == NVML_SUCCESS)
                 meta.fanPercent = static_cast<double>(fanPct);
+        }
+
+        // Power draw in milliwatts -> convert to watts.
+        if (m_fnGetPower)
+        {
+            unsigned int powerMw = 0;
+            if (m_fnGetPower(hDevice, &powerMw) == NVML_SUCCESS)
+                meta.powerWatts = static_cast<double>(powerMw) / 1000.0;
+        }
+
+        // Power management limit in milliwatts -> convert to watts.
+        if (m_fnGetPowerLimit)
+        {
+            unsigned int limitMw = 0;
+            if (m_fnGetPowerLimit(hDevice, &limitMw) == NVML_SUCCESS)
+                meta.powerLimitWatts = static_cast<double>(limitMw) / 1000.0;
+        }
+
+        // Fallback: static TDP table when NVML does not expose the limit.
+        if (meta.powerLimitWatts <= 0.0)
+        {
+            const uint32_t tdp = PowerTable::GetGpuTdp(meta.name);
+            if (tdp > 0)
+                meta.powerLimitWatts = static_cast<double>(tdp);
         }
 
         localMetrics.push_back(meta);

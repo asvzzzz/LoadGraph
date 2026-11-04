@@ -25,6 +25,8 @@ struct GpuMetrics
     double      temperature     = -1.0;  // GPU temp in Celsius, -1.0 means N/A
     int         fanRpm          = -1;    // Fan speed in RPM, -1 means N/A
     double      fanPercent      = -1.0;  // Fan speed in percent [0,100], -1.0 = N/A
+    double      powerWatts      = -1.0;  // Current GPU power draw in watts, -1.0 = N/A
+    double      powerLimitWatts = -1.0;  // Maximum GPU power limit in watts, -1.0 = N/A
 };
 
 // Collects GPU metrics for all Nvidia GPUs.
@@ -59,6 +61,8 @@ private:
     using FnNvmlDeviceGetTemperature    = int (__cdecl*)(void*, unsigned int, unsigned int*);
     using FnNvmlDeviceGetClockInfo      = int (__cdecl*)(void*, unsigned int, unsigned int*);
     using FnNvmlDeviceGetFanSpeed       = int (__cdecl*)(void*, unsigned int*);
+    using FnNvmlDeviceGetPowerUsage     = int (__cdecl*)(void*, unsigned int*);
+    using FnNvmlDeviceGetPowerLimit     = int (__cdecl*)(void*, unsigned int*);
 
     // NVAPI function pointer types.
     using FnNvAPI_Initialize           = int (__cdecl*)();
@@ -82,6 +86,8 @@ private:
     FnNvmlDeviceGetTemperature         m_fnNvmlGetTemp       = nullptr;
     FnNvmlDeviceGetClockInfo           m_fnNvmlGetClock      = nullptr;
     FnNvmlDeviceGetFanSpeed            m_fnNvmlGetFan        = nullptr;
+    FnNvmlDeviceGetPowerUsage          m_fnNvmlGetPower      = nullptr;
+    FnNvmlDeviceGetPowerLimit          m_fnNvmlGetPowerLimit = nullptr;
     FnNvAPI_Initialize                 m_fnInitialize       = nullptr;
     FnNvAPI_EnumPhysicalGpus           m_fnEnumPhysicalGpus = nullptr;
     FnNvAPI_GPU_GetFullName            m_fnGetFullName      = nullptr;
@@ -111,6 +117,8 @@ private:
     using FnGetTemp         = int (*)(void*, unsigned int, unsigned int*);
     using FnGetClock        = int (*)(void*, unsigned int, unsigned int*);
     using FnGetFan          = int (*)(void*, unsigned int*);
+    using FnGetPower        = int (*)(void*, unsigned int*);
+    using FnGetPowerLimit   = int (*)(void*, unsigned int*);
 
     void*  m_hNvml   = nullptr;
     FnInit       m_fnInit          = nullptr;
@@ -123,6 +131,8 @@ private:
     FnGetTemp    m_fnGetTemp       = nullptr;
     FnGetClock   m_fnGetClock      = nullptr;
     FnGetFan     m_fnGetFan        = nullptr;
+    FnGetPower   m_fnGetPower      = nullptr;
+    FnGetPowerLimit m_fnGetPowerLimit = nullptr;
 
     bool LoadNvml();
     void FreeNvml();

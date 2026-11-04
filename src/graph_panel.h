@@ -11,7 +11,7 @@ static const int kGraphHistorySize = 60;
 
 // Y-axis tick spacing mode — controls how axis labels are computed so they
 // always land on round numbers regardless of panel height.
-enum class GraphYMode { Auto, Percent, Gigabytes, Celsius };
+enum class GraphYMode { Auto, Percent, Gigabytes, Celsius, Watts };
 
 // Custom panel that draws a single time-series chart in Windows 11 Task Manager style.
 // The area under the line is filled. A red color is used once the last value

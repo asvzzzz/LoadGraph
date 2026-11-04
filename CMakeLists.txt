@@ -108,6 +108,7 @@ if(WIN32)
         src/cpu_monitor.cpp
         src/ram_monitor.cpp
         src/gpu_monitor.cpp
+        src/power_table.cpp
         src/graph_panel.h
         src/graph_panel.cpp
         src/theme.cpp
@@ -120,6 +121,7 @@ elseif(UNIX AND NOT APPLE)
         src/cpu_monitor_linux.cpp
         src/ram_monitor_linux.cpp
         src/gpu_monitor_linux.cpp
+        src/power_table.cpp
         src/graph_panel.h
         src/graph_panel.cpp
         src/theme_linux.cpp

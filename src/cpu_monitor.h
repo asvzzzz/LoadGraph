@@ -26,6 +26,8 @@ struct CpuMetrics
     int       fanRpm      = -1;    // Fan speed in RPM, -1 means N/A
     uint64_t  uptimeMs    = 0;     // System uptime in milliseconds
     std::wstring cpuName;          // CPU model name (empty if unavailable)
+    double    powerWatts  = -1.0;  // Current CPU power draw in watts, -1.0 = N/A
+    double    tdpWatts    = -1.0;  // CPU TDP (max power) in watts, -1.0 = N/A
 };
 
 // Collects overall CPU load, temperature and fan speed.

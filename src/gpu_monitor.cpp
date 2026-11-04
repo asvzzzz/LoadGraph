@@ -2,6 +2,7 @@
 #include <winsock2.h>
 #endif
 #include "gpu_monitor.h"
+#include "power_table.h"
 #include "logger.h"
 #include <cstdio>
 
@@ -342,6 +343,30 @@ void GpuMonitor::CollectNvml()
                 meta.fanPercent = static_cast<double>(fanPct);
         }
 
+        // Power draw in milliwatts -> convert to watts.
+        if (m_fnNvmlGetPower)
+        {
+            unsigned int powerMw = 0;
+            if (m_fnNvmlGetPower(hDevice, &powerMw) == NVML_SUCCESS)
+                meta.powerWatts = static_cast<double>(powerMw) / 1000.0;
+        }
+
+        // Power management limit in milliwatts -> convert to watts.
+        if (m_fnNvmlGetPowerLimit)
+        {
+            unsigned int limitMw = 0;
+            if (m_fnNvmlGetPowerLimit(hDevice, &limitMw) == NVML_SUCCESS)
+                meta.powerLimitWatts = static_cast<double>(limitMw) / 1000.0;
+        }
+
+        // Fallback: static TDP table when NVML does not expose the limit.
+        if (meta.powerLimitWatts <= 0.0)
+        {
+            const uint32_t tdp = PowerTable::GetGpuTdp(meta.name);
+            if (tdp > 0)
+                meta.powerLimitWatts = static_cast<double>(tdp);
+        }
+
         localMetrics.push_back(meta);
     }
 
@@ -375,6 +400,8 @@ bool GpuMonitor::LoadNvml()
     m_fnNvmlGetTemp  = reinterpret_cast<FnNvmlDeviceGetTemperature>(GetProcAddress(m_hNvml, "nvmlDeviceGetTemperature"));
     m_fnNvmlGetClock = reinterpret_cast<FnNvmlDeviceGetClockInfo>(GetProcAddress(m_hNvml, "nvmlDeviceGetClockInfo"));
     m_fnNvmlGetFan   = reinterpret_cast<FnNvmlDeviceGetFanSpeed>(GetProcAddress(m_hNvml, "nvmlDeviceGetFanSpeed"));
+    m_fnNvmlGetPower = reinterpret_cast<FnNvmlDeviceGetPowerUsage>(GetProcAddress(m_hNvml, "nvmlDeviceGetPowerUsage"));
+    m_fnNvmlGetPowerLimit = reinterpret_cast<FnNvmlDeviceGetPowerLimit>(GetProcAddress(m_hNvml, "nvmlDeviceGetPowerManagementLimit"));
 
     LOGI("nvmlInit_v2=%p nvmlDeviceGetCount_v2=%p nvmlDeviceGetHandleByIndex_v2=%p",
          reinterpret_cast<void*>(m_fnNvmlInit),
@@ -388,6 +415,9 @@ bool GpuMonitor::LoadNvml()
          reinterpret_cast<void*>(m_fnNvmlGetTemp),
          reinterpret_cast<void*>(m_fnNvmlGetClock),
          reinterpret_cast<void*>(m_fnNvmlGetFan));
+    LOGI("nvmlDeviceGetPowerUsage=%p nvmlDeviceGetPowerManagementLimit=%p",
+         reinterpret_cast<void*>(m_fnNvmlGetPower),
+         reinterpret_cast<void*>(m_fnNvmlGetPowerLimit));
 
     if (!m_fnNvmlInit || !m_fnNvmlGetCount || !m_fnNvmlGetHandle)
     {
@@ -436,6 +466,8 @@ void GpuMonitor::FreeNvml()
     m_fnNvmlGetTemp   = nullptr;
     m_fnNvmlGetClock  = nullptr;
     m_fnNvmlGetFan    = nullptr;
+    m_fnNvmlGetPower  = nullptr;
+    m_fnNvmlGetPowerLimit = nullptr;
 }
 
 bool GpuMonitor::LoadNvApi()
