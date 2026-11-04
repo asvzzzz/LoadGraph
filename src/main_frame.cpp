@@ -361,9 +361,10 @@ void MainFrame::BuildViewMenu(wxMenuBar* menuBar,
                                const std::map<std::string, bool>& initialState)
 {
     wxMenu* viewMenu = new wxMenu;
+    // Individual graph toggles — rendered as checkboxes.
     for (const auto& kv : m_viewToggles)
     {
-        wxMenuItem* item = viewMenu->Append(wxID_ANY, kv.first);
+        wxMenuItem* item = viewMenu->AppendCheckItem(wxID_ANY, kv.first);
         auto it = initialState.find(kv.first);
         bool show = (it == initialState.end()) ? true : it->second;
         item->Check(show);
@@ -371,15 +372,53 @@ void MainFrame::BuildViewMenu(wxMenuBar* menuBar,
         Connect(item->GetId(), wxEVT_MENU,
                 wxCommandEventHandler(MainFrame::OnViewToggle));
     }
+
+    // One checkbox per GPU metric type (affects ALL GPUs at once).
+    static const struct { const char* key; const wchar_t* label; } gpuGroups[] = {
+        { "gpu_load",  L"GPU Load"  },
+        { "gpu_temp",  L"GPU Temp"  },
+        { "gpu_vram",  L"GPU VRAM"  },
+        { "gpu_fan",   L"GPU Fan"   },
+        { "gpu_power", L"GPU Power" },
+    };
+    for (const auto& g : gpuGroups)
+    {
+        // Collect panels belonging to this group.
+        GpuGroupToggle grp;
+        grp.key = g.key;
+        for (const auto& pd : m_gpuPanels)
+        {
+            GraphPanel* p = nullptr;
+            if (g.key == "gpu_load")  p = pd.loadGraph;
+            if (g.key == "gpu_temp")  p = pd.tempGraph;
+            if (g.key == "gpu_vram")  p = pd.vramGraph;
+            if (g.key == "gpu_fan")   p = pd.fanGraph;
+            if (g.key == "gpu_power") p = pd.powerGraph;
+            if (p) grp.panels.push_back(p);
+        }
+        m_gpuGroupToggles.push_back(std::move(grp));
+
+        wxMenuItem* item = viewMenu->AppendCheckItem(wxID_ANY, g.label);
+        auto it = initialState.find(g.key);
+        bool show = (it == initialState.end()) ? true : it->second;
+        // A group is checked only if ALL its panels are visible.
+        for (GraphPanel* pp : m_gpuGroupToggles.back().panels)
+            show = show && pp->IsShown();
+        item->Check(show);
+        m_menuIdToKey[item->GetId()] = g.key;
+        Connect(item->GetId(), wxEVT_MENU,
+                wxCommandEventHandler(MainFrame::OnViewToggle));
+    }
+
     viewMenu->AppendSeparator();
     {
-        wxMenuItem* all = viewMenu->Append(wxID_ANY, L"Show all");
+        wxMenuItem* all = viewMenu->AppendCheckItem(wxID_ANY, L"Show all");
         Connect(all->GetId(), wxEVT_MENU,
                 wxCommandEventHandler(MainFrame::OnViewToggle));
         m_menuIdToKey[all->GetId()] = "__show_all__";
     }
     {
-        wxMenuItem* none = viewMenu->Append(wxID_ANY, L"Hide all");
+        wxMenuItem* none = viewMenu->AppendCheckItem(wxID_ANY, L"Hide all");
         Connect(none->GetId(), wxEVT_MENU,
                 wxCommandEventHandler(MainFrame::OnViewToggle));
         m_menuIdToKey[none->GetId()] = "__hide_all__";
@@ -399,25 +438,46 @@ void MainFrame::OnViewToggle(wxCommandEvent& evt)
     if (key == "__show_all__")
     {
         for (const auto& kv : m_viewToggles)
-        {
             kv.second->Show(true);
-            state[kv.first] = true;
-        }
+        for (auto& grp : m_gpuGroupToggles)
+            for (GraphPanel* p : grp.panels)
+                p->Show(true);
+        // Record every key as checked.
+        for (const auto& kv : m_viewToggles) state[kv.first] = true;
+        for (const auto& g : { "gpu_load", "gpu_temp", "gpu_vram", "gpu_fan", "gpu_power" })
+            state[g] = true;
     }
     else if (key == "__hide_all__")
     {
         for (const auto& kv : m_viewToggles)
-        {
             kv.second->Show(false);
-            state[kv.first] = false;
+        for (auto& grp : m_gpuGroupToggles)
+            for (GraphPanel* p : grp.panels)
+                p->Show(false);
+        for (const auto& kv : m_viewToggles) state[kv.first] = false;
+        for (const auto& g : { "gpu_load", "gpu_temp", "gpu_vram", "gpu_fan", "gpu_power" })
+            state[g] = false;
+    }
+    else if (key == "gpu_load" || key == "gpu_temp" || key == "gpu_vram" ||
+             key == "gpu_fan"  || key == "gpu_power")
+    {
+        // Unified GPU group toggle: show/hide this metric across ALL GPUs.
+        bool show = evt.IsChecked();
+        for (auto& grp : m_gpuGroupToggles)
+        {
+            if (grp.key != key) continue;
+            for (GraphPanel* p : grp.panels)
+                p->Show(show);
+            state[grp.key] = show;
         }
     }
     else
     {
+        // Single graph toggle.
         auto pit = m_viewToggles.find(key);
         if (pit != m_viewToggles.end())
         {
-            bool show = !evt.IsChecked(); // toggle: item already flipped by wx.
+            bool show = evt.IsChecked();
             pit->second->Show(show);
             state[key] = show;
         }
@@ -613,7 +673,6 @@ void MainFrame::BuildGpuSection(wxBoxSizer* container, wxWindow* parent)
             pd.loadGraph->SetYMode(GraphYMode::Percent);
             pd.loadGraph->SetPurple(true);
             row->Add(pd.loadGraph, 1, wxEXPAND | wxBOTTOM, 2);
-            m_viewToggles["gpu_" + std::to_string(g) + "_load"] = pd.loadGraph;
 
             // Horizontal gap as a separate spacer (see CPU row): a combined
             // wxBOTTOM | wxLEFT border would give the right graph an 8px bottom
@@ -628,7 +687,6 @@ void MainFrame::BuildGpuSection(wxBoxSizer* container, wxWindow* parent)
                 pd.tempGraph->SetYMode(GraphYMode::Celsius);
                 pd.tempGraph->SetPurple(true);
                 row->Add(pd.tempGraph, 1, wxEXPAND | wxBOTTOM, 2);
-                m_viewToggles["gpu_" + std::to_string(g) + "_temp"] = pd.tempGraph;
             }
             else
             {
@@ -663,7 +721,6 @@ void MainFrame::BuildGpuSection(wxBoxSizer* container, wxWindow* parent)
             pd.vramGraph->SetYMode(GraphYMode::Gigabytes);
             pd.vramGraph->SetPurple(true);
             row->Add(pd.vramGraph, 1, wxEXPAND | wxBOTTOM, 2);
-            m_viewToggles["gpu_" + std::to_string(g) + "_vram"] = pd.vramGraph;
 
             // Horizontal gap as a separate spacer (see Row 1).
             row->AddSpacer(8);
@@ -675,7 +732,6 @@ void MainFrame::BuildGpuSection(wxBoxSizer* container, wxWindow* parent)
                 pd.fanGraph->SetYMode(GraphYMode::Percent);
                 pd.fanGraph->SetPurple(true);
                 row->Add(pd.fanGraph, 1, wxEXPAND | wxBOTTOM, 2);
-                m_viewToggles["gpu_" + std::to_string(g) + "_fan"] = pd.fanGraph;
             }
             else
             {
@@ -706,7 +762,6 @@ void MainFrame::BuildGpuSection(wxBoxSizer* container, wxWindow* parent)
             pd.powerGraph->SetYMode(GraphYMode::Watts);
             pd.powerGraph->SetPurple(true);
             row->Add(pd.powerGraph, 1, wxEXPAND | wxBOTTOM, 2);
-            m_viewToggles["gpu_" + std::to_string(g) + "_power"] = pd.powerGraph;
 
             row->AddSpacer(4);
             group->Add(row, 1, wxEXPAND);

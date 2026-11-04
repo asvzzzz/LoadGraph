@@ -95,6 +95,16 @@ private:
     std::map<std::string, GraphPanel*> m_viewToggles;
     std::map<int, std::string>         m_menuIdToKey;
 
+    // Unified GPU category toggles: one checkbox hides/shows this metric type
+    // across ALL GPUs simultaneously (e.g. "gpu_load" controls every GPU's
+    // load graph). Populated during BuildGpuSection().
+    struct GpuGroupToggle
+    {
+        std::string key;
+        std::vector<GraphPanel*> panels;
+    };
+    std::vector<GpuGroupToggle> m_gpuGroupToggles;
+
     void BuildViewMenu(wxMenuBar* menuBar,
                        const std::map<std::string, bool>& initialState);
     void OnViewToggle(wxCommandEvent& evt);
