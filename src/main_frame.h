@@ -105,11 +105,15 @@ private:
     };
     std::vector<GpuGroupToggle> m_gpuGroupToggles;
 
+    // Last known "full" size before any user-driven shrinking. Used to restore
+    // the window when a previously-hidden row is made visible again.
+    wxSize m_lastFullSize;
+
     void BuildViewMenu(wxMenuBar* menuBar,
                        const std::map<std::string, bool>& initialState);
     void OnViewToggle(wxCommandEvent& evt);
-    // Shrink the window to fit currently visible content (called via wxCallAfter).
-    void ShrinkToFit();
+    // Shrink or grow the window after a visibility toggle.
+    void ShrinkToFit(bool showingItem);
 
     // UI created flag (Linux: deferred to first timer tick).
     bool    m_uiCreated = false;

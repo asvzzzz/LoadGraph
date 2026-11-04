@@ -116,6 +116,9 @@ MainFrame::MainFrame(const wxString& title)
     wxMenuBar* menuBar = new wxMenuBar;
     BuildViewMenu(menuBar, viewState);
     SetMenuBar(menuBar);
+
+    // Record the full natural size before any user-driven shrinking.
+    m_lastFullSize = GetSize();
 }
 
 MainFrame::~MainFrame()
@@ -449,26 +452,38 @@ void MainFrame::OnViewToggle(wxCommandEvent& evt)
     }
 
     this->Layout();
-    ShrinkToFit();
+    ShrinkToFit(evt.IsChecked());
     Config::SaveViewMenuState(state);
 }
 
-// Recalculate the frame size to match the natural size of all visible content,
-// then clamp it to the configured minimum (480x540). Called after visibility
-// changes so that hiding a row actually shrinks the window instead of leaving
-// empty space.
-void MainFrame::ShrinkToFit()
+// Recalculate the frame size after a visibility toggle.
+//   showingItem=true  -> grow back to m_lastFullSize if it was shrunk before
+//   showingItem=false -> remember current size, then shrink to fit visible content
+void MainFrame::ShrinkToFit(bool showingItem)
 {
     if (!m_content) return;
     wxSizer* sizer = m_content->GetSizer();
     if (!sizer) return;
     sizer->Layout();
-    const wxSize needed = sizer->GetMinSize();
-    const wxSize cur    = GetSize();
-    const int    minH   = 540; // matches SetMinSize(wxSize(480, 540))
-    const int    newH   = (needed.GetHeight() > minH) ? needed.GetHeight() : minH;
-    if (newH < cur.GetHeight())
-        SetSize(GetPosition().x, GetPosition().y, cur.GetWidth(), newH);
+    const wxSize needed   = sizer->GetMinSize();
+    const wxSize cur      = GetSize();
+    const int    minH     = 540;
+    const int    newH     = (needed.GetHeight() > minH) ? needed.GetHeight() : minH;
+
+    if (showingItem)
+    {
+        // Restoring a hidden row: grow back to the remembered full size.
+        if (m_lastFullSize.GetHeight() > cur.GetHeight())
+            SetSize(cur.x, cur.y, cur.GetWidth(), m_lastFullSize.GetHeight());
+    }
+    else
+    {
+        // Hiding a row: remember current height, then shrink if needed.
+        if (cur.GetHeight() > m_lastFullSize.GetHeight())
+            m_lastFullSize = cur;
+        if (newH < cur.GetHeight())
+            SetSize(cur.x, cur.y, cur.GetWidth(), newH);
+    }
 }
 
 // ----------------------------------------------------------------------------
@@ -520,7 +535,7 @@ void MainFrame::BuildCpuSection(wxBoxSizer* container, wxWindow* parent)
         m_cpuLoadGraph->SetYRange(0.0, 100.0);
         m_cpuLoadGraph->SetYMode(GraphYMode::Percent);
         row->Add(m_cpuLoadGraph, 1, wxEXPAND | wxBOTTOM, 2);
-        m_viewToggles["cpu_load"] = m_cpuLoadGraph;
+        m_viewToggles["CPU Load"] = m_cpuLoadGraph;
 
         m_ramUsageGraph = new GraphPanel(parent, L"RAM Usage", L"GB");
         if (rm.totalBytes > 0)
@@ -540,7 +555,7 @@ void MainFrame::BuildCpuSection(wxBoxSizer* container, wxWindow* parent)
         // card 6px shorter. A spacer occupies only the main axis, so heights match.
         row->AddSpacer(8);
         row->Add(m_ramUsageGraph, 1, wxEXPAND | wxBOTTOM, 2);
-        m_viewToggles["ram_usage"] = m_ramUsageGraph;
+        m_viewToggles["RAM Usage"] = m_ramUsageGraph;
 
         row->AddSpacer(4);
         container->Add(row, 1, wxEXPAND);
@@ -559,7 +574,7 @@ void MainFrame::BuildCpuSection(wxBoxSizer* container, wxWindow* parent)
         row->AddSpacer(4);
         container->Add(row, 1, wxEXPAND);
         container->AddSpacer(2);
-        m_viewToggles["cpu_power"] = m_cpuPowerGraph;
+        m_viewToggles["CPU Power"] = m_cpuPowerGraph;
     }
 
     // ---- Row 2: CPU Temp (only when available) ----
@@ -578,7 +593,7 @@ void MainFrame::BuildCpuSection(wxBoxSizer* container, wxWindow* parent)
         row->AddSpacer(4);
         container->Add(row, 1, wxEXPAND);
         container->AddSpacer(2);
-        m_viewToggles["cpu_temp"] = m_cpuTempGraph;
+        m_viewToggles["CPU Temp"] = m_cpuTempGraph;
     }
 
     // ---- Row 3: CPU Fan Speed (only when available) ----
@@ -591,7 +606,7 @@ void MainFrame::BuildCpuSection(wxBoxSizer* container, wxWindow* parent)
         row->AddSpacer(4);
         container->Add(row, 1, wxEXPAND);
         container->AddSpacer(2);
-        m_viewToggles["cpu_fan"] = m_cpuFanGraph;
+        m_viewToggles["CPU Fan"] = m_cpuFanGraph;
     }
     else if (!hasTemp)
     {
@@ -793,5 +808,5 @@ void MainFrame::BuildTotalPowerRow(wxBoxSizer* container, wxWindow* parent)
     row->AddSpacer(4);
     container->Add(row, 1, wxEXPAND);
     container->AddSpacer(2);
-    m_viewToggles["total_power"] = m_totalPowerGraph;
+    m_viewToggles["Total Power"] = m_totalPowerGraph;
 }
