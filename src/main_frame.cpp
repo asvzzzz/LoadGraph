@@ -413,25 +413,15 @@ void MainFrame::BuildViewMenu(wxMenuBar* menuBar,
                 wxCommandEventHandler(MainFrame::OnViewToggle));
     }
 
-    LOGI("View menu built: %zu items", m_menuIdToKey.size());
-    for (const auto& kv : m_menuIdToKey)
-        LOGI("  id=%d -> '%s'", kv.first, kv.second.c_str());
-
     viewMenu->AppendSeparator();
     menuBar->Append(viewMenu, L"&View");
 }
 
 void MainFrame::OnViewToggle(wxCommandEvent& evt)
 {
-    LOGI("OnViewToggle id=%d isChecked=%d", evt.GetId(), evt.IsChecked());
     auto it = m_menuIdToKey.find(evt.GetId());
-    if (it == m_menuIdToKey.end())
-    {
-        LOGI("  key NOT FOUND in m_menuIdToKey");
-        return;
-    }
+    if (it == m_menuIdToKey.end()) return;
     const std::string key = it->second;
-    LOGI("  key=%s", key.c_str());
 
     std::map<std::string, bool> state;
     Config::LoadViewMenuState(state);
@@ -557,8 +547,6 @@ void MainFrame::AdjustHeight(const std::string& key, bool showingItem)
 
     const wxSize minSz = GetMinSize();
     const int finalH = std::max(newH, minSz.GetHeight());
-    LOGI("  contentFit=%d minH=%d -> newH=%d (diff %d)",
-         newH, minSz.GetHeight(), finalH, cur.GetHeight() - finalH);
     if (finalH != cur.GetHeight())
         SetSize(pos.x, pos.y, cur.GetWidth(), finalH);
 }
