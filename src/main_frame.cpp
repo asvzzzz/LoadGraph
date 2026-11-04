@@ -504,8 +504,6 @@ void MainFrame::MeasureRows()
 
 // Adjust window height after a visibility toggle. Only changes height, never
 // position — avoids Windows repositioning the window off-screen.
-// Computes the exact visible height by walking the sizer tree and summing
-// the natural heights of only visible items.
 void MainFrame::AdjustHeight(const std::string& key, bool showingItem)
 {
     const wxPoint pos = GetPosition();
@@ -519,11 +517,23 @@ void MainFrame::AdjustHeight(const std::string& key, bool showingItem)
         return;
     }
 
-    // Walk the content sizer and sum heights of visible items only.
-    // This bypasses wxSizer's broken handling of hidden children in GetMinSize().
     if (!m_content) return;
     wxBoxSizer* container = dynamic_cast<wxBoxSizer*>(m_content->GetSizer());
     if (!container) return;
+
+    // Temporarily set all visible panels to their natural (min) size so that
+    // Layout() computes the compact height without proportion-based expansion.
+    std::vector<std::pair<wxWindow*, wxSize>> savedSizes;
+    CollectVisibleWindows(container, savedSizes);
+
+    for (auto& p : savedSizes)
+    {
+        p.first->SetMinSize(p.second);
+        p.first->SetSize(p.second);
+    }
+
+    container->Layout();
+    this->Layout();
 
     int neededH = 0;
     for (size_t i = 0; i < container->GetItemCount(); ++i)
@@ -532,25 +542,21 @@ void MainFrame::AdjustHeight(const std::string& key, bool showingItem)
         wxWindow* win = item->GetWindow();
         if (!win || !win->IsShown()) continue;
 
-        // For sizer items that are themselves panels with nested sizers
-        // (like GPU group panels), recurse to find the true height.
-        wxBoxSizer* childSizer = dynamic_cast<wxBoxSizer*>(win->GetSizer());
-        if (childSizer)
-        {
-            neededH += ComputeVisibleHeight(childSizer);
-        }
+        wxBoxSizer* child = dynamic_cast<wxBoxSizer*>(win->GetSizer());
+        if (child)
+            neededH += ComputeVisibleHeightNatural(child);
         else
-        {
-            // Regular item: use its min size or natural size.
-            wxSize sz = item->GetMinSize();
-            if (sz.GetHeight() <= 0)
-                sz = win->GetSize();
-            neededH += std::max(sz.GetHeight(), 1);
-        }
+            neededH += std::max(win->GetSize().GetHeight(), 1);
 
-        // Add spacer height (items without windows are spacers).
         if (!win)
             neededH += std::max(item->GetMinSize().GetHeight(), 2);
+    }
+
+    // Restore original sizes.
+    for (auto& p : savedSizes)
+    {
+        p.first->SetMinSize(wxSize(-1, -1));
+        p.first->SetSize(p.second);
     }
 
     const wxSize minSz = GetMinSize();
@@ -559,8 +565,23 @@ void MainFrame::AdjustHeight(const std::string& key, bool showingItem)
         SetSize(pos.x, pos.y, cur.GetWidth(), newH);
 }
 
-// Recursively compute the visible height of a sizer and its children.
-int MainFrame::ComputeVisibleHeight(wxBoxSizer* sizer)
+// Recursively collect all visible windows and their current sizes.
+void MainFrame::CollectVisibleWindows(wxBoxSizer* sizer,
+                                       std::vector<std::pair<wxWindow*, wxSize>>& out)
+{
+    for (size_t i = 0; i < sizer->GetItemCount(); ++i)
+    {
+        wxSizerItem* item = sizer->GetItem(i);
+        wxWindow* win = item->GetWindow();
+        if (!win || !win->IsShown()) continue;
+        out.push_back({ win, win->GetSize() });
+        wxBoxSizer* child = dynamic_cast<wxBoxSizer*>(win->GetSizer());
+        if (child) CollectVisibleWindows(child, out);
+    }
+}
+
+// Recursively sum NATURAL (min-size-based) visible heights.
+int MainFrame::ComputeVisibleHeightNatural(wxBoxSizer* sizer)
 {
     int h = 0;
     for (size_t i = 0; i < sizer->GetItemCount(); ++i)
@@ -571,13 +592,9 @@ int MainFrame::ComputeVisibleHeight(wxBoxSizer* sizer)
 
         wxBoxSizer* child = dynamic_cast<wxBoxSizer*>(win->GetSizer());
         if (child)
-            h += ComputeVisibleHeight(child);
+            h += ComputeVisibleHeightNatural(child);
         else
-        {
-            wxSize sz = item->GetMinSize();
-            if (sz.GetHeight() <= 0) sz = win->GetSize();
-            h += std::max(sz.GetHeight(), 1);
-        }
+            h += std::max(item->GetMinSize().GetHeight(), 1);
 
         if (!win)
             h += std::max(item->GetMinSize().GetHeight(), 2);
