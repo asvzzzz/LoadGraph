@@ -411,18 +411,6 @@ void MainFrame::BuildViewMenu(wxMenuBar* menuBar,
     }
 
     viewMenu->AppendSeparator();
-    {
-        wxMenuItem* all = viewMenu->AppendCheckItem(wxID_ANY, L"Show all");
-        Connect(all->GetId(), wxEVT_MENU,
-                wxCommandEventHandler(MainFrame::OnViewToggle));
-        m_menuIdToKey[all->GetId()] = "__show_all__";
-    }
-    {
-        wxMenuItem* none = viewMenu->AppendCheckItem(wxID_ANY, L"Hide all");
-        Connect(none->GetId(), wxEVT_MENU,
-                wxCommandEventHandler(MainFrame::OnViewToggle));
-        m_menuIdToKey[none->GetId()] = "__hide_all__";
-    }
     menuBar->Append(viewMenu, L"&View");
 }
 
@@ -435,30 +423,7 @@ void MainFrame::OnViewToggle(wxCommandEvent& evt)
     std::map<std::string, bool> state;
     Config::LoadViewMenuState(state);
 
-    if (key == "__show_all__")
-    {
-        for (const auto& kv : m_viewToggles)
-            kv.second->Show(true);
-        for (auto& grp : m_gpuGroupToggles)
-            for (GraphPanel* p : grp.panels)
-                p->Show(true);
-        // Record every key as checked.
-        for (const auto& kv : m_viewToggles) state[kv.first] = true;
-        for (const auto& g : { "gpu_load", "gpu_temp", "gpu_vram", "gpu_fan", "gpu_power" })
-            state[g] = true;
-    }
-    else if (key == "__hide_all__")
-    {
-        for (const auto& kv : m_viewToggles)
-            kv.second->Show(false);
-        for (auto& grp : m_gpuGroupToggles)
-            for (GraphPanel* p : grp.panels)
-                p->Show(false);
-        for (const auto& kv : m_viewToggles) state[kv.first] = false;
-        for (const auto& g : { "gpu_load", "gpu_temp", "gpu_vram", "gpu_fan", "gpu_power" })
-            state[g] = false;
-    }
-    else if (key == "gpu_load" || key == "gpu_temp" || key == "gpu_vram" ||
+    if (key == "gpu_load" || key == "gpu_temp" || key == "gpu_vram" ||
              key == "gpu_fan"  || key == "gpu_power")
     {
         // Unified GPU group toggle: show/hide this metric across ALL GPUs.
@@ -484,7 +449,26 @@ void MainFrame::OnViewToggle(wxCommandEvent& evt)
     }
 
     this->Layout();
+    ShrinkToFit();
     Config::SaveViewMenuState(state);
+}
+
+// Recalculate the frame size to match the natural size of all visible content,
+// then clamp it to the configured minimum (480x540). Called after visibility
+// changes so that hiding a row actually shrinks the window instead of leaving
+// empty space.
+void MainFrame::ShrinkToFit()
+{
+    if (!m_content) return;
+    wxSizer* sizer = m_content->GetSizer();
+    if (!sizer) return;
+    sizer->Layout();
+    const wxSize needed = sizer->GetMinSize();
+    const wxSize cur    = GetSize();
+    const int    minH   = 540; // matches SetMinSize(wxSize(480, 540))
+    const int    newH   = (needed.GetHeight() > minH) ? needed.GetHeight() : minH;
+    if (newH < cur.GetHeight())
+        SetSize(GetPosition().x, GetPosition().y, cur.GetWidth(), newH);
 }
 
 // ----------------------------------------------------------------------------

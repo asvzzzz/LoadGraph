@@ -108,6 +108,8 @@ private:
     void BuildViewMenu(wxMenuBar* menuBar,
                        const std::map<std::string, bool>& initialState);
     void OnViewToggle(wxCommandEvent& evt);
+    // Shrink the window to fit currently visible content (called via wxCallAfter).
+    void ShrinkToFit();
 
     // UI created flag (Linux: deferred to first timer tick).
     bool    m_uiCreated = false;
