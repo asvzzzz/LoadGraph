@@ -434,6 +434,12 @@ void MainFrame::BuildGpuSection(wxBoxSizer* container, wxWindow* parent)
             wxString name = L"GPU " + wxString::Format("%zu", g);
             if (!meta.name.empty())
                 name += L"  " + wxString(meta.name.c_str(), wxConvUTF8);
+            if (meta.vramTotalBytes > 0)
+            {
+                const double vramGb = std::round(
+                    static_cast<double>(meta.vramTotalBytes) / 1073741824.0);
+                name += L"  " + wxString::Format(L"%.0fGB", vramGb);
+            }
             wxStaticText* st = new wxStaticText(parent, wxID_ANY, name);
             st->SetFont(wxFont(10, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL,
                                wxFONTWEIGHT_BOLD));
