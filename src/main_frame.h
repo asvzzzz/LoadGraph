@@ -108,12 +108,18 @@ private:
     // Last known "full" size before any user-driven shrinking. Used to restore
     // the window when a previously-hidden row is made visible again.
     wxSize m_lastFullSize;
+    // Height of each toggleable row, measured once after first layout.
+    // Keys match m_viewToggles keys. Populated in MeasureRows().
+    std::map<std::string, int> m_rowHeights;
 
     void BuildViewMenu(wxMenuBar* menuBar,
                        const std::map<std::string, bool>& initialState);
     void OnViewToggle(wxCommandEvent& evt);
-    // Shrink or grow the window after a visibility toggle.
-    void ShrinkToFit(bool showingItem);
+    // Measure and remember the natural height of every toggleable row.
+    // Must be called once after all rows are created and laid out.
+    void MeasureRows();
+    // Adjust window height after a visibility toggle without moving position.
+    void AdjustHeight(const std::string& key, bool showingItem);
 
     // UI created flag (Linux: deferred to first timer tick).
     bool    m_uiCreated = false;

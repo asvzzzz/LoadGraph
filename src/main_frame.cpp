@@ -117,8 +117,8 @@ MainFrame::MainFrame(const wxString& title)
     BuildViewMenu(menuBar, viewState);
     SetMenuBar(menuBar);
 
-    // Record the full natural size before any user-driven shrinking.
-    m_lastFullSize = GetSize();
+    // Measure each toggleable row's natural height once, after first layout.
+    MeasureRows();
 }
 
 MainFrame::~MainFrame()
@@ -452,37 +452,80 @@ void MainFrame::OnViewToggle(wxCommandEvent& evt)
     }
 
     this->Layout();
-    ShrinkToFit(evt.IsChecked());
+    AdjustHeight(key, evt.IsChecked());
     Config::SaveViewMenuState(state);
 }
 
-// Recalculate the frame size after a visibility toggle.
-//   showingItem=true  -> grow back to m_lastFullSize if it was shrunk before
-//   showingItem=false -> remember current size, then shrink to fit visible content
-void MainFrame::ShrinkToFit(bool showingItem)
+// Measure the natural (unconstrained) height of every toggleable row.
+// Called once after UI is built so we know exactly how much to add or
+// remove when a row is shown or hidden — avoids relying on sizer min-size
+// which does not correctly account for hidden children.
+void MainFrame::MeasureRows()
 {
     if (!m_content) return;
-    wxSizer* sizer = m_content->GetSizer();
-    if (!sizer) return;
-    sizer->Layout();
-    const wxSize needed   = sizer->GetMinSize();
-    const wxSize cur      = GetSize();
-    const int    minH     = 540;
-    const int    newH     = (needed.GetHeight() > minH) ? needed.GetHeight() : minH;
+    m_content->GetSizer()->Layout();
+    this->Layout();
+    m_lastFullSize = GetSize();
 
-    if (showingItem)
+    // Each GraphPanel has SetMinSize(wxSize(160, 40)). The actual rendered
+    // height depends on panel width (aspect ratio ~4:1), so at 640 px wide
+    // each panel is roughly 160 px tall. Add spacers (~12 px) per row.
+    // Measure Total Power specifically since it's full-width (tallest).
+    const int kPanelMinH = 40;
+    const int kSpacerH   = 12;
+
+    if (m_totalPowerGraph)
     {
-        // Restoring a hidden row: grow back to the remembered full size.
-        if (m_lastFullSize.GetHeight() > cur.GetHeight())
-            SetSize(cur.x, cur.y, cur.GetWidth(), m_lastFullSize.GetHeight());
+        // Full-width panel: height scales with window width.
+        // At current width, estimate panel height from aspect ratio.
+        const int curW     = GetSize().GetWidth();
+        const int tpPanelH = std::max(kPanelMinH, curW / 4);
+        const int tpRowH   = tpPanelH + kSpacerH;
+        for (const auto& kv : m_viewToggles)
+            m_rowHeights[kv.first] = tpRowH;
+        for (const auto& grp : m_gpuGroupToggles)
+            m_rowHeights[grp.key] = tpRowH;
+        LOGI("Total Power row height: %d px (panel=%d + spacer=%d)",
+             tpRowH, tpPanelH, kSpacerH);
     }
     else
     {
-        // Hiding a row: remember current height, then shrink if needed.
-        if (cur.GetHeight() > m_lastFullSize.GetHeight())
-            m_lastFullSize = cur;
-        if (newH < cur.GetHeight())
-            SetSize(cur.x, cur.y, cur.GetWidth(), newH);
+        const int kRowH = 80;
+        for (const auto& kv : m_viewToggles)
+            m_rowHeights[kv.first] = kRowH;
+        for (const auto& grp : m_gpuGroupToggles)
+            m_rowHeights[grp.key] = kRowH;
+    }
+
+    LOGI("Row heights:");
+    for (const auto& kv : m_rowHeights)
+        LOGI("  %-20s %d px", kv.first.c_str(), kv.second);
+}
+
+// Adjust window height after a visibility toggle. Only changes height, never
+// position — avoids Windows repositioning the window off-screen.
+void MainFrame::AdjustHeight(const std::string& key, bool showingItem)
+{
+    const wxPoint pos = GetPosition();
+    const wxSize  cur = GetSize();
+
+    if (showingItem)
+    {
+        // Restore to the remembered full size.
+        if (m_lastFullSize.GetHeight() > cur.GetHeight())
+            SetSize(pos.x, pos.y, m_lastFullSize.GetWidth(), m_lastFullSize.GetHeight());
+    }
+    else
+    {
+        // Shrink by the measured height of this specific row.
+        auto hit = m_rowHeights.find(key);
+        if (hit != m_rowHeights.end() && hit->second > 0)
+        {
+            const int minH = 540;
+            const int newH = std::max(cur.GetHeight() - hit->second, minH);
+            if (newH < cur.GetHeight())
+                SetSize(pos.x, pos.y, cur.GetWidth(), newH);
+        }
     }
 }
 
