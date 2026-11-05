@@ -13,6 +13,7 @@ wxBEGIN_EVENT_TABLE(MainFrame, wxFrame)
     EVT_TIMER(wxID_ANY, MainFrame::OnTimer)
     EVT_CLOSE(MainFrame::OnClose)
     EVT_SIZE(MainFrame::OnSize)
+    EVT_PAINT(MainFrame::OnPaint)
 wxEND_EVENT_TABLE()
 
 static const double kAlarmTempC  = 80.0;
@@ -148,6 +149,8 @@ MainFrame::MainFrame(const wxString& title)
 		SetMinSize(wxSize(mn.x, mn.y));
 	}
 
+	RefreshSectionBoxes();
+
 	// Log the final layout for diagnostics.
 	int cw = 0, ch = 0;
 	GetClientSize(&cw, &ch);
@@ -158,6 +161,7 @@ MainFrame::MainFrame(const wxString& title)
 
 	m_timer.SetOwner(this);
 	m_timer.Start(1000);
+
 }
 
 MainFrame::~MainFrame()
@@ -429,26 +433,11 @@ void MainFrame::BuildGpuSection(wxBoxSizer* container, wxWindow* parent)
 
 void MainFrame::BuildTotalPowerRow(wxBoxSizer* container, wxWindow* parent)
 {
-	const CpuMetrics cpuInit = m_cpu.GetMetrics();
-
-	// Sum of CPU TDP and all GPU power limits, each with a 20% headroom.
-	double totalMax = 0.0;
-	if (cpuInit.tdpWatts > 0.0) totalMax += std::max(150.0, cpuInit.tdpWatts * 1.2);
-
-	const std::vector<GpuMetrics> gpus =
-		m_gpu.IsAvailable() ? m_gpu.GetMetrics() : std::vector<GpuMetrics>();
-	for (const GpuMetrics& g : gpus)
-	{
-		double limit = g.powerLimitWatts;
-		if (limit <= 0.0) limit = static_cast<double>(PowerTable::GetGpuTdp(g.name));
-		totalMax += std::max(150.0, limit * 1.2);
-	}
-	if (totalMax <= 0.0) totalMax = 600.0;
-
+	// Fixed 0..1000 W range with 5 ticks: 0, 250, 500, 750, 1000.
 	m_totalPowerGraph = new GraphPanel(parent, "Total Power", "W");
-	m_totalPowerGraph->SetYRange(0.0, RoundUpWattsTo50(totalMax));
+	m_totalPowerGraph->SetYRange(0.0, 1000.0);
 	m_totalPowerGraph->SetYMode(GraphYMode::Watts);
-	m_totalPowerGraph->SetTickCount(4);
+	m_totalPowerGraph->SetTickCount(5);
 	container->Add(m_totalPowerGraph, 1, wxEXPAND | wxLEFT | wxRIGHT, 5);
 
 	m_viewToggles["Total Power"] = m_totalPowerGraph;
@@ -576,6 +565,8 @@ void MainFrame::ApplyHeightAdjustment(const std::string& key, bool showingItem)
 	SetClientSize(cs.x, newH);
 	Layout();
 	SetPosition(pos);
+	RefreshSectionBoxes();
+	Refresh();
 }
 
 void MainFrame::OnTimer(wxTimerEvent&)
@@ -658,8 +649,122 @@ void MainFrame::OnClose(wxCloseEvent& evt)
 	evt.Skip();
 }
 
+void MainFrame::RefreshSectionBoxes()
+{
+	m_sectionBoxes.clear();
+	if (!m_content) return;
+	wxSizer* sizer = m_content->GetSizer();
+	if (!sizer) return;
+
+	// Find CPU section bounds (from first item to first GPU title).
+	int cpuStart = 0, cpuEnd = -1;
+	std::vector<int> gpuStarts;
+
+	for (int i = 0; i < sizer->GetItemCount(); ++i)
+	{
+		wxSizerItem* item = sizer->GetItem(static_cast<size_t>(i));
+		if (!item) continue;
+		wxWindow* win = item->GetWindow();
+		if (!win) continue;
+		wxStaticText* st = dynamic_cast<wxStaticText*>(win);
+		if (st && st->GetLabel().Find(wxT("GPU ")) == 0)
+		{
+			if (cpuEnd < 0) cpuEnd = i;
+			gpuStarts.push_back(i);
+		}
+		if (win == m_totalPowerGraph)
+		{
+			if (cpuEnd < 0) cpuEnd = i;
+			for (size_t k = 0; k < gpuStarts.size(); ++k)
+				if (gpuStarts[k] > i) gpuStarts[k] = -1;
+		}
+	}
+	if (cpuEnd < 0) cpuEnd = gpuStarts.empty() ? sizer->GetItemCount() : gpuStarts[0];
+
+	// CPU box.
+	{
+		int lx = 9999, ly = 9999, rx = 0, by = 0;
+		for (int i = cpuStart; i < cpuEnd; ++i)
+		{
+			wxSizerItem* si = sizer->GetItem(static_cast<size_t>(i));
+			if (!si || !si->IsShown()) continue;
+			wxWindow* w = si->GetWindow();
+			if (!w) continue;
+			int x = 0, y = 0, ww = 0, hh = 0;
+			w->GetPosition(&x, &y); w->GetSize(&ww, &hh);
+			if (x < lx) lx = x; if (y < ly) ly = y;
+			if (x + ww > rx) rx = x + ww; if (y + hh > by) by = y + hh;
+		}
+		if (ly < 9999)
+			m_sectionBoxes.push_back({ "CPU", wxRect(lx - 3, ly - 18, rx - lx + 6, by - ly + 3) });
+	}
+
+	// GPU boxes.
+	for (size_t gi = 0; gi < gpuStarts.size(); ++gi)
+	{
+		int gs = gpuStarts[gi];
+		if (gs < 0) continue;
+		int ge = -1;
+		for (size_t j = static_cast<size_t>(gs + 1); j < sizer->GetItemCount(); ++j)
+		{
+			wxWindow* w = sizer->GetItem(j)->GetWindow();
+			if (!w) continue;
+			wxStaticText* st = dynamic_cast<wxStaticText*>(w);
+			if (st && st->GetLabel().Find(wxT("GPU ")) == 0) { ge = static_cast<int>(j); break; }
+			if (w == m_totalPowerGraph) { ge = static_cast<int>(j); break; }
+		}
+		if (ge < 0) ge = sizer->GetItemCount();
+
+		int lx = 9999, ly = 9999, rx = 0, by = 0;
+		for (int i = gs; i < ge; ++i)
+		{
+			wxSizerItem* si = sizer->GetItem(static_cast<size_t>(i));
+			if (!si || !si->IsShown()) continue;
+			wxWindow* w = si->GetWindow();
+			if (!w) continue;
+			int x = 0, y = 0, ww = 0, hh = 0;
+			w->GetPosition(&x, &y); w->GetSize(&ww, &hh);
+			if (x < lx) lx = x; if (y < ly) ly = y;
+			if (x + ww > rx) rx = x + ww; if (y + hh > by) by = y + hh;
+		}
+		if (ly < 9999)
+		{
+			wxString title = sizer->GetItem(static_cast<size_t>(gs))->GetWindow()->GetLabel();
+			m_sectionBoxes.push_back({ title, wxRect(lx - 3, ly - 18, rx - lx + 6, by - ly + 3) });
+		}
+	}
+
+	// Total Power box.
+	for (int i = 0; i < sizer->GetItemCount(); ++i)
+	{
+		wxSizerItem* si = sizer->GetItem(static_cast<size_t>(i));
+		if (!si || !si->IsShown()) continue;
+		if (si->GetWindow() == m_totalPowerGraph)
+		{
+			int x = 0, y = 0, ww = 0, hh = 0;
+			m_totalPowerGraph->GetPosition(&x, &y);
+			m_totalPowerGraph->GetSize(&ww, &hh);
+			m_sectionBoxes.push_back({ "Total Power", wxRect(x - 3, y - 2, ww + 6, hh + 2) });
+			break;
+		}
+	}
+}
+
 void MainFrame::OnSize(wxSizeEvent& evt)
 {
+	RefreshSectionBoxes();
+	Refresh();
+	evt.Skip();
+}
+
+void MainFrame::OnPaint(wxPaintEvent& evt)
+{
+	wxPaintDC dc(this);
+	const wxColour frameCol(200, 200, 200);
+	dc.SetPen(wxPen(frameCol, 1));
+	dc.SetBrush(*wxTRANSPARENT_BRUSH);
+	for (const SectionBox& sb : m_sectionBoxes)
+		dc.DrawRectangle(sb.rect);
 	evt.Skip();
 }
 

@@ -136,6 +136,12 @@ private:
     // UI created flag (Linux: deferred to first timer tick).
     bool    m_uiCreated = false;
 
+    // Section bounding boxes for overlay frame drawing.
+    struct SectionBox { wxString title; wxRect rect; };
+    std::vector<SectionBox> m_sectionBoxes;
+    void RefreshSectionBoxes();
+    void OnPaint(wxPaintEvent& evt);
+
     wxDECLARE_EVENT_TABLE();
 };
 
