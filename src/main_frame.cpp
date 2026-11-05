@@ -632,6 +632,7 @@ void MainFrame::OnTimer(wxTimerEvent&)
 		m_cpuPowerGraph->AddPoint(cpu.powerWatts);
 	if (m_totalPowerGraph)
 		m_totalPowerGraph->AddPoint(totalWatts);
+
 }
 
 void MainFrame::OnClose(wxCloseEvent& evt)
@@ -759,12 +760,7 @@ void MainFrame::OnSize(wxSizeEvent& evt)
 
 void MainFrame::OnPaint(wxPaintEvent& evt)
 {
-	wxPaintDC dc(this);
-	const wxColour frameCol(200, 200, 200);
-	dc.SetPen(wxPen(frameCol, 1));
-	dc.SetBrush(*wxTRANSPARENT_BRUSH);
-	for (const SectionBox& sb : m_sectionBoxes)
-		dc.DrawRectangle(sb.rect);
+	// Border frames are drawn inside each GraphPanel::OnPaint.
 	evt.Skip();
 }
 
