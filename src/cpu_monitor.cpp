@@ -269,6 +269,9 @@ double CpuMonitor::SampleLoad()
     return load;
 }
 
+// Forward declaration: probes every non-admin temp source on startup.
+static void ProbeAllTempSources();
+
 void CpuMonitor::Collect()
 {
     // Temperature / fan: probe WMI once (guarded). If it fails or crashes we
@@ -288,6 +291,8 @@ void CpuMonitor::Collect()
         LOGI("WMI sensor probe: temp=%s fan=%s",
              (filled & 1u) ? "OK" : "N/A",
              (filled & 2u) ? "OK" : "N/A");
+        // Probe every available non-admin source so we know what works on this machine.
+        ProbeAllTempSources();
     }
     else if (m_wmiOk)
     {
@@ -466,6 +471,242 @@ unsigned int CpuMonitor::ProbeWmiSensor(double& tempC, int& fanRpm)
     }
 
     return filled;
+}
+
+// Enumerate all properties of a WMI object and log them for diagnostics.
+static void DumpWmiObject(IWbemClassObject* pObj)
+{
+    if (!pObj) return;
+    SAFEARRAY* psaNames = nullptr;
+    HRESULT hr = pObj->GetNames(nullptr, WBEM_FLAG_ALWAYS, nullptr, &psaNames);
+    if (SUCCEEDED(hr) && psaNames)
+    {
+        long cnt = 0;
+        SafeArrayGetDim(psaNames);
+        SafeArrayGetUBound(psaNames, 1, &cnt);
+        for (long i = 0; i < cnt; ++i)
+        {
+            BSTR bName = nullptr;
+            if (SafeArrayGetElement(psaNames, &i, &bName) == S_OK && bName)
+            {
+                VARIANT vt; VariantInit(&vt);
+                HRESULT hr2 = pObj->Get(bName, 0, &vt, nullptr, nullptr);
+                wchar_t desc[128] = {};
+                if (SUCCEEDED(hr2))
+                {
+                    switch (vt.vt)
+                    {
+                    case VT_I4:      swprintf(desc, 128, L"I4=%ld", vt.lVal); break;
+                    case VT_UI4:     swprintf(desc, 128, L"UI4=%lu", vt.ulVal); break;
+                    case VT_R8:      swprintf(desc, 128, L"R8=%.2f", vt.dblVal); break;
+                    case VT_BSTR:    swprintf(desc, 128, L"BSTR=\"%s\"", vt.bstrVal ? vt.bstrVal : L"(null)"); break;
+                    case VT_EMPTY:   wcscpy(desc, L"EMPTY"); break;
+                    default:         swprintf(desc, 128, L"vt=%d", vt.vt); break;
+                    }
+                }
+                else
+                {
+                    swprintf(desc, 128, L"Get err=0x%08X", (unsigned)hr2);
+                }
+                LOGI("DIAG WMI prop %S: %s", bName, desc);
+                VariantClear(&vt);
+                SysFreeString(bName);
+            }
+        }
+        SafeArrayDestroy(psaNames);
+    }
+}
+
+// Diagnostic: probe every non-admin source for CPU temperature on this machine.
+// Logs one line per method so we can see what actually works without a kernel
+// driver or admin privileges. Call once at startup from Collect().
+static void ProbeAllTempSources()
+{
+    // ---- WMI: Win32_TemperatureProbe (root\cimv2) — enumerate ALL rows + props --
+    {
+        IWbemLocator* pLoc = nullptr;
+        IWbemServices* pSvc = nullptr;
+        IEnumWbemClassObject* pEnum = nullptr;
+        HRESULT hr = CoCreateInstance(CLSID_WbemLocator, nullptr, CLSCTX_INPROC_SERVER,
+                                      IID_IWbemLocator, reinterpret_cast<LPVOID*>(&pLoc));
+        if (SUCCEEDED(hr) && pLoc)
+        {
+            BSTR bNs = SysAllocString(L"root\\cimv2");
+            hr = pLoc->ConnectServer(bNs, nullptr, nullptr, nullptr, 0, nullptr, nullptr, &pSvc);
+            SysFreeString(bNs);
+            if (SUCCEEDED(hr) && pSvc)
+            {
+                CoSetProxyBlanket(pSvc, RPC_C_AUTHN_WINNT, RPC_C_AUTHZ_NONE,
+                                  nullptr, RPC_C_AUTHN_LEVEL_CALL,
+                                  RPC_C_IMP_LEVEL_IMPERSONATE, nullptr, EOAC_NONE);
+                BSTR bQ = SysAllocString(
+                    L"SELECT * FROM Win32_TemperatureProbe");
+                hr = pSvc->ExecQuery(BSTR(L"WQL"), bQ,
+                                     WBEM_FLAG_FORWARD_ONLY | WBEM_FLAG_RETURN_IMMEDIATELY,
+                                     nullptr, &pEnum);
+                SysFreeString(bQ);
+                if (SUCCEEDED(hr) && pEnum)
+                {
+                    ULONG ret = 0; IWbemClassObject* pObj = nullptr;
+                    int rowIdx = 0;
+                    while (pEnum->Next(WBEM_INFINITE, 1, &pObj, &ret) == S_OK && ret > 0)
+                    {
+                        LOGI("DIAG Win32_TemperatureProbe row %d:", rowIdx++);
+                        DumpWmiObject(pObj);
+                        pObj->Release();
+                    }
+                }
+                pSvc->Release();
+            }
+            pLoc->Release();
+        }
+    }
+
+    // ---- WMI: MSAcpi_ThermalZoneTemperature (root\wmi) — enumerate ALL rows + props --
+    {
+        IWbemLocator* pLoc = nullptr;
+        IWbemServices* pSvc = nullptr;
+        IEnumWbemClassObject* pEnum = nullptr;
+        HRESULT hr = CoCreateInstance(CLSID_WbemLocator, nullptr, CLSCTX_INPROC_SERVER,
+                                      IID_IWbemLocator, reinterpret_cast<LPVOID*>(&pLoc));
+        if (SUCCEEDED(hr) && pLoc)
+        {
+            BSTR bNs = SysAllocString(L"root\\wmi");
+            hr = pLoc->ConnectServer(bNs, nullptr, nullptr, nullptr, 0, nullptr, nullptr, &pSvc);
+            SysFreeString(bNs);
+            if (SUCCEEDED(hr) && pSvc)
+            {
+                CoSetProxyBlanket(pSvc, RPC_C_AUTHN_WINNT, RPC_C_AUTHZ_NONE,
+                                  nullptr, RPC_C_AUTHN_LEVEL_CALL,
+                                  RPC_C_IMP_LEVEL_IMPERSONATE, nullptr, EOAC_NONE);
+                BSTR bQ = SysAllocString(
+                    L"SELECT * FROM MSAcpi_ThermalZoneTemperature");
+                hr = pSvc->ExecQuery(BSTR(L"WQL"), bQ,
+                                     WBEM_FLAG_FORWARD_ONLY | WBEM_FLAG_RETURN_IMMEDIATELY,
+                                     nullptr, &pEnum);
+                SysFreeString(bQ);
+                if (SUCCEEDED(hr) && pEnum)
+                {
+                    ULONG ret = 0; IWbemClassObject* pObj = nullptr;
+                    int rowIdx = 0;
+                    while (pEnum->Next(WBEM_INFINITE, 1, &pObj, &ret) == S_OK && ret > 0)
+                    {
+                        LOGI("DIAG MSAcpi_ThermalZoneTemperature row %d:", rowIdx++);
+                        DumpWmiObject(pObj);
+                        pObj->Release();
+                    }
+                    if (rowIdx == 0)
+                        LOGI("DIAG MSAcpi_ThermalZoneTemperature: no rows returned");
+                }
+                pSvc->Release();
+            }
+            pLoc->Release();
+        }
+    }
+
+    // ---- WMI: root\wmi MSAcpi_ThermalZoneTemperature (already in ProbeWmiSensor, duplicate log) --
+    LOGI("DIAG WMI MSAcpi_ThermalZoneTemperature: see above ProbeWmiSensor line");
+
+    // ---- GetSystemFirmwareTable('ACPI', 0x44535054='DSPT') ------------------
+    DWORD sz = GetSystemFirmwareTable('ACPI', 0x44535054, nullptr, 0);
+    if (sz > 0 && sz < 65536)
+    {
+        std::vector<BYTE> buf(sz);
+        if (GetSystemFirmwareTable('ACPI', 0x44535054, buf.data(), static_cast<DWORD>(buf.size())) == sz)
+        {
+            LOGI("DIAG ACPI DSPT firmware table: size=%u bytes", sz);
+            // Dump first 64 bytes as hex for manual inspection.
+            char hex[65 * 4];
+            for (unsigned i = 0; i < 64 && i < sz; ++i)
+                snprintf(hex + i * 3, sizeof(hex) - i * 3, "%02X ", (unsigned char)buf[i]);
+            LOGI("DIAG ACPI DSPT first64: %s", hex);
+        }
+        else
+        {
+            LOGI("DIAG ACPI DSPT firmware table: size=%u but ReadTable failed err=%lu",
+                 sz, GetLastError());
+        }
+    }
+    else
+    {
+        LOGI("DIAG ACPI DSPT firmware table: not present (GetSystemFirmwareTable returned %lu)",
+             sz);
+    }
+
+    // ---- GetSystemFirmwareTable('ACPI', 0x54524143='TRAC') ------------------
+    sz = GetSystemFirmwareTable('ACPI', 0x54524143, nullptr, 0);
+    LOGI("DIAG ACPI TRAC firmware table: present=%s (size=%lu)",
+         sz > 0 ? "YES" : "NO", static_cast<unsigned long>(sz));
+
+    // ---- Registry: enumerate HKLM\HARDWARE\DESCRIPTION\System\CentralProcessor\0 ---
+    HKEY hKey;
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE,
+                      L"HARDWARE\\DESCRIPTION\\System\\CentralProcessor\\0",
+                      0, KEY_READ, &hKey) == ERROR_SUCCESS)
+    {
+        wchar_t name[256] = {};
+        DWORD   type = 0, size = sizeof(name);
+        // Scan every value under this key for anything temperature-related.
+        LOGI("DIAG Registry CentralProcessor\\0 values:");
+        for (DWORD idx = 0; ; ++idx)
+        {
+            size = sizeof(name);
+            DWORD rc = RegEnumValueW(hKey, idx, name, &size, nullptr, &type,
+                                     nullptr, nullptr);
+            if (rc != ERROR_SUCCESS) break;
+            // Print value name and first 32 bytes of content (if binary).
+            wchar_t val[128] = {};
+            DWORD   vsize = sizeof(val);
+            if (RegQueryValueExW(hKey, name, nullptr, &type,
+                                 reinterpret_cast<LPBYTE>(val), &vsize) == ERROR_SUCCESS)
+            {
+                if (type == REG_SZ || type == REG_EXPAND_SZ)
+                    LOGI("DIAG Reg %S = \"%s\" (type=%lu)", name, val, static_cast<unsigned long>(type));
+                else if (type == REG_DWORD)
+                    LOGI("DIAG Reg %S = 0x%08X (type=%lu)", name,
+                         *reinterpret_cast<uint32_t*>(val), static_cast<unsigned long>(type));
+                else
+                    LOGI("DIAG Reg %S = <binary %lu bytes type=%lu>", name,
+                         static_cast<unsigned long>(vsize), static_cast<unsigned long>(type));
+            }
+        }
+        RegCloseKey(hKey);
+    }
+    else
+    {
+        LOGI("DIAG Registry CentralProcessor\\0: open failed err=%lu", GetLastError());
+    }
+
+    // ---- Performance Counters: thermal zone paths --------------------------
+    // Try reading \Temperature\System Temperature\% Value via PDH.
+    wchar_t pdhPath[] = L"\\\\_Total\\\\System Temperature\\\\% Value";
+    HQUERY  hPdhQuery   = nullptr;
+    HCOUNTER hPdhCounter = nullptr;
+    PDH_STATUS st = PdhOpenQueryW(nullptr, 0, &hPdhQuery);
+    if (st == ERROR_SUCCESS)
+    {
+        st = PdhAddCounterW(hPdhQuery, pdhPath, 0, &hPdhCounter);
+        if (st == ERROR_SUCCESS)
+        {
+            PDH_FMT_COUNTERVALUE fmtVal;
+            st = PdhCollectQueryData(hPdhQuery);
+            Sleep(200);
+            st = PdhGetFormattedCounterValue(hPdhCounter, PDH_FMT_DOUBLE, nullptr, &fmtVal);
+            if (st == ERROR_SUCCESS)
+                LOGI("DIAG PDH Temperature counter: %.1f C", fmtVal.doubleValue);
+            else
+                LOGI("DIAG PDH Temperature counter: read failed st=0x%08X", static_cast<unsigned>(st));
+        }
+        else
+        {
+            LOGI("DIAG PDH Temperature counter: add failed st=0x%08X", static_cast<unsigned>(st));
+        }
+        PdhCloseQuery(hPdhQuery);
+    }
+    else
+    {
+        LOGI("DIAG PDH Temperature counter: open failed st=0x%08X", static_cast<unsigned>(st));
+    }
 }
 
 // Read the CPU model name from registry (HKLM\HARDWARE\DESCRIPTION\System\CentralProcessor\0\ProcessorNameString).
