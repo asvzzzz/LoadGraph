@@ -633,9 +633,6 @@ void MainFrame::OnTimer(wxTimerEvent&)
 	if (m_totalPowerGraph)
 		m_totalPowerGraph->AddPoint(totalWatts);
 
-	// Redraw section borders every tick so they stay on top of children.
-	RefreshSectionBoxes();
-	Refresh();
 }
 
 void MainFrame::OnClose(wxCloseEvent& evt)
