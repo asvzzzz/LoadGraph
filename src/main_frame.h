@@ -146,6 +146,16 @@ private:
     void RefreshSectionBoxes();
     void OnPaint(wxPaintEvent& evt);
 
+#ifdef __WXMSW__
+    // Win32 overlay window drawn on top of all children to render section borders.
+    static HWND         m_hOverlayWnd;
+    static MainFrame*   m_pSelf;
+    static LRESULT      CALLBACK OverlayWndProc(HWND, UINT, WPARAM, LPARAM);
+    void                CreateOverlay();
+    void                DestroyOverlay();
+    void                UpdateOverlay();
+#endif
+
     wxDECLARE_EVENT_TABLE();
 };
 
