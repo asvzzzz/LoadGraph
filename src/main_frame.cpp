@@ -5,10 +5,6 @@
 #include "logger.h"
 #include <wx/display.h>
 
-#ifdef __WXMSW__
-#include <windows.h>
-#endif
-
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -171,9 +167,6 @@ MainFrame::MainFrame(const wxString& title)
 MainFrame::~MainFrame()
 {
 	if (m_timer.IsRunning()) m_timer.Stop();
-#ifdef __WXMSW__
-	DestroyOverlay();
-#endif
 }
 
 void MainFrame::RealizeUI()
@@ -223,10 +216,6 @@ void MainFrame::RealizeUI()
 
 	SetSizer(mainS);
 	ApplyTheme();
-
-#ifdef __WXMSW__
-	CreateOverlay();
-#endif
 
 	m_lastFullSize = GetClientSize();
 	m_uiCreated = true;
@@ -644,13 +633,9 @@ void MainFrame::OnTimer(wxTimerEvent&)
 	if (m_totalPowerGraph)
 		m_totalPowerGraph->AddPoint(totalWatts);
 
-	// Redraw section borders after layout changes.
-	if (m_needFrameRefresh)
-	{
-		RefreshSectionBoxes();
-		Refresh();
-		m_needFrameRefresh = false;
-	}
+	// Redraw section borders every tick so they stay on top of children.
+	RefreshSectionBoxes();
+	Refresh();
 }
 
 void MainFrame::OnClose(wxCloseEvent& evt)
@@ -773,101 +758,24 @@ void MainFrame::OnSize(wxSizeEvent& evt)
 {
 	RefreshSectionBoxes();
 	m_needFrameRefresh = true;
-#ifdef __WXMSW__
-	UpdateOverlay();
-#endif
 	Refresh();
 	evt.Skip();
 }
 
 void MainFrame::OnPaint(wxPaintEvent& evt)
 {
-	// Borders drawn by Win32 overlay window.
+	wxPaintDC dc(this);
+	const wxColour frameCol(200, 200, 200);
+	dc.SetPen(wxPen(frameCol, 1));
+	dc.SetBrush(*wxTRANSPARENT_BRUSH);
+	for (const SectionBox& sb : m_sectionBoxes)
+	{
+		const wxRect& r = sb.rect;
+		dc.DrawRectangle(r.x + 1, r.y + 1, r.width - 2, r.height - 2);
+	}
+	LOGI("OnPaint: %d frames", static_cast<int>(m_sectionBoxes.size()));
 	evt.Skip();
 }
-
-#ifdef __WXMSW__
-// Static pointer to the main frame for the overlay window proc.
-MainFrame*  MainFrame::m_pSelf = nullptr;
-HWND        MainFrame::m_hOverlayWnd = nullptr;
-
-LRESULT CALLBACK MainFrame::OverlayWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
-{
-	if (msg == WM_PAINT)
-	{
-		PAINTSTRUCT ps;
-		HDC hdc = BeginPaint(hwnd, &ps);
-		const wxColour frameCol(200, 200, 200);
-		HPEN hpen = CreatePen(PS_SOLID, 1, RGB(frameCol.Red(), frameCol.Green(), frameCol.Blue()));
-		HGDIOBJ oldpen = SelectObject(hdc, hpen);
-		// Use NULL_BRUSH so rectangles are drawn as outlines only — no fill.
-		HBRUSH hbrush = (HBRUSH)GetStockObject(NULL_BRUSH);
-		HGDIOBJ oldbrush = SelectObject(hdc, hbrush);
-
-		if (m_pSelf && !m_pSelf->m_sectionBoxes.empty())
-		{
-			for (const SectionBox& sb : m_pSelf->m_sectionBoxes)
-			{
-				const wxRect& r = sb.rect;
-				Rectangle(hdc, r.x + 1, r.y + 1, r.x + r.width - 1, r.y + r.height - 1);
-			}
-		}
-
-		SelectObject(hdc, oldbrush);
-		SelectObject(hdc, oldpen);
-		EndPaint(hwnd, &ps);
-		return 0;
-	}
-	if (msg == WM_ERASEBKGND)
-		return 1; // do not erase — we draw borders on top
-	return DefWindowProc(hwnd, msg, wp, lp);
-}
-
-void MainFrame::CreateOverlay()
-{
-	m_pSelf = this;
-	WNDCLASS wc = {};
-	wc.lpfnWndProc   = OverlayWndProc;
-	wc.hInstance       = GetModuleHandle(nullptr);
-	wc.lpszClassName   = L"LoadGraphFrameOverlay";
-	wc.style           = CS_HREDRAW | CS_VREDRAW;
-	RegisterClass(&wc);
-
-	m_hOverlayWnd = CreateWindowEx(
-		WS_EX_TOPMOST | WS_EX_TRANSPARENT,
-		L"LoadGraphFrameOverlay",
-		nullptr,
-		WS_POPUP,
-		0, 0, 0, 0,
-		reinterpret_cast<HWND>(GetHandle()),
-		nullptr,
-		GetModuleHandle(nullptr),
-		nullptr);
-	if (m_hOverlayWnd)
-		UpdateOverlay();
-}
-
-void MainFrame::DestroyOverlay()
-{
-	if (m_hOverlayWnd)
-	{
-		DestroyWindow(m_hOverlayWnd);
-		m_hOverlayWnd = nullptr;
-	}
-	m_pSelf = nullptr;
-}
-
-void MainFrame::UpdateOverlay()
-{
-	if (!m_hOverlayWnd || !m_content) return;
-	int cw = 0, ch = 0;
-	m_content->GetSize(&cw, &ch);
-	wxPoint p = m_content->GetScreenPosition();
-	SetWindowPos(m_hOverlayWnd, nullptr, p.x, p.y, cw, ch,
-		SWP_NOZORDER | SWP_NOACTIVATE);
-	InvalidateRect(m_hOverlayWnd, nullptr, FALSE);
-}
-#endif
 
 void MainFrame::ApplyTheme()
 {
