@@ -3,6 +3,7 @@
 
 #include <wx/wx.h>
 #include <wx/sizer.h>
+#include <unordered_map>
 #include <wx/timer.h>
 #include <map>
 #include "cpu_monitor.h"
@@ -51,7 +52,7 @@ private:
     // Timer for periodic GUI updates (1000 ms).
     wxTimer     m_timer;
 
-    // Non-scrolling content panel (CPU / RAM / GPU sections).
+    // Content panel (CPU / RAM / GPU sections).
     wxPanel*    m_content = nullptr;
 
     // Static header area (title bar inside the frame).
@@ -90,6 +91,10 @@ private:
     };
     std::vector<GpuPanelData> m_gpuPanels;
 
+    // Static boxes of the GPU sections. Recolored in ApplyTheme() so the GPU
+    // names match the rest of the labels (wxStaticBox uses the system color).
+    std::vector<wxWindow*> m_gpuBoxes;
+
     // View menu state persistence. Keys map to graph panel pointers so the
     // toggle handler can show/hide a specific chart on demand.
     std::map<std::string, GraphPanel*> m_viewToggles;
@@ -105,23 +110,25 @@ private:
     };
     std::vector<GpuGroupToggle> m_gpuGroupToggles;
 
-    // Last known "full" size before any user-driven shrinking. Used to restore
-    // the window when a previously-hidden row is made visible again.
+    // Last known "full" size (all rows visible). Used to restore the window
+    // when a previously-hidden row is made visible again.
     wxSize m_lastFullSize;
-    // Height of each toggleable row, measured once after first layout.
-    // Keys match m_viewToggles keys. Populated in MeasureRows().
-    std::map<std::string, int> m_rowHeights;
+
+    // Sizer items belonging to each toggleable key: hiding such an item must
+    // shrink the window by exactly this item's height, without empty space and
+    // without moving the window position (proportions are preserved).
+    struct ToggleGroup
+    {
+        std::vector<wxSizerItem*> items;   // sizer entries to show/hide together
+        int                       deltaH = 0; // their combined pixel height at full layout
+    };
+    // Keys: "CPU Load", "RAM Usage", ..., plus GPU group keys ("gpu_load", ...).
+    std::unordered_map<std::string, ToggleGroup> m_toggleGroups;
 
     void BuildViewMenu(wxMenuBar* menuBar,
                        const std::map<std::string, bool>& initialState);
     void OnViewToggle(wxCommandEvent& evt);
-    // Measure and remember the natural height of every toggleable row.
-    // Must be called once after all rows are created and laid out.
-    void MeasureRows();
-    // Adjust window height after a visibility toggle without moving position.
-    void AdjustHeight(const std::string& key, bool showingItem);
-    // Recursively zero proportions in nested sizers.
-    void ZeroProportionsRecursive(wxBoxSizer* sizer);
+    void ApplyHeightAdjustment(const std::string& key, bool showingItem);
 
     // UI created flag (Linux: deferred to first timer tick).
     bool    m_uiCreated = false;

@@ -1,894 +1,692 @@
 #include "main_frame.h"
-#include "platform.h"
 #include "config.h"
-#include "logger.h"
 #include "theme.h"
-#include "graph_panel.h"
 #include "power_table.h"
-#include <wx/statline.h>
-#include <cstdint>
+#include "logger.h"
+#include <wx/display.h>
 
-#ifdef PLATFORM_WINDOWS
-#include <windows.h>
-#endif
+#include <algorithm>
+#include <cmath>
+#include <cstdint>
 
 wxBEGIN_EVENT_TABLE(MainFrame, wxFrame)
     EVT_TIMER(wxID_ANY, MainFrame::OnTimer)
     EVT_CLOSE(MainFrame::OnClose)
 wxEND_EVENT_TABLE()
 
-// Temperature above which the temp graphs turn red (Celsius).
-static const double kAlarmTempC = 80.0;
+static const double kAlarmTempC  = 80.0;
+static const int    kGraphHeightPx = 40;
 
-// Format system uptime as YY:MM:DD:HH:MM:SS.
-static wxString FormatUptime(uint64_t totalSec)
+// Format uptime in ms as "YY:MM:DD HH:MI:SS".
+static wxString FormatUptime(uint64_t totalMs)
 {
-    const uint64_t secPerYear  = 365ULL * 24ULL * 3600ULL;
-    const uint64_t secPerMonth = 30ULL * 24ULL * 3600ULL;
-    const uint64_t secPerDay   = 24ULL * 3600ULL;
+	uint64_t s = totalMs / 1000ULL;
+	const uint64_t secPerYear  = 365ULL * 24ULL * 3600ULL;
+	const uint64_t secPerMonth = 30ULL * 24ULL * 3600ULL;
+	const uint64_t secPerDay   = 24ULL * 3600ULL;
 
-    uint64_t yy = totalSec / secPerYear;  totalSec %= secPerYear;
-    uint64_t mm = totalSec / secPerMonth; totalSec %= secPerMonth;
-    uint64_t dd = totalSec / secPerDay;   totalSec %= secPerDay;
-    uint64_t hh = totalSec / 3600ULL;     totalSec %= 3600ULL;
-    uint64_t mi = totalSec / 60ULL;
-    uint64_t ss = totalSec % 60ULL;
+	uint64_t yy = s / secPerYear;  s %= secPerYear;
+	uint64_t mm = s / secPerMonth; s %= secPerMonth;
+	uint64_t dd = s / secPerDay;   s %= secPerDay;
+	uint64_t hh = s / 3600ULL;     s %= 3600ULL;
+	uint64_t mi = s / 60ULL;       s %= 60ULL;
+	uint64_t ss = s;
 
-    return wxString::Format("%02lu:%02lu:%02lu:%02lu:%02lu:%02lu",
-                            static_cast<unsigned long>(yy),
-                            static_cast<unsigned long>(mm),
-                            static_cast<unsigned long>(dd),
-                            static_cast<unsigned long>(hh),
-                            static_cast<unsigned long>(mi),
-                            static_cast<unsigned long>(ss));
+	return wxString::Format("%02llu:%02llu:%02llu %02llu:%02llu:%02llu",
+	                        static_cast<unsigned long long>(yy),
+	                        static_cast<unsigned long long>(mm),
+	                        static_cast<unsigned long long>(dd),
+	                        static_cast<unsigned long long>(hh),
+	                        static_cast<unsigned long long>(mi),
+	                        static_cast<unsigned long long>(ss));
 }
 
-// ----------------------------------------------------------------------------
-// Construction / destruction
-// ----------------------------------------------------------------------------
-MainFrame::MainFrame(const wxString& title)
+// Round a watt value up to the next multiple of 50 (minimum 100 W).
+static int RoundUpWattsTo50(double watts)
 {
-    int x = 100, y = 100, w = 640, h = 720;
-    bool hasPos = Config::LoadWindowPosition(x, y);
-    bool hasSize = Config::LoadWindowSize(w, h);
+	if (watts < 50.0) return 100;
+	return static_cast<int>(std::ceil(watts / 50.0)) * 50;
+}
 
-    wxPoint pos = hasPos ? wxPoint(x, y) : wxDefaultPosition;
-    wxSize  size = hasSize ? wxSize(w, h) : wxSize(640, 720);
+// Convert bytes to gigabytes.
+static double BytesToGbs(uint64_t bytes)
+{
+	return static_cast<double>(bytes) / (1024.0 * 1024.0 * 1024.0);
+}
 
-    Create(nullptr, wxID_ANY, title, pos, size,
-           wxDEFAULT_FRAME_STYLE | wxRESIZE_BORDER);
+MainFrame::MainFrame(const wxString& title)
+	: wxFrame(nullptr, wxID_ANY, title, wxDefaultPosition, wxDefaultSize, wxDEFAULT_FRAME_STYLE)
+{
+	// Refresh the system palette once before first use.
+	Theme::Update();
 
-    // Application icon — loaded from a PNG in the current working directory.
-    // Fails silently when the file is missing (no crash).
-    {
-        wxString iconPath = wxGetCwd() + "/" + "loadgraph.png";
-        wxIcon icon(iconPath);
-        if (icon.IsOk())
-            SetIcon(icon);
-    }
+	int x = 0, y = 0, w = 640, h = 540;
+	const bool hasPos  = Config::LoadWindowPosition(x, y);
+	const bool hasSize = Config::LoadWindowSize(w, h);
+	if (hasPos) SetPosition(wxPoint(x, y));
+	// Width comes from the config; the height is fitted to the content below
+	// (a saved height would only produce empty space at the bottom).
+	SetClientSize(wxSize(hasSize ? w : 640, 540));
+	SetMinSize(wxSize(480, 540));
 
-    LOGI("Starting metric collectors...");
+	// Application icon (loaded from the working directory).
+	if (wxFileExists("loadgraph.png"))
+	{
+		wxIcon icon("loadgraph.png", wxBITMAP_TYPE_PNG);
+		if (icon.IsOk()) SetIcon(icon);
+	}
 
-    m_cpu.QueryCpuName();
-    m_cpu.CollectNow();
-    m_cpu.Start();
-    LOGI("CPU monitor started (temp=%s fan=%s).",
-         m_cpu.GetMetrics().temperature >= 0.0 ? "OK" : "N/A",
-         m_cpu.GetMetrics().fanRpm >= 0 ? "OK" : "N/A");
+	// Resolve the CPU name / TDP once: the layout needs tdpWatts before
+	// RealizeUI(), and QueryCpuName() must run before the polling starts.
+	m_cpu.QueryCpuName();
 
-    m_ram.CollectNow();
-    m_ram.Start();
-    LOGI("RAM monitor started (total=%llu bytes).",
-         static_cast<unsigned long long>(m_ram.GetMetrics().totalBytes));
+	// Synchronous first collection: the layout (GPU list, CPU TDP / sensors)
+	// is built from these metrics, so they must be filled before RealizeUI().
+	m_cpu.CollectNow();
+	m_ram.CollectNow();
+	if (m_gpu.IsAvailable()) m_gpu.CollectNow();
 
-    m_gpu.Start();
-    LOGI("GPU monitor started (NVML/NVAPI available: %s)",
-         m_gpu.IsAvailable() ? "yes" : "no");
+	// Log every detected GPU - helps to spot devices missing from NVML.
+	if (m_gpu.IsAvailable())
+	{
+		const std::vector<GpuMetrics> gpus0 = m_gpu.GetMetrics();
+		LOGI("GPU list: %d device(s)", static_cast<int>(gpus0.size()));
+		for (size_t i = 0; i < gpus0.size(); ++i)
+			LOGI("  GPU %d: %s", static_cast<int>(i), gpus0[i].name.c_str());
+	}
 
-    if (m_gpu.IsAvailable())
-    {
-        m_gpu.CollectNow();
-        auto gm = m_gpu.GetMetrics();
-        LOGI("Initial GPU collect done: %zu GPUs found.", gm.size());
-    }
+	// Start background collectors (1000 ms polling, handled by each monitor).
+	m_cpu.Start();
+	m_ram.Start();
+	if (m_gpu.IsAvailable()) m_gpu.Start();
 
-    // Update GUI every 1000 ms - matches polling rate.
-    m_timer.SetOwner(this, wxID_ANY);
-    m_timer.Start(1000);
-    LOGI("Timer started.");
+	// Build the layout first - the View menu needs the created graph panels.
+	RealizeUI();
 
-    // Create UI here — before Show(true) so the sizer is applied to a
-    // fully-built window and the first paint shows content immediately.
-    RealizeUI();
-    SetMinSize(wxSize(480, 540));
+	std::map<std::string, bool> initialState;
+	Config::LoadViewMenuState(initialState);
 
-    // Apply saved View menu state (hidden graphs restored from previous run).
-    std::map<std::string, bool> viewState;
-    Config::LoadViewMenuState(viewState);
-    for (const auto& kv : m_viewToggles)
-    {
-        auto it = viewState.find(kv.first);
-        bool show = (it == viewState.end()) ? true : it->second;
-        kv.second->Show(show);
-    }
+	wxMenuBar* menuBar = new wxMenuBar();
+	BuildViewMenu(menuBar, initialState);
+	SetMenuBar(menuBar);
 
-    // Build the View menu with checkboxes for every graph panel.
-    wxMenuBar* menuBar = new wxMenuBar;
-    BuildViewMenu(menuBar, viewState);
-    SetMenuBar(menuBar);
+	// Apply the persisted visibility (hide everything unchecked).
+	for (const auto& kv : initialState)
+	{
+		if (!kv.second) ApplyHeightAdjustment(kv.first, false);
+	}
 
-    // Measure each toggleable row's natural height once, after first layout.
-    MeasureRows();
+	// Fit the window height exactly to the content - no empty space at the
+	// bottom. The width stays at least the saved / minimal one.
+	wxSizer* sizer = GetSizer();
+	if (sizer)
+	{
+		const wxPoint winPos = GetPosition();
+		const wxSize  mn = sizer->CalcMin();
+		const wxSize  cs = GetClientSize();
+		wxSize finalSz(std::max(cs.x, mn.x), mn.y);
+
+		// Do not exceed the working area of the display hosting the window
+		// (with many GPUs the content can be taller than the screen).
+		const int dispIdx = wxDisplay::GetFromPoint(winPos);
+		int maxH = 0;
+		if (dispIdx != wxNOT_FOUND)
+		{
+			maxH = wxDisplay(dispIdx).GetClientArea().height - 80;
+			if (maxH > 0 && finalSz.y > maxH) finalSz.y = maxH;
+		}
+		LOGI("fit: contentMin=%dx%d before=%dx%d final=%dx%d dispIdx=%d maxH=%d",
+		     mn.x, mn.y, cs.x, cs.y, finalSz.x, finalSz.y, dispIdx, maxH);
+
+		SetClientSize(finalSz);
+		Layout();
+		SetPosition(winPos);
+
+		// Prevent the window from being shrunk below content minimum — this
+		// eliminates clipping of bottom graphs when the user drags the resize border.
+		SetMinSize(wxSize(mn.x, mn.y));
+	}
+
+	// Log the final layout for diagnostics.
+	int cw = 0, ch = 0;
+	GetClientSize(&cw, &ch);
+	LOGI("UI ready: gpuPanels=%d gpuKeys=%d viewKeys=%d client=%dx%d",
+	     static_cast<int>(m_gpuPanels.size()),
+	     static_cast<int>(m_gpuGroupToggles.size()),
+	     static_cast<int>(m_viewToggles.size()), cw, ch);
+
+	m_timer.SetOwner(this);
+	m_timer.Start(1000);
 }
 
 MainFrame::~MainFrame()
 {
-    LOGI("MainFrame destructor...");
-    m_timer.Stop();
-    m_cpu.Stop();
-    m_ram.Stop();
-    m_gpu.Stop();
-    LOGI("MainFrame destructor done.");
+	if (m_timer.IsRunning()) m_timer.Stop();
 }
 
-// ----------------------------------------------------------------------------
-// Event handlers
-// ----------------------------------------------------------------------------
-void MainFrame::OnClose(wxCloseEvent& evt)
-{
-    Config::SaveWindowPosition(GetPosition().x, GetPosition().y,
-                               GetSize().GetWidth(), GetSize().GetHeight());
-    LOGI("Saved window pos=%dx%d size=%dx%d.",
-         GetPosition().x, GetPosition().y,
-         GetSize().GetWidth(), GetSize().GetHeight());
-    evt.Skip();
-}
-
-void MainFrame::OnTimer(wxTimerEvent& /*evt*/)
-{
-#ifdef PLATFORM_LINUX
-    // On Linux (wxWidgets 3.0.x / GTK) creating child windows before the GTK
-    // widget is realized causes SIGSEGV. We skip UI creation entirely on this
-    // platform — the app runs and collects metrics but shows no graphs.
-    if (!m_uiCreated)
-    {
-        m_uiCreated = true;
-        LOGI("UI skipped (wxWidgets 3.0.x GTK limitation).");
-    }
-#endif
-
-    // ---- CPU ----
-    const double cpuLoad = m_cpu.SampleLoad();
-    const auto cm = m_cpu.GetMetrics();
-
-    if (m_uptimeText)
-        m_uptimeText->SetLabel(wxString::Format("Uptime %s",
-                                                FormatUptime(cm.uptimeMs / 1000ULL)));
-
-    if (m_cpuLoadGraph)
-        m_cpuLoadGraph->AddPoint(cpuLoad >= 0.0 ? cpuLoad : cm.loadPercent);
-
-    if (m_cpuTempGraph && cm.temperature >= 0.0)
-        m_cpuTempGraph->AddPoint(cm.temperature);
-    if (m_cpuFanGraph && cm.fanRpm >= 0)
-        m_cpuFanGraph->AddPoint(static_cast<double>(cm.fanRpm));
-
-    // ---- CPU power (watts) ----
-    if (m_cpuPowerGraph && cm.powerWatts >= 0.0)
-        m_cpuPowerGraph->AddPoint(cm.powerWatts);
-
-    // ---- RAM usage in GB ----
-    const auto rm = m_ram.GetMetrics();
-    if (m_ramUsageGraph && rm.totalBytes > 0)
-    {
-        const double totalGb = std::round(static_cast<double>(rm.totalBytes) /
-                                          1073741824.0);
-        const double usedGb = static_cast<double>(rm.totalBytes - rm.freeBytes) /
-                              1073741824.0;
-        m_ramUsageGraph->SetYRange(0.0, totalGb);
-        m_ramUsageGraph->AddPoint(usedGb);
-    }
-
-    // ---- GPU ----
-    const auto gm = m_gpu.GetMetrics();
-    for (size_t g = 0; g < m_gpuPanels.size() && g < gm.size(); ++g)
-    {
-        auto& pd   = m_gpuPanels[g];
-        auto& meta = gm[g];
-
-        if (pd.loadGraph)
-            pd.loadGraph->AddPoint(meta.loadPercent);
-
-        if (pd.tempGraph && meta.temperature >= 0.0)
-            pd.tempGraph->AddPoint(meta.temperature);
-
-        if (pd.vramGraph)
-        {
-            double vramGb = 16.0;
-            if (meta.vramTotalBytes > 0)
-            {
-                vramGb = std::round(static_cast<double>(meta.vramTotalBytes) /
-                                    1073741824.0);
-                pd.vramGraph->SetYRange(0.0, vramGb);
-            }
-            const double vramUsedGb = static_cast<double>(meta.vramUsedBytes) /
-                                      1073741824.0;
-            pd.vramGraph->AddPoint(vramUsedGb);
-        }
-
-        if (pd.fanGraph && meta.fanPercent >= 0.0)
-            pd.fanGraph->AddPoint(meta.fanPercent);
-
-        if (pd.powerGraph && meta.powerWatts >= 0.0)
-            pd.powerGraph->AddPoint(meta.powerWatts);
-    }
-
-    // ---- Total power: CPU + every GPU (watts) ----
-    if (m_totalPowerGraph)
-    {
-        double total = 0.0;
-        bool   any   = false;
-        if (cm.powerWatts >= 0.0)
-        {
-            total += cm.powerWatts;
-            any = true;
-        }
-        for (const auto& meta : gm)
-        {
-            if (meta.powerWatts >= 0.0)
-            {
-                total += meta.powerWatts;
-                any = true;
-            }
-        }
-        if (any)
-            m_totalPowerGraph->AddPoint(total);
-    }
-
-    // ---- React to a live system light/dark scheme switch ----
-    if (Theme::Update())
-    {
-        LOGI("System color scheme changed to %s, reapplying theme.",
-             Theme::IsDark() ? "dark" : "light");
-        ApplyTheme();
-    }
-}
-
-// ----------------------------------------------------------------------------
-// UI creation
-// ----------------------------------------------------------------------------
 void MainFrame::RealizeUI()
 {
-    LOGI("RealizeUI started.");
-    Theme::Update();
-    LOGI("System color scheme: %s", Theme::IsDark() ? "dark" : "light");
+	if (m_uiCreated) return;
 
-    SetBackgroundColour(Theme::Bg());
-    LOGI("Background colour set.");
+	wxBoxSizer* mainS = new wxBoxSizer(wxVERTICAL);
 
-    wxBoxSizer* mainSizer = new wxBoxSizer(wxVERTICAL);
-    LOGI("Main sizer created.");
+	// Header bar: title on the left, uptime on the right.
+	m_header = new wxPanel(this, wxID_ANY);
+	wxBoxSizer* hdrS = new wxBoxSizer(wxHORIZONTAL);
 
-    LOGI("Creating header panel...");
-    {
-        wxPanel* header = new wxPanel(this, wxID_ANY);
-        LOGI("Header ptr=%p", static_cast<void*>(header));
-        header->SetBackgroundColour(Theme::Bg());
-        m_header = header;
-        header->SetMinSize(wxSize(-1, 2));
-        mainSizer->Add(header, 0, wxEXPAND);
-        LOGI("Header added.");
-    }
+	// CPU model label (the redundant "LoadGraph" title was removed; the label
+	// stretches and ellipsizes so the uptime never gets pushed out).
+	wxString cpuLabel = "CPU";
+	const std::wstring cpuName = m_cpu.GetMetrics().cpuName;
+	if (!cpuName.empty()) cpuLabel += "  " + wxString(cpuName.c_str());
+	else                  cpuLabel += "  (N/A)";
+	wxStaticText* cpuT = new wxStaticText(m_header, wxID_ANY, cpuLabel);
+	wxFont cpuFont(11, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_BOLD);
+	cpuT->SetFont(cpuFont);
+	// Cap the CPU label width so it cannot force the window wider than needed;
+	// ellipsize truncates long names while keeping uptime visible.
+	cpuT->SetMaxSize(wxSize(500, -1));
+	AddThemedText(cpuT, true);
+	hdrS->Add(cpuT, 1, wxALL | wxALIGN_CENTER_VERTICAL, 6);
 
-    LOGI("Creating content panel...");
-    wxPanel* content = new wxPanel(this, wxID_ANY);
-    LOGI("Content ptr=%p", static_cast<void*>(content));
-    content->SetBackgroundColour(Theme::Bg());
-    // NB: content panel must keep the DEFAULT background style. It has no
-    // OnPaint handler, so wxBG_STYLE_CUSTOM would leave its background
-    // unpainted - causing white contours around graph cards and stale
-    // pixels after a resize. Only GraphPanel (which paints itself) uses
-    // wxBG_STYLE_CUSTOM.
-    m_content = content;
-    LOGI("Content created.");
+	m_uptimeText = new wxStaticText(m_header, wxID_ANY, " Uptime: ...");
+	AddThemedText(m_uptimeText, false);
+	// No stretch spacer: the CPU label already has proportion=1 and will fill
+	// remaining width, keeping uptime pinned to the right edge.
+	hdrS->Add(m_uptimeText, 0, wxALL | wxALIGN_CENTER_VERTICAL, 6);
 
-    wxBoxSizer* container = new wxBoxSizer(wxVERTICAL);
-    LOGI("Container sizer created.");
+	m_header->SetSizer(hdrS);
+	mainS->Add(m_header, 0, wxEXPAND);
 
-    LOGI("Building CPU section...");
-    BuildCpuSection(container, content);
-    LOGI("CPU section built.");
-    LOGI("Building GPU section...");
-    BuildGpuSection(container, content);
-    LOGI("GPU section built.");
-    LOGI("Building total power row...");
-    BuildTotalPowerRow(container, content);
-    LOGI("Total power row built.");
+	// Content: CPU section, GPU section, total power row.
+	m_content = new wxPanel(this, wxID_ANY);
+	wxBoxSizer* contentS = new wxBoxSizer(wxVERTICAL);
 
-    content->SetSizer(container);
-    mainSizer->Add(content, 1, wxEXPAND);
-    SetSizer(mainSizer);
-    Layout(); // force immediate layout calculation on already-visible window
-    LOGI("RealizeUI completed.");
+	BuildCpuSection(contentS, m_content);
+	if (m_gpu.IsAvailable()) BuildGpuSection(contentS, m_content);
+	BuildTotalPowerRow(contentS, m_content);
+
+	m_content->SetSizer(contentS);
+	mainS->Add(m_content, 1, wxEXPAND);
+
+	SetSizer(mainS);
+	ApplyTheme();
+
+	m_lastFullSize = GetClientSize();
+	m_uiCreated = true;
 }
 
-// ----------------------------------------------------------------------------
-// Theme support
-// ----------------------------------------------------------------------------
-void MainFrame::AddThemedText(wxStaticText* st, bool primary)
+void MainFrame::BuildCpuSection(wxBoxSizer* container, wxWindow* parent)
 {
-    if (!st)
-        return;
-    (primary ? m_primaryTexts : m_secondaryTexts).push_back(st);
+	// Row 1: CPU Load + RAM Usage side by side.
+	wxBoxSizer* row1 = new wxBoxSizer(wxHORIZONTAL);
+
+	m_cpuLoadGraph = new GraphPanel(parent, "CPU Load", "%");
+	m_cpuLoadGraph->SetYRange(0.0, 100.0);
+	m_cpuLoadGraph->SetYMode(GraphYMode::Percent);
+
+	m_ramUsageGraph = new GraphPanel(parent, "RAM Usage", "GB");
+	m_ramUsageGraph->SetYMode(GraphYMode::Gigabytes);
+	// Fixed 0..total RAM range: avoids a drifting auto-scale.
+	const RamMetrics ramInit = m_ram.GetMetrics();
+	if (ramInit.totalBytes > 0)
+		m_ramUsageGraph->SetYRange(0.0, std::ceil(BytesToGbs(ramInit.totalBytes)));
+
+	// No vertical padding: rows share vertical space proportionally so all
+	// graphs scale together when the window is resized.
+	row1->Add(m_cpuLoadGraph,  1, wxEXPAND | wxLEFT | wxRIGHT, 5);
+	row1->Add(m_ramUsageGraph, 1, wxEXPAND | wxLEFT | wxRIGHT, 5);
+	container->Add(row1, 1, wxEXPAND);
+	container->AddSpacer(5);
+
+	m_viewToggles["CPU Load"]  = m_cpuLoadGraph;
+	m_viewToggles["RAM Usage"] = m_ramUsageGraph;
+	m_toggleGroups["CPU Load"].items.push_back(row1->GetItem(static_cast<size_t>(0)));
+	m_toggleGroups["RAM Usage"].items.push_back(row1->GetItem(static_cast<size_t>(1)));
+	m_toggleGroups["CPU Load"].deltaH  = kGraphHeightPx;
+	m_toggleGroups["RAM Usage"].deltaH = kGraphHeightPx;
+
+	const CpuMetrics cpuInit = m_cpu.GetMetrics();
+
+	// Row 2: CPU Power (only when a TDP or a real power sensor is known).
+	if (cpuInit.tdpWatts > 0.0)
+	{
+		m_cpuPowerGraph = new GraphPanel(parent, "CPU Power", "W");
+		const double maxP = std::max(250.0, cpuInit.tdpWatts * 1.1);
+		m_cpuPowerGraph->SetYRange(0.0, RoundUpWattsTo50(maxP));
+		m_cpuPowerGraph->SetYMode(GraphYMode::Watts);
+
+		container->Add(m_cpuPowerGraph, 1, wxEXPAND | wxLEFT | wxRIGHT, 5);
+		container->AddSpacer(5);
+
+		m_viewToggles["CPU Power"] = m_cpuPowerGraph;
+		m_toggleGroups["CPU Power"].items.push_back(
+			container->GetItem(static_cast<size_t>(container->GetItemCount() - 1)));
+		m_toggleGroups["CPU Power"].deltaH = kGraphHeightPx;
+	}
+
+	// Row 3: CPU Temp (+ CPU Fan when a fan sensor exists).
+	if (cpuInit.temperature >= 0.0 || cpuInit.fanRpm > 0)
+	{
+		wxBoxSizer* row2 = new wxBoxSizer(wxHORIZONTAL);
+
+		m_cpuTempGraph = new GraphPanel(parent, "CPU Temp", "C");
+		m_cpuTempGraph->SetYMode(GraphYMode::Celsius);
+		m_cpuTempGraph->SetAlarmThreshold(kAlarmTempC);
+		row2->Add(m_cpuTempGraph, (cpuInit.fanRpm > 0) ? 1 : 2,
+		          wxEXPAND | wxLEFT | wxRIGHT, 5);
+
+		if (cpuInit.fanRpm > 0)
+		{
+			m_cpuFanGraph = new GraphPanel(parent, "CPU Fan", "RPM");
+			row2->Add(m_cpuFanGraph, 1, wxEXPAND | wxLEFT | wxRIGHT, 5);
+		}
+
+		container->Add(row2, 1, wxEXPAND);
+
+		m_viewToggles["CPU Temp"] = m_cpuTempGraph;
+		m_toggleGroups["CPU Temp"].items.push_back(row2->GetItem(static_cast<size_t>(0)));
+		m_toggleGroups["CPU Temp"].deltaH = kGraphHeightPx;
+
+		if (m_cpuFanGraph)
+		{
+			m_viewToggles["CPU Fan"] = m_cpuFanGraph;
+			m_toggleGroups["CPU Fan"].items.push_back(row2->GetItem(static_cast<size_t>(1)));
+			m_toggleGroups["CPU Fan"].deltaH = kGraphHeightPx;
+		}
+	}
 }
 
-void MainFrame::ApplyTheme()
+void MainFrame::BuildGpuSection(wxBoxSizer* container, wxWindow* parent)
 {
-    SetBackgroundColour(Theme::Bg());
-    if (m_header)
-        m_header->SetBackgroundColour(Theme::Bg());
-    if (m_content)
-        m_content->SetBackgroundColour(Theme::Bg());
+	const std::vector<GpuMetrics> gpus = m_gpu.GetMetrics();
+	if (gpus.empty()) return;
 
-    for (wxStaticText* st : m_primaryTexts)
-        if (st) st->SetForegroundColour(Theme::Text());
-    for (wxStaticText* st : m_secondaryTexts)
-        if (st) st->SetForegroundColour(Theme::SubText());
+	// Five group toggles: one checkbox controls this metric type on ALL GPUs.
+	static const char* kGroupKeys[5] = {
+		"gpu_load", "gpu_temp", "gpu_vram", "gpu_fan", "gpu_power"
+	};
+	for (int k = 0; k < 5; ++k)
+	{
+		const bool exists = std::any_of(
+			m_gpuGroupToggles.begin(), m_gpuGroupToggles.end(),
+			[k](const GpuGroupToggle& g) { return g.key == kGroupKeys[k]; });
+		if (!exists)
+		{
+			GpuGroupToggle gt;
+			gt.key = kGroupKeys[k];
+			m_gpuGroupToggles.push_back(gt);
+		}
+	}
 
-    const auto refreshGraph = [](GraphPanel* gp) {
-        if (gp)
-        {
-            gp->SetBackgroundColour(Theme::Card());
-            gp->Refresh();
-        }
-    };
-    refreshGraph(m_cpuLoadGraph);
-    refreshGraph(m_ramUsageGraph);
-    refreshGraph(m_cpuTempGraph);
-    refreshGraph(m_cpuFanGraph);
-    refreshGraph(m_cpuPowerGraph);
-    refreshGraph(m_totalPowerGraph);
-    for (const auto& pd : m_gpuPanels)
-    {
-        refreshGraph(pd.loadGraph);
-        refreshGraph(pd.tempGraph);
-        refreshGraph(pd.vramGraph);
-        refreshGraph(pd.fanGraph);
-        refreshGraph(pd.powerGraph);
-    }
+	// Register a panel in its metric-type group (and in the toggle groups).
+	auto addPanel = [this](const char* key, GraphPanel* panel)
+	{
+		for (GpuGroupToggle& g : m_gpuGroupToggles)
+		{
+			if (g.key == key) { g.panels.push_back(panel); break; }
+		}
+		ToggleGroup& tg = m_toggleGroups[key];
+		tg.deltaH += kGraphHeightPx;
+	};
 
-    Refresh();
+	for (size_t i = 0; i < gpus.size(); ++i)
+	{
+		const GpuMetrics& gpu = gpus[i];
+
+		const wxString gpuTitle = wxString::Format("GPU %d: ", static_cast<int>(i))
+			+ wxString::FromUTF8(gpu.name);
+		wxStaticBoxSizer* box = new wxStaticBoxSizer(wxVERTICAL, parent, gpuTitle);
+		// Same font as the CPU label in the header (11 pt bold).
+		box->GetStaticBox()->SetFont(
+			wxFont(11, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_BOLD));
+		m_gpuBoxes.push_back(box->GetStaticBox());
+
+		GpuPanelData data;
+		data.name = wxString::FromUTF8(gpu.name);
+
+		// Row 1: Load + Temp.
+		wxBoxSizer* row1 = new wxBoxSizer(wxHORIZONTAL);
+		if (gpu.loadPercent >= 0.0)
+		{
+			data.loadGraph = new GraphPanel(parent, "Load", "%");
+			data.loadGraph->SetYMode(GraphYMode::Percent);
+			// Fixed 0..100% range: auto scaling showed -1..2 at idle.
+			data.loadGraph->SetYRange(0.0, 100.0);
+			data.loadGraph->SetPurple(true);
+			row1->Add(data.loadGraph, 1, wxEXPAND | wxLEFT | wxRIGHT, 5);
+			addPanel("gpu_load", data.loadGraph);
+		}
+		if (gpu.temperature >= 0.0)
+		{
+			data.tempGraph = new GraphPanel(parent, "Temp", "C");
+			data.tempGraph->SetYMode(GraphYMode::Celsius);
+			// Fixed 0..100 C range: predictable scale instead of a drifting one.
+			data.tempGraph->SetYRange(0.0, 100.0);
+			data.tempGraph->SetAlarmThreshold(kAlarmTempC);
+			data.tempGraph->SetPurple(true);
+			row1->Add(data.tempGraph, 1, wxEXPAND | wxLEFT | wxRIGHT, 5);
+			addPanel("gpu_temp", data.tempGraph);
+		}
+		if (row1->GetItemCount() > 0)
+		{
+			box->Add(row1, 1, wxEXPAND);
+			box->AddSpacer(5);
+		}
+
+		// Row 2: VRAM + Fan.
+		wxBoxSizer* row2 = new wxBoxSizer(wxHORIZONTAL);
+		if (gpu.vramTotalBytes > 0)
+		{
+			data.vramGraph = new GraphPanel(parent, "VRAM", "GB");
+			data.vramGraph->SetYMode(GraphYMode::Gigabytes);
+			// Fixed 0..total VRAM range (auto scaling showed -1..2 at idle).
+			data.vramGraph->SetYRange(0.0, std::ceil(BytesToGbs(gpu.vramTotalBytes)));
+			data.vramGraph->SetPurple(true);
+			row2->Add(data.vramGraph, (gpu.fanPercent >= 0.0 || gpu.fanRpm >= 0) ? 1 : 2,
+			          wxEXPAND | wxLEFT | wxRIGHT, 5);
+			addPanel("gpu_vram", data.vramGraph);
+		}
+		if (gpu.fanPercent >= 0.0 || gpu.fanRpm >= 0)
+		{
+			const bool inPercent = (gpu.fanPercent >= 0.0);
+			data.fanGraph = new GraphPanel(parent, "Fan", inPercent ? "%" : "RPM");
+			// Fixed range: 0..100% (or 0..3000 RPM for the RPM fallback).
+			data.fanGraph->SetYRange(0.0, inPercent ? 100.0 : 3000.0);
+			data.fanGraph->SetPurple(true);
+			row2->Add(data.fanGraph, (gpu.vramTotalBytes > 0) ? 1 : 2,
+			          wxEXPAND | wxLEFT | wxRIGHT, 5);
+			addPanel("gpu_fan", data.fanGraph);
+		}
+		if (row2->GetItemCount() > 0)
+		{
+			box->Add(row2, 1, wxEXPAND);
+			box->AddSpacer(5);
+		}
+
+		// Row 3: Power (rounded up to the next multiple of 50 W).
+		if (gpu.powerWatts >= 0.0 || gpu.powerLimitWatts > 0.0)
+		{
+			data.powerGraph = new GraphPanel(parent, "Power", "W");
+			data.powerGraph->SetYMode(GraphYMode::Watts);
+			data.powerGraph->SetPurple(true);
+
+			double limit = gpu.powerLimitWatts;
+			if (limit <= 0.0) limit = static_cast<double>(PowerTable::GetGpuTdp(gpu.name));
+			if (limit <= 0.0) limit = 400.0;
+			data.powerGraph->SetYRange(0.0, RoundUpWattsTo50(limit * 1.1));
+
+			box->Add(data.powerGraph, 1, wxEXPAND | wxLEFT | wxRIGHT, 5);
+			addPanel("gpu_power", data.powerGraph);
+		}
+
+		m_gpuPanels.push_back(data);
+		container->Add(box, 2, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 5);
+	}
 }
 
-void MainFrame::BuildViewMenu(wxMenuBar* menuBar,
-                               const std::map<std::string, bool>& initialState)
+void MainFrame::BuildTotalPowerRow(wxBoxSizer* container, wxWindow* parent)
 {
-    wxMenu* viewMenu = new wxMenu;
-    // Individual graph toggles — rendered as checkboxes.
-    for (const auto& kv : m_viewToggles)
-    {
-        wxMenuItem* item = viewMenu->AppendCheckItem(wxID_ANY, kv.first);
-        auto it = initialState.find(kv.first);
-        bool show = (it == initialState.end()) ? true : it->second;
-        item->Check(show);
-        m_menuIdToKey[item->GetId()] = kv.first;
-        Connect(item->GetId(), wxEVT_MENU,
-                wxCommandEventHandler(MainFrame::OnViewToggle));
-    }
+	const CpuMetrics cpuInit = m_cpu.GetMetrics();
 
-    // One checkbox per GPU metric type (affects ALL GPUs at once).
-    static const struct { const char* key; const wchar_t* label; } gpuGroups[] = {
-        { "gpu_load",  L"GPU Load"  },
-        { "gpu_temp",  L"GPU Temp"  },
-        { "gpu_vram",  L"GPU VRAM"  },
-        { "gpu_fan",   L"GPU Fan"   },
-        { "gpu_power", L"GPU Power" },
-    };
-    for (const auto& g : gpuGroups)
-    {
-        // Collect panels belonging to this group.
-        GpuGroupToggle grp;
-        grp.key = g.key;
-        for (const auto& pd : m_gpuPanels)
-        {
-            GraphPanel* p = nullptr;
-            if (g.key == "gpu_load")  p = pd.loadGraph;
-            if (g.key == "gpu_temp")  p = pd.tempGraph;
-            if (g.key == "gpu_vram")  p = pd.vramGraph;
-            if (g.key == "gpu_fan")   p = pd.fanGraph;
-            if (g.key == "gpu_power") p = pd.powerGraph;
-            if (p) grp.panels.push_back(p);
-        }
-        m_gpuGroupToggles.push_back(std::move(grp));
+	// Sum of CPU TDP and all GPU power limits, each with a 20% headroom.
+	double totalMax = 0.0;
+	if (cpuInit.tdpWatts > 0.0) totalMax += std::max(150.0, cpuInit.tdpWatts * 1.2);
 
-        wxMenuItem* item = viewMenu->AppendCheckItem(wxID_ANY, g.label);
-        auto it = initialState.find(g.key);
-        bool show = (it == initialState.end()) ? true : it->second;
-        // A group is checked only if ALL its panels are visible.
-        for (GraphPanel* pp : m_gpuGroupToggles.back().panels)
-            show = show && pp->IsShown();
-        item->Check(show);
-        m_menuIdToKey[item->GetId()] = g.key;
-        Connect(item->GetId(), wxEVT_MENU,
-                wxCommandEventHandler(MainFrame::OnViewToggle));
-    }
+	const std::vector<GpuMetrics> gpus =
+		m_gpu.IsAvailable() ? m_gpu.GetMetrics() : std::vector<GpuMetrics>();
+	for (const GpuMetrics& g : gpus)
+	{
+		double limit = g.powerLimitWatts;
+		if (limit <= 0.0) limit = static_cast<double>(PowerTable::GetGpuTdp(g.name));
+		totalMax += std::max(150.0, limit * 1.2);
+	}
+	if (totalMax <= 0.0) totalMax = 600.0;
 
-    viewMenu->AppendSeparator();
-    menuBar->Append(viewMenu, L"&View");
+	m_totalPowerGraph = new GraphPanel(parent, "Total Power", "W");
+	m_totalPowerGraph->SetYRange(0.0, RoundUpWattsTo50(totalMax));
+	m_totalPowerGraph->SetYMode(GraphYMode::Watts);
+	m_totalPowerGraph->SetTickCount(4);
+	container->Add(m_totalPowerGraph, 1, wxEXPAND | wxLEFT | wxRIGHT, 5);
+
+	m_viewToggles["Total Power"] = m_totalPowerGraph;
+	m_toggleGroups["Total Power"].items.push_back(
+		container->GetItem(static_cast<size_t>(container->GetItemCount() - 1)));
+	m_toggleGroups["Total Power"].deltaH = kGraphHeightPx;
+}
+
+void MainFrame::BuildViewMenu(wxMenuBar* menuBar, const std::map<std::string, bool>& initialState)
+{
+	wxMenu* vm = new wxMenu();
+
+	auto addToggle = [&](const char* key, const wxString& label)
+	{
+		const int id = wxID_HIGHEST + 100 + static_cast<int>(m_menuIdToKey.size());
+		m_menuIdToKey[id] = key;
+
+		bool checked = true;
+		const auto itS = initialState.find(key);
+		if (itS != initialState.end()) checked = itS->second;
+
+		wxMenuItem* mi = vm->AppendCheckItem(id, label);
+		mi->Check(checked);
+
+		Bind(wxEVT_MENU, &MainFrame::OnViewToggle, this, id);
+	};
+
+	if (m_viewToggles.count("CPU Load"))  addToggle("CPU Load",  "CPU Load");
+	if (m_viewToggles.count("RAM Usage")) addToggle("RAM Usage", "RAM Usage");
+	if (m_viewToggles.count("CPU Power")) addToggle("CPU Power", "CPU Power");
+	if (m_viewToggles.count("CPU Temp"))  addToggle("CPU Temp",  "CPU Temperature");
+	if (m_viewToggles.count("CPU Fan"))   addToggle("CPU Fan",   "CPU Fan Speed");
+
+	const bool anyGpu = !m_gpuGroupToggles.empty();
+	if (anyGpu)
+	{
+		vm->AppendSeparator();
+		addToggle("gpu_load",  "GPU Load");
+		addToggle("gpu_temp",  "GPU Temp");
+		addToggle("gpu_vram",  "GPU VRAM");
+		addToggle("gpu_fan",   "GPU Fan");
+		addToggle("gpu_power", "GPU Power");
+	}
+
+	if (m_viewToggles.count("Total Power"))
+	{
+		vm->AppendSeparator();
+		addToggle("Total Power", "Total Power");
+	}
+
+	menuBar->Append(vm, "&View");
 }
 
 void MainFrame::OnViewToggle(wxCommandEvent& evt)
 {
-    auto it = m_menuIdToKey.find(evt.GetId());
-    if (it == m_menuIdToKey.end()) return;
-    const std::string key = it->second;
+	const auto itK = m_menuIdToKey.find(evt.GetId());
+	if (itK == m_menuIdToKey.end()) return;
 
-    std::map<std::string, bool> state;
-    Config::LoadViewMenuState(state);
+	// Show/hide the panels and resize the window by exactly one row.
+	ApplyHeightAdjustment(itK->second, evt.IsChecked());
 
-    if (key == "gpu_load" || key == "gpu_temp" || key == "gpu_vram" ||
-             key == "gpu_fan"  || key == "gpu_power")
-    {
-        // Unified GPU group toggle: show/hide this metric across ALL GPUs.
-        bool show = evt.IsChecked();
-        for (auto& grp : m_gpuGroupToggles)
-        {
-            if (grp.key != key) continue;
-            for (GraphPanel* p : grp.panels)
-                p->Show(show);
-            state[grp.key] = show;
-        }
-    }
-    else
-    {
-        // Single graph toggle.
-        auto pit = m_viewToggles.find(key);
-        if (pit != m_viewToggles.end())
-        {
-            bool show = evt.IsChecked();
-            pit->second->Show(show);
-            state[key] = show;
-        }
-    }
+	// Persist the checked state of every toggle in the View menu.
+	wxMenuBar* mb = GetMenuBar();
+	if (!mb) return;
+	for (size_t m = 0; m < mb->GetMenuCount(); ++m)
+	{
+		wxMenu* menu = mb->GetMenu(m);
+		if (!menu) continue;
 
-    this->Layout();
-    AdjustHeight(key, evt.IsChecked());
-    Config::SaveViewMenuState(state);
+		std::map<std::string, bool> state;
+		bool foundAny = false;
+		for (size_t i = 0; i < menu->GetMenuItemCount(); ++i)
+		{
+			wxMenuItem* mi = menu->FindItemByPosition(i);
+			if (!mi || !mi->IsCheckable()) continue;
+			const auto itId = m_menuIdToKey.find(mi->GetId());
+			if (itId == m_menuIdToKey.end()) continue;
+			state[itId->second] = mi->IsChecked();
+			foundAny = true;
+		}
+		if (foundAny) { Config::SaveViewMenuState(state); break; }
+	}
 }
 
-// Measure the natural (unconstrained) height of every toggleable row.
-// Called once after UI is built so we know exactly how much to add or
-// remove when a row is shown or hidden — avoids relying on sizer min-size
-// which does not correctly account for hidden children.
-void MainFrame::MeasureRows()
+void MainFrame::ApplyHeightAdjustment(const std::string& key, bool showingItem)
 {
-    if (!m_content) return;
-    m_content->GetSizer()->Layout();
-    this->Layout();
-    m_lastFullSize = GetSize();
+	wxSizer* sizer = GetSizer();
+	if (!sizer) return;
 
-    // Each GraphPanel has SetMinSize(wxSize(160, 40)). The actual rendered
-    // height depends on panel width (aspect ratio ~4:1), so at 640 px wide
-    // each panel is roughly 160 px tall. Add spacers (~12 px) per row.
-    // Measure Total Power specifically since it's full-width (tallest).
-    const int kPanelMinH = 40;
-    const int kSpacerH   = 12;
+	// 1. Find the panels controlled by this menu key.
+	std::vector<GraphPanel*> panels;
+	const auto itG = std::find_if(
+		m_gpuGroupToggles.begin(), m_gpuGroupToggles.end(),
+		[&key](const GpuGroupToggle& g) { return g.key == key; });
+	if (itG != m_gpuGroupToggles.end())
+	{
+		panels = itG->panels;
+	}
+	else
+	{
+		const auto itV = m_viewToggles.find(key);
+		if (itV != m_viewToggles.end() && itV->second) panels.push_back(itV->second);
+	}
+	if (panels.empty()) return;
 
-    if (m_totalPowerGraph)
-    {
-        // Full-width panel: height scales with window width.
-        // At current width, estimate panel height from aspect ratio.
-        const int curW     = GetSize().GetWidth();
-        const int tpPanelH = std::max(kPanelMinH, curW / 4);
-        const int tpRowH   = tpPanelH + kSpacerH;
-        for (const auto& kv : m_viewToggles)
-            m_rowHeights[kv.first] = tpRowH;
-        for (const auto& grp : m_gpuGroupToggles)
-            m_rowHeights[grp.key] = tpRowH;
-        LOGI("Total Power row height: %d px (panel=%d + spacer=%d)",
-             tpRowH, tpPanelH, kSpacerH);
-    }
-    else
-    {
-        const int kRowH = 80;
-        for (const auto& kv : m_viewToggles)
-            m_rowHeights[kv.first] = kRowH;
-        for (const auto& grp : m_gpuGroupToggles)
-            m_rowHeights[grp.key] = kRowH;
-    }
+	// 2. Minimal content height before the change.
+	const wxPoint pos = GetPosition();
+	const int oldMinH = sizer->CalcMin().y;
 
-    LOGI("Row heights:");
-    for (const auto& kv : m_rowHeights)
-        LOGI("  %-20s %d px", kv.first.c_str(), kv.second);
+	// 3. Toggle visibility: a hidden window is ignored by CalcMin(), so the
+	//    content height changes by roughly the row minimum (kGraphHeightPx).
+	for (GraphPanel* p : panels)
+	{
+		if (p) p->Show(showingItem);
+	}
+
+	const int newMinH = sizer->CalcMin().y;
+	const wxSize cs = GetClientSize();
+	int newH = cs.y - (oldMinH - newMinH);
+	if (newH < newMinH) newH = newMinH;
+	const int frameMinH = GetMinSize().y;
+	if (newH < frameMinH) newH = frameMinH;
+
+	// 4. Resize without moving the window position.
+	SetClientSize(cs.x, newH);
+	Layout();
+	SetPosition(pos);
 }
 
-// Adjust window height after a visibility toggle. Only changes height, never
-// position — avoids Windows repositioning the window off-screen.
-void MainFrame::AdjustHeight(const std::string& key, bool showingItem)
+void MainFrame::OnTimer(wxTimerEvent&)
 {
-    const wxPoint pos = GetPosition();
-    const wxSize  cur = GetSize();
+	if (!m_uiCreated) return;
 
-    if (showingItem)
-    {
-        LOGI("AdjustHeight [%s] SHOW: restore %dx%d", key.c_str(),
-             m_lastFullSize.GetWidth(), m_lastFullSize.GetHeight());
-        if (m_lastFullSize.GetHeight() > cur.GetHeight())
-            SetSize(pos.x, pos.y, m_lastFullSize.GetWidth(), m_lastFullSize.GetHeight());
-        return;
-    }
+	// SampleLoad() must run on the GUI thread each tick: it reads the PDH
+	// counter and refreshes the CPU power estimate (powerWatts).
+	m_cpu.SampleLoad();
 
-    if (!m_content) return;
-    wxBoxSizer* container = dynamic_cast<wxBoxSizer*>(m_content->GetSizer());
-    if (!container) return;
+	const CpuMetrics cpu = m_cpu.GetMetrics();
+	const RamMetrics ram = m_ram.GetMetrics();
+	const std::vector<GpuMetrics> gpus =
+		m_gpu.IsAvailable() ? m_gpu.GetMetrics() : std::vector<GpuMetrics>();
 
-    LOGI("AdjustHeight [%s] HIDE: cur=%dx%d lastFull=%dx%d", key.c_str(),
-         cur.GetWidth(), cur.GetHeight(), m_lastFullSize.GetWidth(), m_lastFullSize.GetHeight());
+	// React to live light/dark theme switches.
+	if (Theme::Update()) ApplyTheme();
 
-    // Save proportions on ALL items (visible and hidden), then zero them out.
-    struct ItemState { wxSizerItem* item; int prop; };
-    std::vector<ItemState> saved;
-    for (size_t i = 0; i < container->GetItemCount(); ++i)
-    {
-        wxSizerItem* item = container->GetItem(i);
-        saved.push_back({ item, item->GetProportion() });
-        item->SetProportion(0);
-    }
-    // Recurse into nested sizers of visible windows.
-    ZeroProportionsRecursive(container);
+	// Uptime label.
+	if (m_uptimeText && cpu.uptimeMs > 0)
+		m_uptimeText->SetLabel(" Uptime: " + FormatUptime(cpu.uptimeMs));
 
-    // Fit the content panel to its natural (min-size) size.
-    m_content->Fit();
-    const int newH = m_content->GetSize().GetHeight();
+	// CPU / RAM graphs.
+	if (m_cpuLoadGraph && cpu.loadPercent >= 0.0)
+		m_cpuLoadGraph->AddPoint(cpu.loadPercent);
+	if (m_ramUsageGraph && ram.totalBytes > 0)
+	{
+		// Guard against an unsigned underflow if the counters are inconsistent.
+		const uint64_t usedBytes = (ram.freeBytes < ram.totalBytes)
+			? (ram.totalBytes - ram.freeBytes) : 0;
+		m_ramUsageGraph->AddPoint(BytesToGbs(usedBytes));
+	}
 
-    // Restore proportions.
-    for (auto& s : saved)
-        s.item->SetProportion(s.prop);
+	// CPU sensors.
+	if (m_cpuTempGraph && cpu.temperature >= 0.0)
+		m_cpuTempGraph->AddPoint(cpu.temperature);
+	if (m_cpuFanGraph && cpu.fanRpm > 0)
+		m_cpuFanGraph->AddPoint(static_cast<double>(cpu.fanRpm));
 
-    const wxSize minSz = GetMinSize();
-    const int finalH = std::max(newH, minSz.GetHeight());
-    if (finalH != cur.GetHeight())
-        SetSize(pos.x, pos.y, cur.GetWidth(), finalH);
+	// GPU graphs + total power accumulator.
+	double totalWatts = (cpu.powerWatts > 0.0) ? cpu.powerWatts : 0.0;
+	const size_t n = std::min(gpus.size(), m_gpuPanels.size());
+	for (size_t i = 0; i < n; ++i)
+	{
+		const GpuMetrics& gpu = gpus[i];
+		GpuPanelData& d = m_gpuPanels[i];
+
+		if (d.loadGraph && gpu.loadPercent >= 0.0) d.loadGraph->AddPoint(gpu.loadPercent);
+		if (d.tempGraph && gpu.temperature >= 0.0) d.tempGraph->AddPoint(gpu.temperature);
+		if (d.vramGraph && gpu.vramTotalBytes > 0)
+			d.vramGraph->AddPoint(BytesToGbs(gpu.vramUsedBytes));
+		if (d.fanGraph)
+		{
+			if (gpu.fanPercent >= 0.0)      d.fanGraph->AddPoint(gpu.fanPercent);
+			else if (gpu.fanRpm >= 0)       d.fanGraph->AddPoint(static_cast<double>(gpu.fanRpm));
+		}
+		if (d.powerGraph && gpu.powerWatts >= 0.0) d.powerGraph->AddPoint(gpu.powerWatts);
+
+		if (gpu.powerWatts > 0.0) totalWatts += gpu.powerWatts;
+	}
+
+	if (m_cpuPowerGraph && cpu.powerWatts > 0.0)
+		m_cpuPowerGraph->AddPoint(cpu.powerWatts);
+	if (m_totalPowerGraph)
+		m_totalPowerGraph->AddPoint(totalWatts);
 }
 
-// Recursively zero proportions on all items in nested sizers.
-void MainFrame::ZeroProportionsRecursive(wxBoxSizer* sizer)
+void MainFrame::OnClose(wxCloseEvent& evt)
 {
-    for (size_t i = 0; i < sizer->GetItemCount(); ++i)
-    {
-        wxSizerItem* item = sizer->GetItem(i);
-        if (item->GetProportion() != 0)
-            item->SetProportion(0);
-        wxWindow* win = item->GetWindow();
-        if (win && win->IsShown())
-        {
-            wxBoxSizer* child = dynamic_cast<wxBoxSizer*>(win->GetSizer());
-            if (child) ZeroProportionsRecursive(child);
-        }
-    }
+	int x = 0, y = 0, w = 0, h = 0;
+	GetPosition(&x, &y);
+	GetClientSize(&w, &h);
+	Config::SaveWindowPosition(x, y, w, h);
+
+	if (m_timer.IsRunning()) m_timer.Stop();
+	m_cpu.Stop();
+	m_ram.Stop();
+	if (m_gpu.IsAvailable()) m_gpu.Stop();
+
+	evt.Skip();
 }
 
-// ----------------------------------------------------------------------------
-// CPU / RAM block:
-//   row 1: CPU Load + RAM Usage        (always present, side by side)
-//   row 2: CPU Temp                   (only when the sensor exists)
-//   row 3: CPU Fan Speed              (only when the sensor exists)
-// ----------------------------------------------------------------------------
-void MainFrame::BuildCpuSection(wxBoxSizer* container, wxWindow* parent)
+void MainFrame::ApplyTheme()
 {
-    const auto cm = m_cpu.GetMetrics();
-    const auto rm = m_ram.GetMetrics();
+	const wxColour bg   = Theme::Bg();
+	const wxColour card = Theme::Card();
+	const wxColour text = Theme::Text();
+	const wxColour sub  = Theme::SubText();
 
-    // Section header with CPU model name and digital uptime on the right.
-    {
-        wxBoxSizer* hdr = new wxBoxSizer(wxHORIZONTAL);
+	SetBackgroundColour(bg);
+	if (m_header)  m_header->SetBackgroundColour(card);
+	if (m_content) m_content->SetBackgroundColour(bg);
 
-        wxString cpuLabel = L"CPU";
-        if (!cm.cpuName.empty())
-            cpuLabel += L"  " + wxString(cm.cpuName.c_str(), wxConvUTF8);
-        else
-            cpuLabel += L"  (N/A)";
+	for (wxStaticText* t : m_primaryTexts)
+		if (t) t->SetForegroundColour(text);
+	for (wxStaticText* t : m_secondaryTexts)
+		if (t) t->SetForegroundColour(sub);
 
-        wxStaticText* st = new wxStaticText(parent, wxID_ANY, cpuLabel);
-        st->SetFont(wxFont(11, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL,
-                           wxFONTWEIGHT_BOLD));
-        st->SetForegroundColour(Theme::Text());
-        AddThemedText(st, true);
-        hdr->Add(st, 0, wxTOP | wxBOTTOM, 2);
+	// GPU section boxes: wxStaticBox defaults to the system color, recolor it
+	// to match the graph titles.
+	for (wxWindow* b : m_gpuBoxes)
+	{
+		if (!b) continue;
+		b->SetForegroundColour(text);
+		b->Refresh();
+	}
 
-        hdr->AddStretchSpacer();
-
-        m_uptimeText = new wxStaticText(parent, wxID_ANY, L"Uptime 00:00:00:00:00:00");
-        m_uptimeText->SetFont(wxFont(9, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL,
-                                     wxFONTWEIGHT_NORMAL));
-        m_uptimeText->SetForegroundColour(Theme::SubText());
-        AddThemedText(m_uptimeText, false);
-        hdr->Add(m_uptimeText, 0, wxALIGN_CENTER_VERTICAL | wxBOTTOM, 2);
-
-        container->Add(hdr, 0, wxEXPAND);
-    }
-
-    // ---- Row 1: CPU Load (0..100%) + RAM Usage (0..total GB) side by side ----
-    {
-        wxBoxSizer* row = new wxBoxSizer(wxHORIZONTAL);
-        row->AddSpacer(4);
-
-        m_cpuLoadGraph = new GraphPanel(parent, L"CPU Load", L"%");
-        m_cpuLoadGraph->SetYRange(0.0, 100.0);
-        m_cpuLoadGraph->SetYMode(GraphYMode::Percent);
-        row->Add(m_cpuLoadGraph, 1, wxEXPAND | wxBOTTOM, 2);
-        m_viewToggles["CPU Load"] = m_cpuLoadGraph;
-
-        m_ramUsageGraph = new GraphPanel(parent, L"RAM Usage", L"GB");
-        if (rm.totalBytes > 0)
-        {
-            const double totalGb = std::round(static_cast<double>(rm.totalBytes) /
-                                              1073741824.0);
-            m_ramUsageGraph->SetYRange(0.0, totalGb);
-        }
-        else
-        {
-            m_ramUsageGraph->SetYRange(0.0, 16.0);
-        }
-        m_ramUsageGraph->SetYMode(GraphYMode::Gigabytes);
-        // Horizontal gap via a separate spacer. wxSizer applies ONE border value
-        // to every side flag, so "wxBOTTOM | wxLEFT, 8" would give this graph an
-        // 8px bottom border too (the left graph has 2px) and render the right
-        // card 6px shorter. A spacer occupies only the main axis, so heights match.
-        row->AddSpacer(8);
-        row->Add(m_ramUsageGraph, 1, wxEXPAND | wxBOTTOM, 2);
-        m_viewToggles["RAM Usage"] = m_ramUsageGraph;
-
-        row->AddSpacer(4);
-        container->Add(row, 1, wxEXPAND);
-        container->AddSpacer(2);
-    }
-
-    // ---- CPU Power (watts, full width row) ----
-    {
-        wxBoxSizer* row = new wxBoxSizer(wxHORIZONTAL);
-        row->AddSpacer(4);
-        m_cpuPowerGraph = new GraphPanel(parent, L"CPU Power", L"W");
-        const double cpuTdp = (cm.tdpWatts > 0.0) ? cm.tdpWatts : 125.0;
-        m_cpuPowerGraph->SetYRange(0.0, cpuTdp);
-        m_cpuPowerGraph->SetYMode(GraphYMode::Watts);
-        row->Add(m_cpuPowerGraph, 1, wxEXPAND | wxBOTTOM, 2);
-        row->AddSpacer(4);
-        container->Add(row, 1, wxEXPAND);
-        container->AddSpacer(2);
-        m_viewToggles["CPU Power"] = m_cpuPowerGraph;
-    }
-
-    // ---- Row 2: CPU Temp (only when available) ----
-    const bool hasTemp = (cm.temperature >= 0.0);
-    const bool hasFan  = (cm.fanRpm >= 0);
-
-    if (hasTemp)
-    {
-        wxBoxSizer* row = new wxBoxSizer(wxHORIZONTAL);
-        row->AddSpacer(4);
-        m_cpuTempGraph = new GraphPanel(parent, L"CPU Temp", L"C");
-        m_cpuTempGraph->SetYRange(0.0, 100.0);
-        m_cpuTempGraph->SetAlarmThreshold(kAlarmTempC);
-        m_cpuTempGraph->SetYMode(GraphYMode::Celsius);
-        row->Add(m_cpuTempGraph, 1, wxEXPAND | wxBOTTOM, 2);
-        row->AddSpacer(4);
-        container->Add(row, 1, wxEXPAND);
-        container->AddSpacer(2);
-        m_viewToggles["CPU Temp"] = m_cpuTempGraph;
-    }
-
-    // ---- Row 3: CPU Fan Speed (only when available) ----
-    if (hasFan)
-    {
-        wxBoxSizer* row = new wxBoxSizer(wxHORIZONTAL);
-        row->AddSpacer(4);
-        m_cpuFanGraph = new GraphPanel(parent, L"CPU Fan Speed", L"RPM");
-        row->Add(m_cpuFanGraph, 1, wxEXPAND | wxBOTTOM, 2);
-        row->AddSpacer(4);
-        container->Add(row, 1, wxEXPAND);
-        container->AddSpacer(2);
-        m_viewToggles["CPU Fan"] = m_cpuFanGraph;
-    }
-    else if (!hasTemp)
-    {
-        LOGI("CPU temp/fan sensors unavailable - sensor rows hidden.");
-    }
+	Refresh();
 }
 
-// ----------------------------------------------------------------------------
-// GPU Section - dynamic per GPU:
-//   row 1: Load + Temp
-//   row 2: VRAM Usage + Fan
-// ----------------------------------------------------------------------------
-void MainFrame::BuildGpuSection(wxBoxSizer* container, wxWindow* parent)
+void MainFrame::AddThemedText(wxStaticText* st, bool primary)
 {
-    if (!m_gpu.IsAvailable())
-    {
-        wxStaticText* info = new wxStaticText(parent, wxID_ANY,
-                                              L"NVML / NVAPI not available - no Nvidia GPU detected.");
-        info->SetForegroundColour(Theme::SubText());
-        AddThemedText(info, false);
-        container->Add(info, 0, wxTOP | wxLEFT, 16);
-        return;
-    }
-
-    // Initial enumeration. Each GPU gets exactly ONE GpuPanelData with all 4 graphs.
-    auto gpus = m_gpu.GetMetrics();
-    for (size_t g = 0; g < gpus.size(); ++g)
-    {
-        const auto& meta = gpus[g];
-
-        // GPU name label.
-        {
-            wxString name = L"GPU " + wxString::Format("%zu", g);
-            if (!meta.name.empty())
-                name += L"  " + wxString(meta.name.c_str(), wxConvUTF8);
-            if (meta.vramTotalBytes > 0)
-            {
-                const double vramGb = std::round(
-                    static_cast<double>(meta.vramTotalBytes) / 1073741824.0);
-                name += L"  " + wxString::Format(L"%.0fGB", vramGb);
-            }
-            wxStaticText* st = new wxStaticText(parent, wxID_ANY, name);
-            st->SetFont(wxFont(10, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL,
-                               wxFONTWEIGHT_BOLD));
-            st->SetForegroundColour(Theme::SubText());
-            AddThemedText(st, false);
-            container->Add(st, 0, wxTOP | wxBOTTOM, 2);
-        }
-
-        // Group sizer: two rows per GPU. ONE GpuPanelData holds all graphs for this GPU.
-        wxBoxSizer* group = new wxBoxSizer(wxVERTICAL);
-
-        auto& pd = m_gpuPanels.emplace_back(GpuPanelData{});
-        pd.name = meta.name;
-
-        // ---- Row 1: Load + Temp ----
-        {
-            wxBoxSizer* row = new wxBoxSizer(wxHORIZONTAL);
-            row->AddSpacer(4);
-
-            pd.loadGraph = new GraphPanel(parent, L"Load", L"%");
-            pd.loadGraph->SetYRange(0.0, 100.0);
-            pd.loadGraph->SetYMode(GraphYMode::Percent);
-            pd.loadGraph->SetPurple(true);
-            row->Add(pd.loadGraph, 1, wxEXPAND | wxBOTTOM, 2);
-
-            // Horizontal gap as a separate spacer (see CPU row): a combined
-            // wxBOTTOM | wxLEFT border would give the right graph an 8px bottom
-            // border vs 2px on the left, making the right card 6px shorter.
-            row->AddSpacer(8);
-
-            if (meta.temperature >= 0.0)
-            {
-                pd.tempGraph = new GraphPanel(parent, L"Temp", L"C");
-                pd.tempGraph->SetYRange(0.0, 100.0);
-                pd.tempGraph->SetAlarmThreshold(kAlarmTempC);
-                pd.tempGraph->SetYMode(GraphYMode::Celsius);
-                pd.tempGraph->SetPurple(true);
-                row->Add(pd.tempGraph, 1, wxEXPAND | wxBOTTOM, 2);
-            }
-            else
-            {
-                // Placeholder to keep layout consistent.
-                auto* ph = new GraphPanel(parent, L"Temp", L"C");
-                ph->SetYRange(0.0, 100.0);
-                ph->SetYMode(GraphYMode::Celsius);
-                ph->SetPurple(true);
-                row->Add(ph, 1, wxEXPAND | wxBOTTOM, 2);
-            }
-
-            row->AddSpacer(4);
-            group->Add(row, 1, wxEXPAND);
-        }
-
-        // ---- Row 2: VRAM + Fan ----
-        {
-            wxBoxSizer* row = new wxBoxSizer(wxHORIZONTAL);
-            row->AddSpacer(4);
-
-            pd.vramGraph = new GraphPanel(parent, L"VRAM", L"GB");
-            if (meta.vramTotalBytes > 0)
-            {
-                const double totalGb = std::round(
-                    static_cast<double>(meta.vramTotalBytes) / 1073741824.0);
-                pd.vramGraph->SetYRange(0.0, totalGb);
-            }
-            else
-            {
-                pd.vramGraph->SetYRange(0.0, 16.0);
-            }
-            pd.vramGraph->SetYMode(GraphYMode::Gigabytes);
-            pd.vramGraph->SetPurple(true);
-            row->Add(pd.vramGraph, 1, wxEXPAND | wxBOTTOM, 2);
-
-            // Horizontal gap as a separate spacer (see Row 1).
-            row->AddSpacer(8);
-
-            if (meta.fanPercent >= 0.0)
-            {
-                pd.fanGraph = new GraphPanel(parent, L"Fan", L"%");
-                pd.fanGraph->SetYRange(0.0, 100.0);
-                pd.fanGraph->SetYMode(GraphYMode::Percent);
-                pd.fanGraph->SetPurple(true);
-                row->Add(pd.fanGraph, 1, wxEXPAND | wxBOTTOM, 2);
-            }
-            else
-            {
-                auto* ph = new GraphPanel(parent, L"Fan", L"%");
-                ph->SetYRange(0.0, 100.0);
-                ph->SetYMode(GraphYMode::Percent);
-                ph->SetPurple(true);
-                row->Add(ph, 1, wxEXPAND | wxBOTTOM, 2);
-            }
-
-            row->AddSpacer(4);
-            group->Add(row, 1, wxEXPAND);
-        }
-
-        // ---- Row 3: Power draw (watts, full width of the GPU group) ----
-        {
-            wxBoxSizer* row = new wxBoxSizer(wxHORIZONTAL);
-            row->AddSpacer(4);
-
-            pd.powerGraph = new GraphPanel(parent, L"Power", L"W");
-            // Y maximum: NVML power limit, falling back to the static TDP table.
-            double gpuMax = meta.powerLimitWatts;
-            if (gpuMax <= 0.0)
-                gpuMax = static_cast<double>(PowerTable::GetGpuTdp(meta.name));
-            if (gpuMax <= 0.0)
-                gpuMax = 100.0;
-            pd.powerGraph->SetYRange(0.0, gpuMax);
-            pd.powerGraph->SetYMode(GraphYMode::Watts);
-            pd.powerGraph->SetPurple(true);
-            row->Add(pd.powerGraph, 1, wxEXPAND | wxBOTTOM, 2);
-
-            row->AddSpacer(4);
-            group->Add(row, 1, wxEXPAND);
-        }
-
-        group->AddSpacer(2);
-        container->Add(group, 2, wxEXPAND);
-    }
-
-    container->AddSpacer(2);
-}
-
-// ----------------------------------------------------------------------------
-// Total Power row - sum of CPU and every GPU power draw, full window width.
-// ----------------------------------------------------------------------------
-void MainFrame::BuildTotalPowerRow(wxBoxSizer* container, wxWindow* parent)
-{
-    // Y axis maximum: CPU TDP + every GPU power limit/TDP fallback, then
-    // snapped up to the next clean multiple of 50 (avoids ugly tick labels).
-    double maxY = 0.0;
-    const auto cm = m_cpu.GetMetrics();
-    maxY += (cm.tdpWatts > 0.0) ? cm.tdpWatts : 125.0;
-
-    const auto gpus = m_gpu.GetMetrics();
-    for (const auto& meta : gpus)
-    {
-        double gMax = meta.powerLimitWatts;
-        if (gMax <= 0.0)
-            gMax = static_cast<double>(PowerTable::GetGpuTdp(meta.name));
-        if (gMax <= 0.0)
-            gMax = 100.0;
-        maxY += gMax;
-    }
-    maxY = std::ceil(maxY / 50.0) * 50.0;
-
-    wxBoxSizer* row = new wxBoxSizer(wxHORIZONTAL);
-    row->AddSpacer(4);
-    m_totalPowerGraph = new GraphPanel(parent, L"Total Power (CPU + GPU)", L"W");
-    m_totalPowerGraph->SetYRange(0.0, maxY);
-    m_totalPowerGraph->SetYMode(GraphYMode::Watts);
-    // Four evenly-spaced labels: 0, max/3, 2*max/3, max — gives a clean layout
-    // regardless of panel height.
-    m_totalPowerGraph->SetTickCount(4);
-    row->Add(m_totalPowerGraph, 1, wxEXPAND | wxBOTTOM, 2);
-    row->AddSpacer(4);
-    container->Add(row, 1, wxEXPAND);
-    container->AddSpacer(2);
-    m_viewToggles["Total Power"] = m_totalPowerGraph;
+	if (!st) return;
+	if (primary) m_primaryTexts.push_back(st);
+	else         m_secondaryTexts.push_back(st);
 }
