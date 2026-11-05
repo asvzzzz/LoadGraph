@@ -28,6 +28,9 @@ private:
     // Close handler - saves window position/size to registry before closing.
     void OnClose(wxCloseEvent& evt);
 
+    // Size handler.
+    void OnSize(wxSizeEvent& evt);
+
     // Re-apply the system color scheme to all controls (light/dark switch).
     void ApplyTheme();
 

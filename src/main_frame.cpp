@@ -12,6 +12,7 @@
 wxBEGIN_EVENT_TABLE(MainFrame, wxFrame)
     EVT_TIMER(wxID_ANY, MainFrame::OnTimer)
     EVT_CLOSE(MainFrame::OnClose)
+    EVT_SIZE(MainFrame::OnSize)
 wxEND_EVENT_TABLE()
 
 static const double kAlarmTempC  = 80.0;
@@ -336,11 +337,13 @@ void MainFrame::BuildGpuSection(wxBoxSizer* container, wxWindow* parent)
 
 		const wxString gpuTitle = wxString::Format("GPU %d: ", static_cast<int>(i))
 			+ wxString::FromUTF8(gpu.name);
-		wxStaticBoxSizer* box = new wxStaticBoxSizer(wxVERTICAL, parent, gpuTitle);
-		// Same font as the CPU label in the header (11 pt bold).
-		box->GetStaticBox()->SetFont(
+
+		// Title label as a direct child of the container (proportion=0, no stretch).
+		wxStaticText* gpuTitleLabel = new wxStaticText(parent, wxID_ANY, gpuTitle);
+		gpuTitleLabel->SetFont(
 			wxFont(11, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_BOLD));
-		m_gpuBoxes.push_back(box->GetStaticBox());
+		m_gpuBoxes.push_back(gpuTitleLabel);
+		container->Add(gpuTitleLabel, 0, wxLEFT | wxRIGHT, 5);
 
 		GpuPanelData data;
 		data.name = wxString::FromUTF8(gpu.name);
@@ -370,8 +373,8 @@ void MainFrame::BuildGpuSection(wxBoxSizer* container, wxWindow* parent)
 		}
 		if (row1->GetItemCount() > 0)
 		{
-			box->Add(row1, 1, wxEXPAND);
-			box->AddSpacer(5);
+			container->Add(row1, 1, wxEXPAND);
+			container->AddSpacer(5);
 		}
 
 		// Row 2: VRAM + Fan.
@@ -400,8 +403,8 @@ void MainFrame::BuildGpuSection(wxBoxSizer* container, wxWindow* parent)
 		}
 		if (row2->GetItemCount() > 0)
 		{
-			box->Add(row2, 1, wxEXPAND);
-			box->AddSpacer(5);
+			container->Add(row2, 1, wxEXPAND);
+			container->AddSpacer(5);
 		}
 
 		// Row 3: Power (rounded up to the next multiple of 50 W).
@@ -416,12 +419,11 @@ void MainFrame::BuildGpuSection(wxBoxSizer* container, wxWindow* parent)
 			if (limit <= 0.0) limit = 400.0;
 			data.powerGraph->SetYRange(0.0, RoundUpWattsTo50(limit * 1.1));
 
-			box->Add(data.powerGraph, 1, wxEXPAND | wxLEFT | wxRIGHT, 5);
+			container->Add(data.powerGraph, 1, wxEXPAND | wxLEFT | wxRIGHT, 5);
 			addPanel("gpu_power", data.powerGraph);
 		}
 
 		m_gpuPanels.push_back(data);
-		container->Add(box, 2, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 5);
 	}
 }
 
@@ -653,6 +655,11 @@ void MainFrame::OnClose(wxCloseEvent& evt)
 	m_ram.Stop();
 	if (m_gpu.IsAvailable()) m_gpu.Stop();
 
+	evt.Skip();
+}
+
+void MainFrame::OnSize(wxSizeEvent& evt)
+{
 	evt.Skip();
 }
 
