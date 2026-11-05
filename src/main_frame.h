@@ -98,6 +98,9 @@ private:
     // names match the rest of the labels (wxStaticBox uses the system color).
     std::vector<wxWindow*> m_gpuBoxes;
 
+    // Flag set by OnSize to request border redraw on next timer tick.
+    bool m_needFrameRefresh = false;
+
     // View menu state persistence. Keys map to graph panel pointers so the
     // toggle handler can show/hide a specific chart on demand.
     std::map<std::string, GraphPanel*> m_viewToggles;

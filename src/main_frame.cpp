@@ -633,6 +633,13 @@ void MainFrame::OnTimer(wxTimerEvent&)
 	if (m_totalPowerGraph)
 		m_totalPowerGraph->AddPoint(totalWatts);
 
+	// Redraw section borders after layout changes.
+	if (m_needFrameRefresh)
+	{
+		RefreshSectionBoxes();
+		Refresh();
+		m_needFrameRefresh = false;
+	}
 }
 
 void MainFrame::OnClose(wxCloseEvent& evt)
@@ -754,13 +761,23 @@ void MainFrame::RefreshSectionBoxes()
 void MainFrame::OnSize(wxSizeEvent& evt)
 {
 	RefreshSectionBoxes();
+	m_needFrameRefresh = true;
 	Refresh();
 	evt.Skip();
 }
 
 void MainFrame::OnPaint(wxPaintEvent& evt)
 {
-	// Border frames are drawn inside each GraphPanel::OnPaint.
+	wxPaintDC dc(this);
+	const wxColour frameCol(200, 200, 200);
+	dc.SetPen(wxPen(frameCol, 1));
+	dc.SetBrush(*wxTRANSPARENT_BRUSH);
+	for (const SectionBox& sb : m_sectionBoxes)
+	{
+		const wxRect& r = sb.rect;
+		dc.DrawRectangle(r.x + 1, r.y + 1, r.width - 2, r.height - 2);
+	}
+	LOGI("OnPaint: %d frames", static_cast<int>(m_sectionBoxes.size()));
 	evt.Skip();
 }
 
