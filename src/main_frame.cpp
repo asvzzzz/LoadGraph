@@ -35,25 +35,34 @@ static wxString FormatUptime(uint64_t totalMs)
 	uint64_t mi = s / 60ULL;       s %= 60ULL;
 	uint64_t ss = s;
 
-	// Build a compact duration string from non-zero components, joined by colons.
-	// Leading and intermediate zero groups are omitted: 2 days 39 min 8 sec ->
-	// "02:39:08", 90 sec -> "01:30", zero -> "0s".
-	std::vector<uint64_t> parts;
-	if (yy > 0) parts.push_back(yy);
-	if (mm > 0) parts.push_back(mm);
-	if (dd > 0) parts.push_back(dd);
-	if (hh > 0) parts.push_back(hh);
-	if (mi > 0) parts.push_back(mi);
-	if (ss > 0) parts.push_back(ss);
-
-	if (parts.empty()) return "0s";
-
+	// Format as "YY:MM:DD HH:MI:SS", skipping only leading zero groups.
+	// Once a non-zero group is emitted, all remaining groups are shown too
+	// (including trailing zeros such as SS=00). If everything is zero the
+	// full six-field string is returned.
+	bool started = false;
 	wxString result;
-	for (size_t i = 0; i < parts.size(); ++i)
-	{
-		if (i > 0) result += ":";
-		result += wxString::Format("%02llu", static_cast<unsigned long long>(parts[i]));
-	}
+
+	auto appendField = [&](uint64_t val) {
+		if (!started && val == 0) return;
+		started = true;
+		if (!result.IsEmpty()) result += ":";
+		result += wxString::Format("%02llu", static_cast<unsigned long long>(val));
+	};
+
+	appendField(yy);
+	appendField(mm);
+	appendField(dd);
+
+	bool hasDate = started; // dd was the last date field; if we reached here, date is present.
+	bool hasTime = (hh > 0 || mi > 0 || ss > 0) || started;
+	if (hasDate && hasTime && result.Last() == ':')
+		result[(size_t)(result.Length() - 1)] = ' ';
+
+	appendField(hh);
+	appendField(mi);
+	appendField(ss);
+
+	if (result.IsEmpty()) return "00:00:00 00:00:00";
 	return result;
 }
 
