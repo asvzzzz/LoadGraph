@@ -41,17 +41,9 @@ namespace MsrSensor
         HANDLE hThread = GetCurrentThread();
         DWORD_PTR oldAff = SetThreadAffinityMask(hThread, 1);
         if (oldAff == 0)
-        {
-            LOGI("DIAG MSR: SetThreadAffinityMask failed err=%lu",
-                 GetLastError());
             return {0, 0};
-        }
 
         uint32_t lo = RdmsrSafe(msr);
-        // Read high part — __readmsr only returns EAX, so we use a trick:
-        // read the same MSR twice; on x64 the second read gives us EDX in EAX.
-        // Actually this doesn't work — we need inline asm for the full 64-bit value.
-        // For now, assume high part is in a separate read (not reliable).
         uint32_t hi = RdmsrSafe(msr);
 
         SetThreadAffinityMask(hThread, oldAff);
@@ -63,61 +55,18 @@ namespace MsrSensor
     static double DecodeTempFromTherm(uint32_t lo, int8_t tjmax)
     {
         if ((lo & 0x80000000u) == 0)
-        {
-            LOGI("DIAG MSR: THERM_STATUS not valid (0x%08X)", lo);
             return -1.0;
-        }
         const uint32_t do_val = (lo >> 16) & 0x7F;
         const double tempC = static_cast<double>(tjmax) - static_cast<double>(do_val);
         if (tempC < -10.0 || tempC > 120.0)
-        {
-            LOGI("DIAG MSR: implausible therm temp=%.1f C (do=%u)", tempC, do_val);
             return -1.0;
-        }
-        LOGI("DIAG MSR: IA32_THERM_STATUS eax=0x%08X digital_readout=%u "
-             "temp=%.1f C", lo, do_val, tempC);
         return tempC;
-    }
-
-    // Read Tjmax from IA32_TEMPERATURE_TARGET (MSR 0x1A2).
-    // We can only get EAX with __readmsr, but bits[23:16] are in the low part.
-    static int ReadTjmaxFromEax(uint32_t eax)
-    {
-        const int tjmax = (eax >> 16) & 0xFF;
-        if (tjmax <= 0 || tjmax > 150)
-        {
-            LOGI("DIAG MSR: implausible Tjmax=%d from EAX=0x%08X", tjmax, eax);
-            return -1;
-        }
-        LOGI("DIAG MSR: IA32_TEMP_TARGET eax=0x%08X tjmax=%d C", eax, tjmax);
-        return tjmax;
     }
 
     double ProbeTemperature(uint32_t /*family*/, uint32_t model,
                             uint32_t stepping, int8_t tjmax)
     {
-        // --- Try raw rdmsr with core affinity ----------------------------------
-        auto [loT, hiT] = ReadMsrOnCore(kTargetMsr);
-        if (loT != 0xFFFFFFFF)
-        {
-            // Try to get Tjmax from the MSR itself first.
-            int computedTjmax = ReadTjmaxFromEax(loT);
-            if (computedTjmax > 0)
-                tjmax = static_cast<int8_t>(computedTjmax);
-
-            auto [lo, hi] = ReadMsrOnCore(kThermMsr);
-            if (lo != 0xFFFFFFFF)
-            {
-                const double temp = DecodeTempFromTherm(lo, tjmax);
-                if (temp >= 0.0)
-                {
-                    LOGI("DIAG MSR: raw rdmsr -> THERM_STATUS temp=%.1f C", temp);
-                    return temp;
-                }
-            }
-        }
-
-        // --- Try DLL backend as fallback --------------------------------------
+        // --- Backend path (DLL or driver) with core affinity -------------------
         uint32_t dllLo = 0, dllHi = 0;
         if (Ring0Msr::ReadMsr(kTargetMsr, dllLo, dllHi))
         {
@@ -130,14 +79,28 @@ namespace MsrSensor
                 const double temp = DecodeTempFromTherm(dllLo,
                     static_cast<int8_t>(computedTjmax));
                 if (temp >= 0.0)
-                {
-                    LOGI("DIAG MSR: backend -> THERM_STATUS temp=%.1f C", temp);
                     return temp;
-                }
             }
         }
 
-        LOGI("DIAG MSR: all backends failed, using WMI fallback.");
+        // --- Raw rdmsr fallback (EAX only) -------------------------------------
+        auto [loT, hiT] = ReadMsrOnCore(kTargetMsr);
+        if (loT != 0xFFFFFFFF)
+        {
+            int computedTjmax = (loT >> 16) & 0xFF;
+            if (computedTjmax <= 0 || computedTjmax > 150)
+                computedTjmax = static_cast<int>(tjmax);
+
+            auto [lo, hi] = ReadMsrOnCore(kThermMsr);
+            if (lo != 0xFFFFFFFF)
+            {
+                const double temp = DecodeTempFromTherm(lo,
+                    static_cast<int8_t>(computedTjmax));
+                if (temp >= 0.0)
+                    return temp;
+            }
+        }
+
         return -1.0;
     }
 
