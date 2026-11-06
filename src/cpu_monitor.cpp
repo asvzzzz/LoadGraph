@@ -1,4 +1,5 @@
 #include "cpu_monitor.h"
+#include "msr_sensor.h"
 #include "power_table.h"
 #include "logger.h"
 
@@ -179,6 +180,7 @@ CpuMonitor::CpuMonitor()
 
 CpuMonitor::~CpuMonitor()
 {
+    MsrSensor::Shutdown();
     if (m_pdhQuery)
     {
         PdhCloseQuery(m_pdhQuery);
@@ -274,16 +276,53 @@ static void ProbeAllTempSources();
 
 void CpuMonitor::Collect()
 {
-    // Temperature / fan: probe WMI once (guarded). If it fails or crashes we
-    // permanently disable it and keep showing "N/A". After a successful probe
-    // the values are re-read every 5th tick (m_wmiCooldown), otherwise they
-    // would stay frozen at the startup reading - but without paying the WMI
-    // round-trip cost every single second.
+    // Temperature / fan: try MSR (kernel driver or direct rdmsr) first, then WMI.
     double temp = -1.0;
     int    fan  = -1;
     unsigned int filled = 0;
 
-    if (!m_wmiTried)
+    // --- MSR path ----------------------------------------------------------
+    if (!m_msrTried)
+    {
+        m_msrTried = true;
+        const double msrTemp = MsrSensor::ProbeTemperature(
+            m_msrFamily, m_msrModel, m_msrStepping, m_msrTjmax);
+        if (msrTemp >= 0.0)
+        {
+            temp       = msrTemp;
+            m_msrOk    = true;
+            filled     = 1u; // bit0 = temperature present.
+            LOGI("MSR sensor probe: temp=%.1f C", msrTemp);
+        }
+        else
+        {
+            LOGI("MSR sensor probe: unavailable (driver absent or MSR blocked)");
+        }
+    }
+    else if (m_msrOk)
+    {
+        if (m_msrCooldown <= 0)
+        {
+            const double msrTemp = MsrSensor::ProbeTemperature(
+                m_msrFamily, m_msrModel, m_msrStepping, m_msrTjmax);
+            if (msrTemp >= 0.0)
+                temp = msrTemp;
+            else
+            {
+                m_msrOk = false;
+                LOGI("MSR sensor lost, falling back to WMI.");
+            }
+            m_msrCooldown = 5;
+        }
+        else
+        {
+            --m_msrCooldown;
+        }
+        if (temp >= 0.0) filled = 1u;
+    }
+
+    // --- WMI fallback ------------------------------------------------------
+    if (!m_wmiTried && !(filled & 1u))
     {
         m_wmiTried = true;
         filled = ProbeWmiSensor(temp, fan);
@@ -294,7 +333,7 @@ void CpuMonitor::Collect()
         // Probe every available non-admin source so we know what works on this machine.
         ProbeAllTempSources();
     }
-    else if (m_wmiOk)
+    else if (m_wmiOk && !(filled & 1u))
     {
         if (m_wmiCooldown <= 0)
         {
@@ -753,4 +792,90 @@ void CpuMonitor::QueryCpuName()
     const uint32_t cores = DetectPhysicalCoreCount();
     m_coreCount.store(cores, std::memory_order_relaxed);
     LOGI("Physical cores detected: %u", cores);
+
+    // Initialize MSR driver (if present next to exe) and probe thermal params.
+    MsrSensor::InitDriver(nullptr); // nullptr = driver path from registry/exe dir
+    ProbeMsrInit();
+}
+
+// ----------------------------------------------------------------------------
+// Probe MSR thermal sensor: read family/model/stepping from registry, look up
+// Tjmax. The actual __readmsr() call happens later in Collect() (background
+// thread) via the kernel driver or direct intrinsic.
+// ----------------------------------------------------------------------------
+void CpuMonitor::ProbeMsrInit()
+{
+    // Read family/model/stepping from registry (same key opened by QueryCpuName).
+    uint32_t family = 0, model = 0, stepping = 0;
+    HKEY hKey;
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE,
+                      L"HARDWARE\\DESCRIPTION\\System\\CentralProcessor\\0",
+                      0, KEY_READ, &hKey) == ERROR_SUCCESS)
+    {
+        wchar_t val[256] = {};
+        DWORD size = sizeof(val);
+        if (RegQueryValueExW(hKey, L"Identifier", nullptr, nullptr,
+                             reinterpret_cast<LPBYTE>(val), &size) == ERROR_SUCCESS)
+        {
+            // Parse "Intel64 Family 6 Model 79 Stepping 1"
+            wchar_t* p = wcsstr(val, L"Family ");
+            if (p)
+            {
+                family     = static_cast<uint32_t>(wcstoul(p + 7, nullptr, 10));
+                p = wcsstr(p, L"Model ");
+                if (p)
+                    model = static_cast<uint32_t>(wcstoul(p + 6, nullptr, 10));
+                p = wcsstr(p, L"Stepping ");
+                if (p)
+                    stepping = static_cast<uint32_t>(wcstoul(p + 9, nullptr, 10));
+            }
+        }
+        RegCloseKey(hKey);
+    }
+
+    // Tjmax lookup table (same set as msr_sensor.cpp).
+    static const struct { uint32_t key; int8_t tjmax; } kTjmaxTable[] =
+    {
+        { (6u << 16) | (0x3F << 8) | 0,  84 }, // Haswell-E/EP
+        { (6u << 16) | (0x4F << 8) | 0,  100 },// Broadwell-EP
+        { (6u << 16) | (0x55 << 8) | 0,  100 },// Skylake/Cascade Lake-SP
+        { (6u << 16) | (0x5E << 8) | 0,  100 },
+        { (6u << 16) | (0x7E << 8) | 0,  100 },
+        { (6u << 16) | (0x8E << 8) | 0,  100 },
+        { (6u << 16) | (0x9E << 8) | 0,  100 },
+        { (6u << 16) | (0xA5 << 8) | 0,  100 },
+        { (6u << 16) | (0xA7 << 8) | 0,  100 },
+        { (6u << 16) | (0x97 << 8) | 0,  100 },
+        { (6u << 16) | (0xB7 << 8) | 0,  100 },
+        { (6u << 16) | (0x2A << 8) | 0,   100 },
+        { (6u << 16) | (0x2D << 8) | 0,   100 },
+        { (6u << 16) | (0x3A << 8) | 0,   100 },
+        { (6u << 16) | (0x3E << 8) | 0,   100 },
+        { (6u << 16) | (0x1A << 8) | 0,   100 },
+        { (6u << 16) | (0x1E << 8) | 0,   100 },
+        { (6u << 16) | (0x2C << 8) | 0,   100 },
+        { (6u << 16) | (0x0F << 8) | 0,   100 },
+        { (6u << 16) | (0x17 << 8) | 0,   100 },
+    };
+    int8_t tjmax = 100;
+    const uint32_t keyWithStep = (family << 16) | (model << 8) | stepping;
+    for (const auto& e : kTjmaxTable)
+        if (e.key == keyWithStep) { tjmax = e.tjmax; break; }
+    if (tjmax == 100)
+    {
+        const uint32_t keyNoStep = (family << 16) | (model << 8);
+        for (const auto& e : kTjmaxTable)
+            if ((e.key & 0xFFFF) == keyNoStep && (e.key & 0xFF) == 0)
+            { tjmax = e.tjmax; break; }
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_msrFamily   = family;
+        m_msrModel    = model;
+        m_msrStepping = stepping;
+        m_msrTjmax    = tjmax;
+    }
+    LOGI("DIAG MSR init: family=%u model=0x%02X stepping=%u Tjmax=%d",
+         family, model, stepping, tjmax);
 }

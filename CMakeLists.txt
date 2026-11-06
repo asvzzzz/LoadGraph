@@ -132,6 +132,10 @@ set(SOURCES
 if(WIN32)
     list(APPEND SOURCES
         src/cpu_monitor.cpp
+        src/msr_sensor.h
+        src/msr_sensor.cpp
+        src/ring0_msr.h
+        src/ring0_msr.cpp
         src/ram_monitor.cpp
         src/gpu_monitor.cpp
         src/power_table.cpp

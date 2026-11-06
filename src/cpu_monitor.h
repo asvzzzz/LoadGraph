@@ -52,6 +52,8 @@ public:
 
     // Read the CPU model name (called once at startup before polling starts).
     void QueryCpuName();
+    // Probe MSR thermal sensor params on the main thread.
+    void ProbeMsrInit();
 
 protected:
     void Collect() override;
@@ -74,6 +76,14 @@ private:
     bool        m_powerLhmTried = false;
     bool        m_powerLhmOk    = false;
     std::wstring m_powerLhmNs;          // namespace that exposed the sensor
+    // MSR-based temperature (kernel driver or direct rdmsr). Probed once per session.
+    bool        m_msrTried   = false;
+    bool        m_msrOk      = false;
+    int         m_msrCooldown = 0;
+    uint32_t    m_msrFamily  = 0;
+    uint32_t    m_msrModel   = 0;
+    uint32_t    m_msrStepping = 0;
+    int8_t      m_msrTjmax   = 0;
 #endif
     CpuMetrics m_metrics;
     // Shared probe control (used by both Windows WMI and Linux thermal probe).
