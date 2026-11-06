@@ -19,7 +19,8 @@ wxEND_EVENT_TABLE()
 static const double kAlarmTempC  = 80.0;
 static const int    kGraphHeightPx = 40;
 
-// Format uptime in ms as "YY:MM:DD HH:MI:SS".
+// Format uptime in ms as "YY:MM:DD HH:MI:SS", omitting leading zero groups.
+// If all components are zero the result is "0s".
 static wxString FormatUptime(uint64_t totalMs)
 {
 	uint64_t s = totalMs / 1000ULL;
@@ -34,13 +35,26 @@ static wxString FormatUptime(uint64_t totalMs)
 	uint64_t mi = s / 60ULL;       s %= 60ULL;
 	uint64_t ss = s;
 
-	return wxString::Format("%02llu:%02llu:%02llu %02llu:%02llu:%02llu",
-	                        static_cast<unsigned long long>(yy),
-	                        static_cast<unsigned long long>(mm),
-	                        static_cast<unsigned long long>(dd),
-	                        static_cast<unsigned long long>(hh),
-	                        static_cast<unsigned long long>(mi),
-	                        static_cast<unsigned long long>(ss));
+	// Build a compact duration string from non-zero components, joined by colons.
+	// Leading and intermediate zero groups are omitted: 2 days 39 min 8 sec ->
+	// "02:39:08", 90 sec -> "01:30", zero -> "0s".
+	std::vector<uint64_t> parts;
+	if (yy > 0) parts.push_back(yy);
+	if (mm > 0) parts.push_back(mm);
+	if (dd > 0) parts.push_back(dd);
+	if (hh > 0) parts.push_back(hh);
+	if (mi > 0) parts.push_back(mi);
+	if (ss > 0) parts.push_back(ss);
+
+	if (parts.empty()) return "0s";
+
+	wxString result;
+	for (size_t i = 0; i < parts.size(); ++i)
+	{
+		if (i > 0) result += ":";
+		result += wxString::Format("%02llu", static_cast<unsigned long long>(parts[i]));
+	}
+	return result;
 }
 
 // Round a watt value up to the next multiple of 50 (minimum 100 W).
