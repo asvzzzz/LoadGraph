@@ -62,13 +62,15 @@ MainFrame::MainFrame(const wxString& title)
 	// Refresh the system palette once before first use.
 	Theme::Update();
 
-	int x = 0, y = 0, w = 640, h = 540;
-	const bool hasPos  = Config::LoadWindowPosition(x, y);
-	const bool hasSize = Config::LoadWindowSize(w, h);
-	if (hasPos) SetPosition(wxPoint(x, y));
-	// Width comes from the config; the height is fitted to the content below
-	// (a saved height would only produce empty space at the bottom).
-	SetClientSize(wxSize(hasSize ? w : 640, 540));
+	int x = 100, y = 100, w = 640, h = 720;
+	bool hasPos  = Config::LoadWindowPosition(x, y);
+	bool hasSize = Config::LoadWindowSize(w, h);
+
+	wxPoint pos = hasPos ? wxPoint(x, y) : wxDefaultPosition;
+	wxSize  size = hasSize ? wxSize(w, h) : wxSize(640, 720);
+
+	SetPosition(pos);
+	SetClientSize(size);
 	SetMinSize(wxSize(480, 540));
 
 	// Application icon (loaded from the working directory).
@@ -126,7 +128,9 @@ MainFrame::MainFrame(const wxString& title)
 		const wxPoint winPos = GetPosition();
 		const wxSize  mn = sizer->CalcMin();
 		const wxSize  cs = GetClientSize();
-		wxSize finalSz(std::max(cs.x, mn.x), mn.y);
+		// Use saved height if it is larger than content minimum — this preserves
+		// the user's preferred window size across restarts.
+		wxSize finalSz(std::max(cs.x, mn.x), std::max(cs.y, mn.y));
 
 		// Do not exceed the working area of the display hosting the window
 		// (with many GPUs the content can be taller than the screen).
@@ -148,6 +152,8 @@ MainFrame::MainFrame(const wxString& title)
 		// eliminates clipping of bottom graphs when the user drags the resize border.
 		SetMinSize(wxSize(mn.x, mn.y));
 	}
+
+	RefreshSectionBoxes();
 
 	RefreshSectionBoxes();
 
@@ -754,7 +760,6 @@ void MainFrame::RefreshSectionBoxes()
 void MainFrame::OnSize(wxSizeEvent& evt)
 {
 	RefreshSectionBoxes();
-	m_needFrameRefresh = true;
 	Refresh();
 	evt.Skip();
 }
@@ -766,11 +771,7 @@ void MainFrame::OnPaint(wxPaintEvent& evt)
 	dc.SetPen(wxPen(frameCol, 1));
 	dc.SetBrush(*wxTRANSPARENT_BRUSH);
 	for (const SectionBox& sb : m_sectionBoxes)
-	{
-		const wxRect& r = sb.rect;
-		dc.DrawRectangle(r.x + 1, r.y + 1, r.width - 2, r.height - 2);
-	}
-	LOGI("OnPaint: %d frames", static_cast<int>(m_sectionBoxes.size()));
+		dc.DrawRectangle(sb.rect);
 	evt.Skip();
 }
 
