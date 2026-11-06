@@ -80,13 +80,99 @@ namespace
                    theme.find("night") != std::string::npos;
         }
 
-        // 2) XDG_CURRENT_DESKTOP — GNOME defaults to dark on modern systems.
+        // 2) XDG_CURRENT_DESKTOP — GNOME/Cinnamon/MATE default to dark on modern
+        //    systems when the user has selected a dark GTK theme.
         const char* desktop = getenv("XDG_CURRENT_DESKTOP");
+
+        // 3) Try gsettings as the most reliable source (GNOME, Cinnamon, MATE).
+        bool preferDark = false;
+        {
+            const char* home = getenv("HOME");
+            if (home && home[0])
+            {
+                std::string cmd;
+                cmd.reserve(256);
+                cmd += "gsettings get org.gnome.desktop.interface ";
+                cmd += "color-scheme 2>/dev/null";
+                // Fallback key for older systems without color-scheme.
+                FILE* pipe = popen(cmd.c_str(), "r");
+                if (pipe)
+                {
+                    char buf[64] = {};
+                    if (fgets(buf, sizeof(buf), pipe))
+                    {
+                        std::string val(buf);
+                        // Result is wrapped in quotes: 'prefer-dark' or "'prefer-dark'"
+                        size_t first = val.find('p');
+                        preferDark = (first != std::string::npos &&
+                                      val.substr(first, 11) == "prefer-dark");
+                    }
+                    pclose(pipe);
+                }
+
+                // Fallback: check theme name for dark indicators.
+                if (!preferDark)
+                {
+                    cmd = "gsettings get org.gnome.desktop.interface ";
+                    cmd += "gtk-theme 2>/dev/null";
+                    pipe = popen(cmd.c_str(), "r");
+                    if (pipe)
+                    {
+                        char buf[64] = {};
+                        if (fgets(buf, sizeof(buf), pipe))
+                        {
+                            std::string val(buf);
+                            for (auto& c : val) c = tolower(c);
+                            preferDark = (val.find("dark") != std::string::npos ||
+                                          val.find("nokto") != std::string::npos ||
+                                          val.find("black") != std::string::npos ||
+                                          val.find("night") != std::string::npos);
+                        }
+                        pclose(pipe);
+                    }
+                }
+            }
+        }
+        if (preferDark) return true;
+
+        // 4) XDG_CURRENT_DESKTOP — GNOME defaults to dark on modern systems.
         if (desktop && strstr(desktop, "GNOME"))
             return true;
+        // Cinnamon and MATE also tend to use dark themes by default now.
+        if (desktop && (strstr(desktop, "Cinnamon") || strstr(desktop, "MATE")))
+        {
+            // These DEs do not set gtk-application-prefer-dark-theme in settings.ini,
+            // so we check the theme name instead.
+            const char* home = getenv("HOME");
+            if (home && home[0])
+            {
+                std::string cmd;
+                cmd.reserve(256);
+                if (strstr(desktop, "Cinnamon"))
+                    cmd = "gsettings get org.cinnamon.desktop.interface gtk-theme 2>/dev/null";
+                else
+                    cmd = "gsettings get org.mate.interface gtk-theme 2>/dev/null";
+                FILE* pipe = popen(cmd.c_str(), "r");
+                if (pipe)
+                {
+                    char buf[64] = {};
+                    if (fgets(buf, sizeof(buf), pipe))
+                    {
+                        std::string val(buf);
+                        for (auto& c : val) c = tolower(c);
+                        pclose(pipe);
+                        return (val.find("dark") != std::string::npos ||
+                                val.find("nokto") != std::string::npos ||
+                                val.find("black") != std::string::npos ||
+                                val.find("night") != std::string::npos);
+                    }
+                    pclose(pipe);
+                }
+            }
+            return false;
+        }
 
-        // 3) GTK settings.ini — works for Cinnamon, MATE, XFCE, Deepin etc.
-        //    Path is stable across all GTK3 desktops.
+        // 5) GTK settings.ini — works for XFCE, Deepin and others.
         const char* home = getenv("HOME");
         if (home && home[0])
         {

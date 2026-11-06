@@ -4,6 +4,7 @@
 #ifdef PLATFORM_LINUX
 
 #include <fstream>
+#include <map>
 #include <sstream>
 #include <sys/stat.h>
 #include <errno.h>
@@ -111,7 +112,7 @@ void SaveWindowPosition(int x, int y, int w, int h)
     LOGI("Saved position: (%d,%d) size=%dx%d", x, y, w, h);
 }
 
-bool Config::LoadViewMenuState(std::map<std::string, bool>& out)
+bool LoadViewMenuState(std::map<std::string, bool>& out)
 {
     std::string path = GetAppConfigPath("view_state.json");
     if (path.empty()) return false;
@@ -143,7 +144,7 @@ bool Config::LoadViewMenuState(std::map<std::string, bool>& out)
     return !out.empty();
 }
 
-void Config::SaveViewMenuState(const std::map<std::string, bool>& state)
+void SaveViewMenuState(const std::map<std::string, bool>& state)
 {
     std::string path = GetAppConfigPath("view_state.json");
     if (path.empty()) return;

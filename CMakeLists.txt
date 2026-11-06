@@ -8,13 +8,42 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 # ----------------------------------------------------------------------------
 # wxWidgets configuration (cross-platform)
 # ----------------------------------------------------------------------------
-if(DEFINED ENV{WX_CONFIG})
+if(DEFINED ENV{WXSTATIC_ROOT})
+    # Static wxWidgets build (built from source).
+    set(WXSTATIC_ROOT "$ENV{WXSTATIC_ROOT}")
+    message(STATUS "Using static wxWidgets from: ${WXSTATIC_ROOT}")
+
+    # Layout: <WXSTATIC_ROOT>/{libwx*.a, include/wx/*.h, include/gtk3-unicode-static-3.2/wx/setup.h}
+    set(wxWidgets_INCLUDE_DIRS
+        "${WXSTATIC_ROOT}/include"
+        "${WXSTATIC_ROOT}/include/gtk3-unicode-static-3.2"
+    )
+    set(wxWidgets_LIBRARY_DIRS "${WXSTATIC_ROOT}")
+    set(wxWidgets_LIBRARIES
+        "${WXSTATIC_ROOT}/libwx_gtk3u_core-3.2.a"
+        "${WXSTATIC_ROOT}/libwx_baseu-3.2.a"
+        "${WXSTATIC_ROOT}/libwx_baseu_net-3.2.a"
+        "${WXSTATIC_ROOT}/libwx_baseu_xml-3.2.a"
+    )
+    set(wxWidgets_COMPILE_OPTIONS "-D_FILE_OFFSET_BITS=64;-DwxDEBUG_LEVEL=0;-D__WXGTK__;-pthread")
+    # System libraries required by static wxWidgets (GTK3 stack).
+    set(wxWidgets_SYSTEM_LIBS
+        gtk-3 gdk-3 pangocairo-1.0 atk-1.0 cairo-gobject cairo
+        gdk_pixbuf-2.0 gio-2.0 Xtst pangoft2-1.0 pango-1.0
+        gobject-2.0 glib-2.0 harfbuzz fontconfig freetype
+        jbig expat pcre2-32 png jpeg lzma z X11 SM xkbcommon gthread-2.0 m dl pthread
+    )
+    set(wxWidgets_LINK_OPTIONS "-pthread")
+
+    message(STATUS "Static wxWidgets include: ${wxWidgets_INCLUDE_DIRS}")
+    message(STATUS "Static wxWidgets libs: ${wxWidgets_LIBRARIES}")
+elseif(DEFINED ENV{WX_CONFIG})
     set(WX_CONFIG_PATH "$ENV{WX_CONFIG}")
 elseif(WIN32)
     # Windows: prefer static build at known location.
     set(WX_CONFIG_PATH "C:/wxWidgets" CACHE PATH "wxWidgets installation root")
 else()
-    # Linux: parse wx-config manually (system wxWidgets often lacks cmake config files).
+    # Linux dynamic: parse wx-config (system wxWidgets).
     find_program(WX_CONFIG_EXECUTABLE wx-config-3.2)
     if(NOT WX_CONFIG_EXECUTABLE)
         find_program(WX_CONFIG_EXECUTABLE wx-config)
@@ -42,7 +71,6 @@ else()
     string(STRIP "${WX_LIBS_OUTPUT}" WX_LIBS_OUTPUT)
     message(STATUS "wxWidgets libs: ${WX_LIBS_OUTPUT}")
 
-    # Parse cflags and libs using separate_arguments (handles quoting correctly).
     separate_arguments(WX_CFLAGS_LIST NATIVE_COMMAND "${WX_CFLAGS}")
     separate_arguments(WX_LIBS_LIST NATIVE_COMMAND "${WX_LIBS_OUTPUT}")
 
@@ -50,7 +78,6 @@ else()
         if(arg MATCHES "^-I(.+)$")
             list(APPEND wxWidgets_INCLUDE_DIRS "${CMAKE_MATCH_1}")
         else()
-            # -D defines, -pthread, etc. must reach the compiler as compile options.
             list(APPEND wxWidgets_COMPILE_OPTIONS "${arg}")
         endif()
     endforeach()
@@ -61,7 +88,6 @@ else()
         elseif(arg MATCHES "^-L(.+)$")
             list(APPEND wxWidgets_LIBRARY_DIRS "${CMAKE_MATCH_1}")
         else()
-            # Pass through flags like -pthread that linkers also need.
             list(APPEND wxWidgets_LINK_OPTIONS "${arg}")
         endif()
     endforeach()
@@ -147,10 +173,9 @@ if(WIN32)
         "C:/Program Files (x86)/Windows Kits/10/Include/10.0.26100.0/shared"
         "C:/Program Files (x86)/Windows Kits/10/Include/10.0.26100.0/um"
     )
-    
-    # Windows system libraries.
+
     set(WINDOWS_LIBS ws2_32 rpcrt4 odbc32 shlwapi comctl32 ole32 oleaut32 uuid winmm psapi advapi32 dwmapi)
-    
+
     target_link_libraries(${PROJECT_NAME}
         ${wxWidgets_LIBRARIES}
         wbemuuid
@@ -158,13 +183,12 @@ if(WIN32)
         psapi
         ${WINDOWS_LIBS}
     )
-    
+
     set_target_properties(${PROJECT_NAME} PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
         WIN32_EXECUTABLE ON
     )
-    
-    # MSVC-specific settings.
+
     target_compile_options(${PROJECT_NAME} PRIVATE /W4 /WX-)
     target_link_options(${PROJECT_NAME} PRIVATE /SUBSYSTEM:WINDOWS)
 elseif(UNIX AND NOT APPLE)
@@ -183,17 +207,32 @@ elseif(UNIX AND NOT APPLE)
     else()
         message(WARNING "NVML not found - GPU monitoring will use fallback or be disabled")
     endif()
-    
+
+    # GTK3 stack required by static wxWidgets (matches pkg-config gtk+-3.0).
+    set(wxWidgets_SYSTEM_LIBS
+        gtk-3 gdk-3 pangocairo-1.0 atk-1.0 cairo-gobject cairo
+        gdk_pixbuf-2.0 gio-2.0 Xtst pangoft2-1.0 pango-1.0
+        gobject-2.0 glib-2.0 harfbuzz fontconfig freetype
+        jbig expat pcre2-32 png jpeg lzma z X11 SM xkbcommon gthread-2.0
+    )
+
+    # Point linker at our bundled .so files.
+    target_link_directories(${PROJECT_NAME} PRIVATE "${CMAKE_SOURCE_DIR}/libs")
+    # Embed rpath so the binary finds them at runtime without LD_LIBRARY_PATH.
+    set_target_properties(${PROJECT_NAME} PROPERTIES
+        BUILD_RPATH "${CMAKE_SOURCE_DIR}/libs"
+        INSTALL_RPATH_USE_LINK_PATH OFF
+    )
+
     target_link_libraries(${PROJECT_NAME}
         ${wxWidgets_LIBRARIES}
+        ${wxWidgets_SYSTEM_LIBS}
         ${LINUX_LIBS}
     )
-    
+
     set_target_properties(${PROJECT_NAME} PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
     )
-    
-    # GCC/Clang settings.
+
     target_compile_options(${PROJECT_NAME} PRIVATE -Wall -Wextra -Wpedantic)
 endif()
-

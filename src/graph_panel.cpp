@@ -103,12 +103,6 @@ void GraphPanel::OnPaint(wxPaintEvent& /*evt*/)
     dc.SetBackground(wxBrush(cardBg));
     dc.Clear();
 
-    // Draw a subtle border around the graph panel.
-    const wxColour frameCol(200, 200, 200);
-    dc.SetPen(wxPen(frameCol, 1));
-    dc.SetBrush(*wxTRANSPARENT_BRUSH);
-    dc.DrawRectangle(0, 0, m_clientSize.GetWidth(), m_clientSize.GetHeight());
-
     // Update cached size if it was not set yet (e.g. before first OnSize).
     m_clientSize = GetClientSize();
     if (m_clientSize.GetWidth() <= 0 || m_clientSize.GetHeight() <= 0)

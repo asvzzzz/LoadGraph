@@ -98,9 +98,6 @@ private:
     // names match the rest of the labels (wxStaticBox uses the system color).
     std::vector<wxWindow*> m_gpuBoxes;
 
-    // Flag set by OnSize to request border redraw on next timer tick.
-    bool m_needFrameRefresh = false;
-
     // View menu state persistence. Keys map to graph panel pointers so the
     // toggle handler can show/hide a specific chart on demand.
     std::map<std::string, GraphPanel*> m_viewToggles;
@@ -139,12 +136,12 @@ private:
     // UI created flag (Linux: deferred to first timer tick).
     bool    m_uiCreated = false;
 
-    // Section bounding boxes for frame drawing.
+    // Section bounding boxes for frame drawing (m_content coordinates).
     struct SectionBox { wxString title; wxRect rect; };
     std::vector<SectionBox> m_sectionBoxes;
 
     void RefreshSectionBoxes();
-    void OnPaint(wxPaintEvent& evt);
+    void OnContentPaint(wxPaintEvent& evt);
 
     wxDECLARE_EVENT_TABLE();
 };

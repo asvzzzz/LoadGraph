@@ -4,6 +4,7 @@
 #include "power_table.h"
 #include "logger.h"
 #include <wx/display.h>
+#include <wx/dcbuffer.h>
 
 #include <algorithm>
 #include <cmath>
@@ -13,7 +14,6 @@ wxBEGIN_EVENT_TABLE(MainFrame, wxFrame)
     EVT_TIMER(wxID_ANY, MainFrame::OnTimer)
     EVT_CLOSE(MainFrame::OnClose)
     EVT_SIZE(MainFrame::OnSize)
-    EVT_PAINT(MainFrame::OnPaint)
 wxEND_EVENT_TABLE()
 
 static const double kAlarmTempC  = 80.0;
@@ -148,12 +148,16 @@ MainFrame::MainFrame(const wxString& title)
 		Layout();
 		SetPosition(winPos);
 
-		// Prevent the window from being shrunk below content minimum — this
-		// eliminates clipping of bottom graphs when the user drags the resize border.
-		SetMinSize(wxSize(mn.x, mn.y));
+		// Prevent the window from being shrunk below the content minimum.
+		// The minimum must be the OUTER window size, so the frame decorations
+		// (title bar, borders, menu bar) are added to the client minimum:
+		// otherwise the client area is clipped by that amount at the minimum
+		// size and the bottom section disappears when the user drags the
+		// resize border down to the limit.
+		const wxSize deco = GetSize() - GetClientSize();
+		SetMinSize(wxSize(std::max(480, mn.x + deco.x),
+		                  std::max(540, mn.y + deco.y)));
 	}
-
-	RefreshSectionBoxes();
 
 	RefreshSectionBoxes();
 
@@ -173,6 +177,13 @@ MainFrame::MainFrame(const wxString& title)
 MainFrame::~MainFrame()
 {
 	if (m_timer.IsRunning()) m_timer.Stop();
+
+	// Detach the content paint handler before the frame is destroyed so no
+	// event can reach a partially destroyed sink.
+	if (m_content)
+		m_content->Disconnect(wxEVT_PAINT,
+		                      wxPaintEventHandler(MainFrame::OnContentPaint),
+		                      nullptr, this);
 }
 
 void MainFrame::RealizeUI()
@@ -194,16 +205,17 @@ void MainFrame::RealizeUI()
 	wxStaticText* cpuT = new wxStaticText(m_header, wxID_ANY, cpuLabel);
 	wxFont cpuFont(11, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_BOLD);
 	cpuT->SetFont(cpuFont);
-	// Cap the CPU label width so it cannot force the window wider than needed;
-	// ellipsize truncates long names while keeping uptime visible.
-	cpuT->SetMaxSize(wxSize(500, -1));
+	// Reserve space for the uptime label so it is never clipped at minimum
+	// width. The CPU label ellipsizes instead of pushing uptime off-screen.
+	const int kUptimeMinWidth = 200;
+	cpuT->SetMaxSize(wxSize(-1, -1));
 	AddThemedText(cpuT, true);
 	hdrS->Add(cpuT, 1, wxALL | wxALIGN_CENTER_VERTICAL, 6);
 
 	m_uptimeText = new wxStaticText(m_header, wxID_ANY, " Uptime: ...");
 	AddThemedText(m_uptimeText, false);
-	// No stretch spacer: the CPU label already has proportion=1 and will fill
-	// remaining width, keeping uptime pinned to the right edge.
+	// Give uptime a minimum width so it is never compressed to nothing.
+	m_uptimeText->SetMinSize(wxSize(kUptimeMinWidth, -1));
 	hdrS->Add(m_uptimeText, 0, wxALL | wxALIGN_CENTER_VERTICAL, 6);
 
 	m_header->SetSizer(hdrS);
@@ -211,17 +223,38 @@ void MainFrame::RealizeUI()
 
 	// Content: CPU section, GPU section, total power row.
 	m_content = new wxPanel(this, wxID_ANY);
+
+	// The section borders are painted on m_content: its coordinate space
+	// matches the child windows exactly (no title bar offset), and the border
+	// lines fall into the background gaps where no child window covers them.
+	m_content->SetBackgroundStyle(wxBG_STYLE_PAINT);
+	m_content->Connect(wxEVT_PAINT,
+	                   wxPaintEventHandler(MainFrame::OnContentPaint),
+	                   nullptr, this);
+
 	wxBoxSizer* contentS = new wxBoxSizer(wxVERTICAL);
 
+	// Guaranteed background gaps: the outer border lines (6 px) and the shared
+	// line between two sections (5 px) are painted on m_content, so they must
+	// land in areas that are not covered by child windows.
+	contentS->AddSpacer(6);
+
 	BuildCpuSection(contentS, m_content);
+	contentS->AddSpacer(5);
 	if (m_gpu.IsAvailable()) BuildGpuSection(contentS, m_content);
 	BuildTotalPowerRow(contentS, m_content);
+	contentS->AddSpacer(6);
 
 	m_content->SetSizer(contentS);
 	mainS->Add(m_content, 1, wxEXPAND);
 
 	SetSizer(mainS);
 	ApplyTheme();
+
+	// Force an initial layout pass so the header is correctly sized even when
+	// the frame starts at minimum dimensions (prevents uptime text from being
+	// clipped before the first timer tick triggers a resize).
+	Layout();
 
 	m_lastFullSize = GetClientSize();
 	m_uiCreated = true;
@@ -267,8 +300,9 @@ void MainFrame::BuildCpuSection(wxBoxSizer* container, wxWindow* parent)
 		m_cpuPowerGraph->SetYRange(0.0, RoundUpWattsTo50(maxP));
 		m_cpuPowerGraph->SetYMode(GraphYMode::Watts);
 
+		// No trailing spacer here: RealizeUI adds the 5 px gap between the
+		// CPU section and the next one, so their border lines coincide.
 		container->Add(m_cpuPowerGraph, 1, wxEXPAND | wxLEFT | wxRIGHT, 5);
-		container->AddSpacer(5);
 
 		m_viewToggles["CPU Power"] = m_cpuPowerGraph;
 		m_toggleGroups["CPU Power"].items.push_back(
@@ -282,6 +316,7 @@ void MainFrame::BuildCpuSection(wxBoxSizer* container, wxWindow* parent)
 		wxBoxSizer* row2 = new wxBoxSizer(wxHORIZONTAL);
 
 		m_cpuTempGraph = new GraphPanel(parent, "CPU Temp", "C");
+		m_cpuTempGraph->SetYRange(0.0, 100.0);
 		m_cpuTempGraph->SetYMode(GraphYMode::Celsius);
 		m_cpuTempGraph->SetAlarmThreshold(kAlarmTempC);
 		row2->Add(m_cpuTempGraph, (cpuInit.fanRpm > 0) ? 1 : 2,
@@ -434,6 +469,16 @@ void MainFrame::BuildGpuSection(wxBoxSizer* container, wxWindow* parent)
 		}
 
 		m_gpuPanels.push_back(data);
+
+		// Background gap after each GPU section so its bottom border line is
+		// not covered by the next section's first child window. When the last
+		// row already added a spacer, the gap is exactly 5 px already.
+		if (container->GetItemCount() > 0)
+		{
+			wxSizerItem* last = container->GetItem(container->GetItemCount() - 1);
+			if (!(last && last->IsSpacer()))
+				container->AddSpacer(5);
+		}
 	}
 }
 
@@ -560,19 +605,26 @@ void MainFrame::ApplyHeightAdjustment(const std::string& key, bool showingItem)
 		if (p) p->Show(showingItem);
 	}
 
-	const int newMinH = sizer->CalcMin().y;
+	const wxSize mn2 = sizer->CalcMin();
+	const int newMinH = mn2.y;
 	const wxSize cs = GetClientSize();
 	int newH = cs.y - (oldMinH - newMinH);
 	if (newH < newMinH) newH = newMinH;
-	const int frameMinH = GetMinSize().y;
-	if (newH < frameMinH) newH = frameMinH;
 
-	// 4. Resize without moving the window position.
+	// 4. Keep the outer minimum in sync with the new content minimum so the
+	//    window can be shrunk exactly to the visible content: no clipping of
+	//    the bottom graph and no empty space left at the bottom.
+	const wxSize deco = GetSize() - GetClientSize();
+	SetMinSize(wxSize(std::max(480, mn2.x + deco.x),
+	                  std::max(540, mn2.y + deco.y)));
+
+	// 5. Resize without moving the window position.
 	SetClientSize(cs.x, newH);
 	Layout();
 	SetPosition(pos);
 	RefreshSectionBoxes();
 	Refresh();
+	if (m_content) m_content->Refresh();
 }
 
 void MainFrame::OnTimer(wxTimerEvent&)
@@ -656,6 +708,36 @@ void MainFrame::OnClose(wxCloseEvent& evt)
 	evt.Skip();
 }
 
+// Recursively unite the rectangles (m_content coordinates) of all shown
+// windows inside the given sizer. Nested sizers (graph rows) are traversed so
+// the section bounds include every visible graph. Window positions are
+// relative to m_content because every graph panel is its direct child.
+static void UnionShownBounds(wxSizer* sizer, wxRect& out, bool& has)
+{
+	if (!sizer) return;
+	const size_t n = sizer->GetItemCount();
+	for (size_t i = 0; i < n; ++i)
+	{
+		wxSizerItem* si = sizer->GetItem(i);
+		if (!si || !si->IsShown()) continue;
+
+		if (wxWindow* w = si->GetWindow())
+		{
+			if (!w->IsShown()) continue;
+			const wxPoint p = w->GetPosition();
+			const wxSize  s = w->GetSize();
+			if (s.x <= 0 || s.y <= 0) continue;
+			const wxRect r(p.x, p.y, s.x, s.y);
+			if (!has) { out = r; has = true; }
+			else out.Union(r);
+		}
+		else if (wxSizer* sub = si->GetSizer())
+		{
+			UnionShownBounds(sub, out, has);
+		}
+	}
+}
+
 void MainFrame::RefreshSectionBoxes()
 {
 	m_sectionBoxes.clear();
@@ -663,116 +745,133 @@ void MainFrame::RefreshSectionBoxes()
 	wxSizer* sizer = m_content->GetSizer();
 	if (!sizer) return;
 
-	// Find CPU section bounds (from first item to first GPU title).
-	int cpuStart = 0, cpuEnd = -1;
-	std::vector<int> gpuStarts;
+	// Split the direct children of the content sizer into sections: items
+	// before the first "GPU ..." label form the CPU section, every GPU label
+	// starts its own section and the Total Power graph forms the last one.
+	struct Section { wxString title; std::vector<wxSizerItem*> items; };
+	std::vector<Section> sections;
+	Section* cur = nullptr;
 
-	for (int i = 0; i < sizer->GetItemCount(); ++i)
+	const size_t n = sizer->GetItemCount();
+	for (size_t i = 0; i < n; ++i)
 	{
-		wxSizerItem* item = sizer->GetItem(static_cast<size_t>(i));
-		if (!item) continue;
-		wxWindow* win = item->GetWindow();
-		if (!win) continue;
-		wxStaticText* st = dynamic_cast<wxStaticText*>(win);
-		if (st && st->GetLabel().Find(wxT("GPU ")) == 0)
-		{
-			if (cpuEnd < 0) cpuEnd = i;
-			gpuStarts.push_back(i);
-		}
-		if (win == m_totalPowerGraph)
-		{
-			if (cpuEnd < 0) cpuEnd = i;
-			for (size_t k = 0; k < gpuStarts.size(); ++k)
-				if (gpuStarts[k] > i) gpuStarts[k] = -1;
-		}
-	}
-	if (cpuEnd < 0) cpuEnd = gpuStarts.empty() ? sizer->GetItemCount() : gpuStarts[0];
-
-	// CPU box.
-	{
-		int lx = 9999, ly = 9999, rx = 0, by = 0;
-		for (int i = cpuStart; i < cpuEnd; ++i)
-		{
-			wxSizerItem* si = sizer->GetItem(static_cast<size_t>(i));
-			if (!si || !si->IsShown()) continue;
-			wxWindow* w = si->GetWindow();
-			if (!w) continue;
-			int x = 0, y = 0, ww = 0, hh = 0;
-			w->GetPosition(&x, &y); w->GetSize(&ww, &hh);
-			if (x < lx) lx = x; if (y < ly) ly = y;
-			if (x + ww > rx) rx = x + ww; if (y + hh > by) by = y + hh;
-		}
-		if (ly < 9999)
-			m_sectionBoxes.push_back({ "CPU", wxRect(lx - 3, ly - 18, rx - lx + 6, by - ly + 3) });
-	}
-
-	// GPU boxes.
-	for (size_t gi = 0; gi < gpuStarts.size(); ++gi)
-	{
-		int gs = gpuStarts[gi];
-		if (gs < 0) continue;
-		int ge = -1;
-		for (size_t j = static_cast<size_t>(gs + 1); j < sizer->GetItemCount(); ++j)
-		{
-			wxWindow* w = sizer->GetItem(j)->GetWindow();
-			if (!w) continue;
-			wxStaticText* st = dynamic_cast<wxStaticText*>(w);
-			if (st && st->GetLabel().Find(wxT("GPU ")) == 0) { ge = static_cast<int>(j); break; }
-			if (w == m_totalPowerGraph) { ge = static_cast<int>(j); break; }
-		}
-		if (ge < 0) ge = sizer->GetItemCount();
-
-		int lx = 9999, ly = 9999, rx = 0, by = 0;
-		for (int i = gs; i < ge; ++i)
-		{
-			wxSizerItem* si = sizer->GetItem(static_cast<size_t>(i));
-			if (!si || !si->IsShown()) continue;
-			wxWindow* w = si->GetWindow();
-			if (!w) continue;
-			int x = 0, y = 0, ww = 0, hh = 0;
-			w->GetPosition(&x, &y); w->GetSize(&ww, &hh);
-			if (x < lx) lx = x; if (y < ly) ly = y;
-			if (x + ww > rx) rx = x + ww; if (y + hh > by) by = y + hh;
-		}
-		if (ly < 9999)
-		{
-			wxString title = sizer->GetItem(static_cast<size_t>(gs))->GetWindow()->GetLabel();
-			m_sectionBoxes.push_back({ title, wxRect(lx - 3, ly - 18, rx - lx + 6, by - ly + 3) });
-		}
-	}
-
-	// Total Power box.
-	for (int i = 0; i < sizer->GetItemCount(); ++i)
-	{
-		wxSizerItem* si = sizer->GetItem(static_cast<size_t>(i));
+		wxSizerItem* si = sizer->GetItem(i);
 		if (!si || !si->IsShown()) continue;
-		if (si->GetWindow() == m_totalPowerGraph)
+		wxWindow* w = si->GetWindow();
+		wxStaticText* st = w ? dynamic_cast<wxStaticText*>(w) : nullptr;
+		const bool isGpuTitle = (st != nullptr) && st->GetLabel().StartsWith("GPU ");
+		const bool isTotalPower = (w != nullptr) && (w == m_totalPowerGraph);
+
+		if (isGpuTitle || isTotalPower)
 		{
-			int x = 0, y = 0, ww = 0, hh = 0;
-			m_totalPowerGraph->GetPosition(&x, &y);
-			m_totalPowerGraph->GetSize(&ww, &hh);
-			m_sectionBoxes.push_back({ "Total Power", wxRect(x - 3, y - 2, ww + 6, hh + 2) });
-			break;
+			Section s;
+			s.title = isTotalPower ? wxString("Total Power") : st->GetLabel();
+			sections.push_back(s);
+			cur = &sections.back();
 		}
+		else if (!cur)
+		{
+			Section s;
+			s.title = "CPU";
+			sections.push_back(s);
+			cur = &sections.back();
+		}
+		cur->items.push_back(si);
+	}
+
+	// Build one border rectangle per section, expanded 3 px into the
+	// background gaps around it so the lines are not covered by children.
+	const wxSize cc = m_content->GetClientSize();
+	for (const Section& sec : sections)
+	{
+		wxRect r;
+		bool has = false;
+		for (wxSizerItem* si : sec.items)
+		{
+			if (!si) continue;
+			if (wxWindow* w = si->GetWindow())
+			{
+				if (!w->IsShown()) continue;
+				const wxPoint p = w->GetPosition();
+				const wxSize  s = w->GetSize();
+				if (s.x <= 0 || s.y <= 0) continue;
+				const wxRect wr(p.x, p.y, s.x, s.y);
+				if (!has) { r = wr; has = true; }
+				else r.Union(wr);
+			}
+			else if (wxSizer* sub = si->GetSizer())
+			{
+				UnionShownBounds(sub, r, has);
+			}
+		}
+		if (!has) continue;
+
+		int x1 = r.x - 3;
+		int y1 = r.y - 3;
+		int x2 = r.x + r.width + 2;   // right line:  child right edge + 3
+		int y2 = r.y + r.height + 2;  // bottom line: child bottom edge + 3
+
+		// Clamp into the content client area (a long GPU title may be wider
+		// than the graphs and must not push the border outside the panel).
+		if (x1 < 2) x1 = 2;
+		if (y1 < 0) y1 = 0;
+		if (x2 > cc.x - 3) x2 = cc.x - 3;
+		if (y2 > cc.y - 1) y2 = cc.y - 1;
+		if (x2 < x1 || y2 < y1) continue;
+
+		m_sectionBoxes.push_back(
+			{ sec.title, wxRect(x1, y1, x2 - x1 + 1, y2 - y1 + 1) });
 	}
 }
 
 void MainFrame::OnSize(wxSizeEvent& evt)
 {
-	RefreshSectionBoxes();
-	Refresh();
 	evt.Skip();
+
+	// Repaint everything that changed size: the frame clears the strips
+	// vacated by shrinking children, the header and the content panel redraw
+	// themselves with the new layout. The section borders are recomputed by
+	// OnContentPaint itself, so no explicit call is needed here.
+	Refresh();
+	if (m_header) m_header->Refresh();
+	if (m_content) m_content->Refresh();
 }
 
-void MainFrame::OnPaint(wxPaintEvent& evt)
+void MainFrame::OnContentPaint(wxPaintEvent&)
 {
-	wxPaintDC dc(this);
+	// The event comes from m_content, so the DC must be bound to that panel:
+	// a DC created for the frame would leave the panel surface unpainted and
+	// the background gaps would show the system default color instead of the
+	// theme background. The panel uses wxBG_STYLE_PAINT, so we own the fill.
+	wxAutoBufferedPaintDC dc(m_content);
+	dc.SetBackground(wxBrush(m_content->GetBackgroundColour()));
+	dc.Clear();
+
+	// Recompute the boxes: a sizer layout may have moved the children after
+	// the last RefreshSectionBoxes() call (paint runs after the size event).
+	RefreshSectionBoxes();
+
+	// Diagnostic: space between the Total Power graph bottom and the content
+	// bottom - must stay at the 6 px bottom gap at any window size.
+	if (m_totalPowerGraph)
+	{
+		int x = 0, y = 0, w = 0, h = 0;
+		m_totalPowerGraph->GetPosition(&x, &y);
+		m_totalPowerGraph->GetSize(&w, &h);
+		const wxSize cc = m_content->GetClientSize();
+		LOGI("Paint: content=%dx%d totalBottom=%d bottomGap=%d boxes=%d",
+		     cc.x, cc.y, y + h, cc.y - (y + h),
+		     static_cast<int>(m_sectionBoxes.size()));
+	}
+
 	const wxColour frameCol(200, 200, 200);
 	dc.SetPen(wxPen(frameCol, 1));
 	dc.SetBrush(*wxTRANSPARENT_BRUSH);
 	for (const SectionBox& sb : m_sectionBoxes)
 		dc.DrawRectangle(sb.rect);
-	evt.Skip();
+
+	// No evt.Skip(): with wxBG_STYLE_PAINT the default handler must not run,
+	// otherwise the buffered content may be overwritten by the erase logic.
 }
 
 void MainFrame::ApplyTheme()
@@ -801,6 +900,9 @@ void MainFrame::ApplyTheme()
 	}
 
 	Refresh();
+	// The frame Refresh() does not repaint child windows: redraw the content
+	// panel so the section borders follow the new background colour.
+	if (m_content) m_content->Refresh();
 }
 
 void MainFrame::AddThemedText(wxStaticText* st, bool primary)
