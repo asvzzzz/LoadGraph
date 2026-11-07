@@ -3,6 +3,7 @@
 #include "theme.h"
 #include <wx/dcbuffer.h>
 #include <algorithm>
+#include <array>
 #include <cmath>
 
 wxBEGIN_EVENT_TABLE(GraphPanel, wxPanel)
@@ -334,25 +335,25 @@ std::vector<double> GraphPanel::ComputeYTicks(double minVal, double maxVal,
 
     // Target round step sizes per mode — ordered from largest to smallest.
     // Covers common memory sizes: 1GB, 2GB, 3GB, 4GB, 8GB, 12GB, 16GB, 24GB, 32GB, 48GB, 64GB, 128GB.
-    static const double kPctSteps[]     = {25.0, 20.0, 10.0, 5.0, 2.0};
-    static const double kGbSteps[]      = {64.0, 32.0, 24.0, 16.0, 8.0, 4.0, 3.0, 2.0, 1.0};
-    static const double kCelsiusSteps[] = {25.0, 20.0, 10.0, 5.0, 2.0};
-    static const double kWattsSteps[]   = {100.0, 50.0, 40.0, 25.0, 20.0, 10.0, 5.0, 2.0, 1.0};
+    static constexpr std::array<double, 5>  kPctSteps     = {25.0, 20.0, 10.0, 5.0, 2.0};
+    static constexpr std::array<double, 9>  kGbSteps      = {64.0, 32.0, 24.0, 16.0, 8.0, 4.0, 3.0, 2.0, 1.0};
+    static constexpr std::array<double, 5>  kCelsiusSteps = {25.0, 20.0, 10.0, 5.0, 2.0};
+    static constexpr std::array<double, 9>  kWattsSteps   = {100.0, 50.0, 40.0, 25.0, 20.0, 10.0, 5.0, 2.0, 1.0};
     const double* steps = nullptr;
     int stepsCount = 0;
 
     switch (mode)
     {
         case GraphYMode::Percent:
-            steps = kPctSteps; stepsCount = 5; break;
+            steps = kPctSteps.data();  stepsCount = static_cast<int>(kPctSteps.size()); break;
         case GraphYMode::Gigabytes:
-            steps = kGbSteps;  stepsCount = 9; break;
+            steps = kGbSteps.data();   stepsCount = static_cast<int>(kGbSteps.size()); break;
         case GraphYMode::Celsius:
-            steps = kCelsiusSteps; stepsCount = 5; break;
+            steps = kCelsiusSteps.data(); stepsCount = static_cast<int>(kCelsiusSteps.size()); break;
         case GraphYMode::Watts:
-            steps = kWattsSteps; stepsCount = 9; break;
+            steps = kWattsSteps.data();  stepsCount = static_cast<int>(kWattsSteps.size()); break;
         default: // Auto / RPM — use a generic step.
-            steps = kPctSteps; stepsCount = 5; break;
+            steps = kPctSteps.data();  stepsCount = static_cast<int>(kPctSteps.size()); break;
     }
 
     // Find the step that gives approximately count intervals.

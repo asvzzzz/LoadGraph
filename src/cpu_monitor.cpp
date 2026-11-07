@@ -521,7 +521,7 @@ static void DumpWmiObject(IWbemClassObject* pObj)
     if (SUCCEEDED(hr) && psaNames)
     {
         long cnt = 0;
-        SafeArrayGetDim(psaNames);
+        if (SafeArrayGetDim(psaNames) != 1) return; // expect a single-dimension BSTR array
         SafeArrayGetUBound(psaNames, 1, &cnt);
         for (long i = 0; i < cnt; ++i)
         {
