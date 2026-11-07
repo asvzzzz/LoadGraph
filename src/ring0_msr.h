@@ -22,6 +22,26 @@ namespace Ring0Msr
 
     // Check whether the backend is currently loaded and ready.
     bool IsOpen();
+
+    // True when the process token has administrative privileges (UAC
+    // elevation). Used to decide whether a driver install can be attempted
+    // directly or needs the elevated helper.
+    bool IsElevated();
+
+    // True when installing/starting the driver could plausibly succeed:
+    // a .sys file exists next to the exe (or an explicit registry path) or a
+    // well-known service (WinRing0_1_2_0 etc.) is already registered.
+    bool HasDriverAssets(const wchar_t* exeDir);
+
+    // Relaunch this executable with the --install-driver argument using the
+    // UAC "runas" verb, wait for the helper to finish and return true when
+    // the helper exited with code 0. Shows the UAC consent prompt once.
+    bool InstallElevated();
+
+    // Body of the elevated helper mode (--install-driver): registers/starts
+    // the driver service and leaves it running. Returns 0 on success.
+    // Must be called before any GUI is created.
+    int RunInstallHelper(const wchar_t* exeDir);
 }
 
 #endif // PLATFORM_WINDOWS

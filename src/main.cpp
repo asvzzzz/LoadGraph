@@ -3,6 +3,12 @@
 #include "logger.h"
 #include "main_frame.h"
 #include <cstdio>
+#include <cstdlib>   // exit() for the elevated helper mode
+
+#ifdef PLATFORM_WINDOWS
+#include "msr_sensor.h"
+#include <cstring>
+#endif
 
 #ifdef PLATFORM_LINUX
 #include <signal.h>
@@ -65,6 +71,22 @@ public:
         Logger::Init(logPath);
         LOGI("Starting...");
         LOGI("wxWidgets %s", wxVERSION_STRING);
+
+#ifdef PLATFORM_WINDOWS
+        // Elevated helper mode: invoked via UAC "runas" with --install-driver
+        // to register/start the MSR driver service, then exit immediately.
+        // No GUI is created in this mode.
+        for (int i = 1; i < argc; ++i)
+        {
+            if (wxStrcmp(argv[i], L"--install-driver") == 0)
+            {
+                LOGI("Elevated helper mode (--install-driver).");
+                const int rc = MsrSensor::RunInstallHelper(nullptr);
+                Logger::Close();
+                exit(rc); // 0 = driver installed and running
+            }
+        }
+#endif
 
         try
         {

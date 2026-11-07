@@ -795,6 +795,9 @@ void CpuMonitor::QueryCpuName()
 
     // Initialize MSR driver (if present next to exe) and probe thermal params.
     MsrSensor::InitDriver(nullptr); // nullptr = driver path from registry/exe dir
+    // If the backend could not be opened but a driver could be installed,
+    // ask once for elevation (GUI thread - QueryCpuName runs on it) and retry.
+    MsrSensor::EnsureDriver(nullptr);
     ProbeMsrInit();
 }
 
@@ -837,7 +840,7 @@ void CpuMonitor::ProbeMsrInit()
     static const struct { uint32_t key; int8_t tjmax; } kTjmaxTable[] =
     {
         { (6u << 16) | (0x3F << 8) | 0,  84 }, // Haswell-E/EP
-        { (6u << 16) | (0x4F << 8) | 0,  100 },// Broadwell-EP
+        { (6u << 16) | (0x4F << 8) | 0,   85 },// Broadwell-EP (Xeon E5-2696 v4 = 85)
         { (6u << 16) | (0x55 << 8) | 0,  100 },// Skylake/Cascade Lake-SP
         { (6u << 16) | (0x5E << 8) | 0,  100 },
         { (6u << 16) | (0x7E << 8) | 0,  100 },
@@ -861,11 +864,11 @@ void CpuMonitor::ProbeMsrInit()
     const uint32_t keyWithStep = (family << 16) | (model << 8) | stepping;
     for (const auto& e : kTjmaxTable)
         if (e.key == keyWithStep) { tjmax = e.tjmax; break; }
-    if (tjmax == 100)
     {
+        // Fallback: match family+model ignoring stepping (table keys store 0).
         const uint32_t keyNoStep = (family << 16) | (model << 8);
         for (const auto& e : kTjmaxTable)
-            if ((e.key & 0xFFFF) == keyNoStep && (e.key & 0xFF) == 0)
+            if ((e.key & 0xFFFFFF00u) == keyNoStep)
             { tjmax = e.tjmax; break; }
     }
 
@@ -876,6 +879,6 @@ void CpuMonitor::ProbeMsrInit()
         m_msrStepping = stepping;
         m_msrTjmax    = tjmax;
     }
-    LOGI("DIAG MSR init: family=%u model=0x%02X stepping=%u Tjmax=%d",
+    LOGI("MSR init: family=%u model=0x%02X stepping=%u Tjmax=%d",
          family, model, stepping, tjmax);
 }

@@ -22,6 +22,22 @@ namespace MsrSensor
     // Safe to call from any thread; idempotent.
     void InitDriver(const wchar_t* exeDir);
 
+    // True when the MSR backend (DLL or kernel driver) is open and usable.
+    bool IsAvailable();
+
+    // Make sure the MSR backend is available. If it failed to open, driver
+    // assets exist (.sys next to exe or a registered WinRing0 service) and
+    // the process is not elevated, asks the user once (UAC consent) to run
+    // the elevated helper that installs/starts the driver service, then
+    // retries opening the backend. Declining the prompt or a failed UAC
+    // elevation is not an error: the caller simply falls back to WMI.
+    // Must be called from the GUI thread (shows a message box).
+    void EnsureDriver(const wchar_t* exeDir);
+
+    // Elevated helper mode (--install-driver): registers/starts the driver
+    // service without creating any GUI. Returns 0 on success.
+    int RunInstallHelper(const wchar_t* exeDir);
+
     // Probe IA32_TEMPERATURE_REPORTING_POINT_STATUS (0xC001_0294) and decode
     // Celsius from Tjmax - (bits[15:8] * resolution). Returns -1.0 on any
     // failure (driver absent, MSR blocked, implausible value).

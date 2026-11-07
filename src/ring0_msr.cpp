@@ -5,7 +5,14 @@
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
+// TokenElevation needs Vista+ SDK declarations; force the minimum level
+// before any Windows header pulls the version macros in.
+#if !defined(_WIN32_WINNT) || _WIN32_WINNT < 0x0600
+#undef _WIN32_WINNT
+#define _WIN32_WINNT 0x0600
+#endif
 #include <windows.h>
+#include <shellapi.h>   // ShellExecuteExW (elevated helper launch)
 #ifdef WIN32_LEAN_AND_MEAN
 #undef WIN32_LEAN_AND_MEAN
 #endif
@@ -57,6 +64,7 @@ namespace Ring0Msr
     static SC_HANDLE s_hScm    = nullptr;
     static SC_HANDLE s_hSvc    = nullptr;
     static bool     s_drvOpened = false;
+    static bool     s_svcCreated = false; // true only if WE created the service
 
     static Backend s_backend = Backend::None;
 
@@ -95,14 +103,14 @@ namespace Ring0Msr
         std::wstring dllPath = FindDll(exeDir);
         if (dllPath.empty())
         {
-            LOGI("DIAG MSR: WinRing0x64.dll not found.");
+            LOGI("MSR: WinRing0x64.dll not found.");
             return false;
         }
 
         s_hDll = LoadLibraryW(dllPath.c_str());
         if (!s_hDll)
         {
-            LOGI("DIAG MSR: LoadLibraryW failed err=%lu", GetLastError());
+            LOGI("MSR: LoadLibraryW failed err=%lu", GetLastError());
             return false;
         }
 
@@ -121,7 +129,7 @@ namespace Ring0Msr
 
         if (!s_fnInit || !s_fnDeinit || !s_fnRdmsr)
         {
-            LOGI("DIAG MSR: WinRing0x64.dll missing required exports.");
+            LOGI("MSR: WinRing0x64.dll missing required exports.");
             FreeLibrary(s_hDll);
             s_hDll = nullptr;
             return false;
@@ -129,7 +137,7 @@ namespace Ring0Msr
 
         if (!s_fnInit())
         {
-            LOGI("DIAG MSR: InitializeOls failed.");
+            LOGI("MSR: InitializeOls failed.");
             s_fnDeinit();
             FreeLibrary(s_hDll);
             s_hDll = nullptr;
@@ -140,14 +148,14 @@ namespace Ring0Msr
         {
             int dsts = s_fnDllStatus ? s_fnDllStatus() : -1;
             int drvt = s_fnDrvType ? s_fnDrvType() : -1;
-            LOGI("DIAG MSR: IsMsr=false DllStatus=%d DriverType=%d", dsts, drvt);
+            LOGI("MSR: IsMsr=false DllStatus=%d DriverType=%d", dsts, drvt);
             s_fnDeinit();
             FreeLibrary(s_hDll);
             s_hDll = nullptr;
             return false;
         }
 
-        LOGI("DIAG MSR: loaded WinRing0x64.dll from %s",
+        LOGI("MSR: loaded WinRing0x64.dll from %s",
              wxString(dllPath.c_str()).mb_str().data());
         s_backend = Backend::Dll;
         return true;
@@ -179,7 +187,7 @@ namespace Ring0Msr
                                  reinterpret_cast<LPBYTE>(path), &size) == ERROR_SUCCESS
                 && path[0])
             {
-                LOGI("DIAG MSR driver from registry: %S", wxString(path).mb_str().data());
+                LOGI("MSR driver from registry: %S", wxString(path).mb_str().data());
                 RegCloseKey(hKey);
                 return std::wstring(path);
             }
@@ -210,53 +218,122 @@ namespace Ring0Msr
             path += name;
             if (GetFileAttributesW(path.c_str()) != INVALID_FILE_ATTRIBUTES)
             {
-                LOGI("DIAG MSR driver found: %s", wxString(path.c_str()).mb_str().data());
+                LOGI("MSR driver found: %s", wxString(path.c_str()).mb_str().data());
                 return path;
             }
         }
         return L"";
     }
 
-    static bool OpenDriver(const wchar_t* exeDir)
+    // Try to open the kernel device directly. Works without administrator
+    // rights when the driver is already loaded (WinRing0's device DACL allows
+    // plain users to open it) - e.g. after our elevated helper or RealTemp
+    // started the service.
+    static bool TryOpenDevice()
     {
-        std::wstring drvPath = FindDriver(exeDir);
-        if (drvPath.empty())
+        for (const auto* devName : kDeviceNames)
         {
-            LOGI("DIAG MSR: no .sys driver found, falling back to WMI.");
-            return false;
+            HANDLE h = CreateFileW(devName,
+                                   GENERIC_READ | GENERIC_WRITE,
+                                   FILE_SHARE_READ | FILE_SHARE_WRITE,
+                                   nullptr, OPEN_EXISTING, 0, nullptr);
+            if (h != INVALID_HANDLE_VALUE)
+            {
+                s_hDevice = h;
+                LOGI("MSR: driver open OK via %S", wxString(devName).mb_str().data());
+                s_drvOpened = true;
+                return true;
+            }
         }
+        return false;
+    }
 
-        s_hScm = OpenSCManagerW(nullptr, nullptr, SC_MANAGER_ALL_ACCESS);
-        if (!s_hScm)
-        {
-            LOGI("DIAG MSR: OpenSCManager failed err=%lu", GetLastError());
-            return false;
-        }
-
-        // Try well-known service names first (may be installed by RealTemp etc.).
+    // Start an already-registered well-known service (RealTemp etc.).
+    // Returns true when the service handle is kept in s_hSvc and running.
+    static bool StartKnownService()
+    {
         for (const auto* knownName : kKnownSvcNames)
         {
             s_hSvc = OpenServiceW(s_hScm, knownName, SERVICE_ALL_ACCESS);
-            if (s_hSvc)
+            if (!s_hSvc)
+                continue;
+            if (!StartServiceW(s_hSvc, 0, nullptr))
             {
-                if (!StartServiceW(s_hSvc, 0, nullptr))
+                DWORD err = GetLastError();
+                if (err != ERROR_SERVICE_ALREADY_RUNNING)
                 {
-                    DWORD err = GetLastError();
-                    if (err != ERROR_SERVICE_ALREADY_RUNNING)
-                    {
-                        CloseServiceHandle(s_hSvc);
-                        s_hSvc = nullptr;
-                        continue;
-                    }
+                    CloseServiceHandle(s_hSvc);
+                    s_hSvc = nullptr;
+                    continue;
                 }
-                LOGI("DIAG MSR: using existing service %S", knownName);
-                break;
             }
+            LOGI("MSR: using existing service %S", knownName);
+            return true;
+        }
+        return false;
+    }
+
+    // Roll back only what this process created: a foreign service (RealTemp)
+    // must never be stopped or deleted by us.
+    static void RollbackCreatedService()
+    {
+        if (s_hSvc && s_svcCreated)
+        {
+            ControlService(s_hSvc, SERVICE_CONTROL_STOP, nullptr);
+            ::DeleteService(s_hSvc);
+        }
+        if (s_hSvc)   { CloseServiceHandle(s_hSvc); s_hSvc = nullptr; }
+        if (s_hScm)   { CloseServiceHandle(s_hScm); s_hScm = nullptr; }
+        if (s_hDevice != INVALID_HANDLE_VALUE)
+        {
+            CloseHandle(s_hDevice);
+            s_hDevice = INVALID_HANDLE_VALUE;
+        }
+        s_svcCreated = false;
+        s_drvOpened  = false;
+    }
+
+    static bool OpenDriver(const wchar_t* exeDir)
+    {
+        // 1) Driver may already be loaded (RealTemp or our elevated helper
+        //    ran before). Opening the device needs no privileges at all.
+        if (TryOpenDevice())
+            return true;
+
+        // 2) Not loaded: starting/registering a service needs admin rights.
+        s_hScm = OpenSCManagerW(nullptr, nullptr, SC_MANAGER_ALL_ACCESS);
+        if (!s_hScm)
+        {
+            LOGI("MSR: OpenSCManager failed err=%lu (administrator rights required "
+                 "to start the driver)", GetLastError());
+            return false;
         }
 
-        if (!s_hSvc)
+        // 3) Prefer an already-registered well-known service (RealTemp etc.):
+        //    it carries its own .sys path, so no local file is needed.
+        if (StartKnownService())
         {
-            // Create from .sys file.
+            if (TryOpenDevice())
+                return true;
+            // Service runs but exposes a different device name - release the
+            // handle and fall through to the local .sys registration path.
+            CloseServiceHandle(s_hSvc);
+            s_hSvc = nullptr;
+        }
+
+        // 4) Register the service from a .sys file next to the exe (or an
+        //    explicit registry path).
+        std::wstring drvPath = FindDriver(exeDir);
+        if (drvPath.empty())
+        {
+            LOGI("MSR: no .sys driver found and no known service usable, "
+                 "falling back to WMI.");
+            CloseServiceHandle(s_hScm);
+            s_hScm = nullptr;
+            return false;
+        }
+
+        {
             std::wstring fileName = drvPath.substr(drvPath.find_last_of(L'\\') + 1);
             auto dot = fileName.find(L'.');
             std::wstring svcName = (dot != std::wstring::npos)
@@ -274,17 +351,14 @@ namespace Ring0Msr
             DWORD err = GetLastError();
             if (s_hSvc)
             {
+                s_svcCreated = true;
                 if (!StartServiceW(s_hSvc, 0, nullptr))
                 {
                     err = GetLastError();
                     if (err != ERROR_SERVICE_ALREADY_RUNNING)
                     {
-                        LOGI("DIAG MSR: StartService failed err=%lu", err);
-                        ::DeleteService(s_hSvc);
-                        CloseServiceHandle(s_hSvc);
-                        s_hSvc = nullptr;
-                        CloseServiceHandle(s_hScm);
-                        s_hScm = nullptr;
+                        LOGI("MSR: StartService failed err=%lu", err);
+                        RollbackCreatedService();
                         return false;
                     }
                 }
@@ -296,7 +370,7 @@ namespace Ring0Msr
                     s_hSvc = OpenServiceW(s_hScm, svcName.c_str(), SERVICE_ALL_ACCESS);
                     if (!s_hSvc)
                     {
-                        LOGI("DIAG MSR: OpenService failed err=%lu", GetLastError());
+                        LOGI("MSR: OpenService failed err=%lu", GetLastError());
                         CloseServiceHandle(s_hScm);
                         s_hScm = nullptr;
                         return false;
@@ -306,7 +380,7 @@ namespace Ring0Msr
                         err = GetLastError();
                         if (err != ERROR_SERVICE_ALREADY_RUNNING)
                         {
-                            LOGI("DIAG MSR: StartService(existing) failed err=%lu", err);
+                            LOGI("MSR: StartService(existing) failed err=%lu", err);
                             CloseServiceHandle(s_hSvc);
                             CloseServiceHandle(s_hScm);
                             s_hSvc = nullptr;
@@ -317,7 +391,7 @@ namespace Ring0Msr
                 }
                 else
                 {
-                    LOGI("DIAG MSR: CreateService failed err=%lu", err);
+                    LOGI("MSR: CreateService failed err=%lu", err);
                     CloseServiceHandle(s_hScm);
                     s_hScm = nullptr;
                     return false;
@@ -325,27 +399,123 @@ namespace Ring0Msr
             }
         }
 
-        for (const auto* devName : kDeviceNames)
+        if (TryOpenDevice())
+            return true;
+
+        LOGI("MSR: CreateFile failed all device names err=%lu", GetLastError());
+        RollbackCreatedService();
+        return false;
+    }
+
+    // --- Elevation support ----------------------------------------------------
+
+    bool IsElevated()
+    {
+        HANDLE hToken = nullptr;
+        if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &hToken))
+            return false;
+        TOKEN_ELEVATION elev{};
+        DWORD sz = 0;
+        bool elevated = false;
+        if (GetTokenInformation(hToken, TokenElevation, &elev, sizeof(elev), &sz))
+            elevated = (elev.TokenIsElevated != 0);
+        CloseHandle(hToken);
+        return elevated;
+    }
+
+    bool HasDriverAssets(const wchar_t* exeDir)
+    {
+        // A .sys next to the exe (or an explicit registry path) means we can
+        // register the service once with elevation.
+        if (!FindDriver(exeDir).empty())
+            return true;
+
+        // A service registered by RealTemp (possibly pointing outside our
+        // directory) can be started by the elevated helper as well.
+        SC_HANDLE scm = OpenSCManagerW(nullptr, nullptr, SC_MANAGER_CONNECT);
+        if (!scm)
+            return false;
+        bool found = false;
+        for (const auto* knownName : kKnownSvcNames)
         {
-            s_hDevice = CreateFileW(devName,
-                                    GENERIC_READ | GENERIC_WRITE,
-                                    FILE_SHARE_READ | FILE_SHARE_WRITE,
-                                    nullptr, OPEN_EXISTING, 0, nullptr);
-            if (s_hDevice != INVALID_HANDLE_VALUE)
+            SC_HANDLE svc = OpenServiceW(scm, knownName, SERVICE_QUERY_STATUS);
+            if (svc)
             {
-                LOGI("DIAG MSR: driver open OK via %S", wxString(devName).mb_str().data());
-                s_drvOpened = true;
-                return true;
+                found = true;
+                CloseServiceHandle(svc);
+                break;
             }
         }
+        CloseServiceHandle(scm);
+        return found;
+    }
 
-        LOGI("DIAG MSR: CreateFile failed all device names err=%lu", GetLastError());
-        // Fall through — caller will try DLL backend.
-        if (s_hDevice != INVALID_HANDLE_VALUE) { CloseHandle(s_hDevice); s_hDevice = INVALID_HANDLE_VALUE; }
-        if (s_hSvc)   { ControlService(s_hSvc, SERVICE_CONTROL_STOP, nullptr); ::DeleteService(s_hSvc); CloseServiceHandle(s_hSvc); s_hSvc = nullptr; }
-        if (s_hScm)   { CloseServiceHandle(s_hScm); s_hScm = nullptr; }
-        s_drvOpened = false;
-        return false;
+    bool InstallElevated()
+    {
+        wchar_t exePath[MAX_PATH] = {};
+        DWORD len = GetModuleFileNameW(nullptr, exePath, MAX_PATH);
+        if (len == 0 || len >= MAX_PATH)
+        {
+            LOGI("MSR: GetModuleFileNameW failed err=%lu", GetLastError());
+            return false;
+        }
+
+        SHELLEXECUTEINFOW sei{};
+        sei.cbSize   = sizeof(sei);
+        sei.fMask    = SEE_MASK_NOCLOSEPROCESS;
+        sei.lpVerb   = L"runas";   // triggers the UAC consent prompt
+        sei.lpFile   = exePath;
+        sei.lpParameters = L"--install-driver";
+        sei.nShow    = SW_HIDE;
+
+        if (!ShellExecuteExW(&sei))
+        {
+            LOGI("MSR: elevation failed/cancelled err=%lu", GetLastError());
+            return false;
+        }
+
+        bool ok = false;
+        if (sei.hProcess)
+        {
+            if (WaitForSingleObject(sei.hProcess, 60000) == WAIT_OBJECT_0)
+            {
+                DWORD code = 1;
+                if (GetExitCodeProcess(sei.hProcess, &code))
+                    ok = (code == 0);
+            }
+            else
+            {
+                LOGI("MSR: elevated helper timed out.");
+            }
+            CloseHandle(sei.hProcess);
+        }
+        return ok;
+    }
+
+    // Elevated helper body (--install-driver): install/start the driver
+    // service and exit. The service is deliberately left running so the next
+    // normal (non-elevated) launch can just open the device.
+    int RunInstallHelper(const wchar_t* exeDir)
+    {
+        LOGI("MSR: elevated helper starting.");
+        if (OpenDriver(exeDir))
+        {
+            // Drop handles WITHOUT stopping/deleting the service.
+            if (s_hDevice != INVALID_HANDLE_VALUE)
+            {
+                CloseHandle(s_hDevice);
+                s_hDevice = INVALID_HANDLE_VALUE;
+            }
+            if (s_hSvc) { CloseServiceHandle(s_hSvc); s_hSvc = nullptr; }
+            if (s_hScm) { CloseServiceHandle(s_hScm); s_hScm = nullptr; }
+            s_drvOpened  = false;
+            s_svcCreated = false;
+            s_backend    = Backend::None;
+            LOGI("MSR: driver service installed and running.");
+            return 0;
+        }
+        LOGI("MSR: elevated helper failed.");
+        return 1;
     }
 
     // --- Public API -----------------------------------------------------------
@@ -365,7 +535,7 @@ namespace Ring0Msr
             return true;
         }
 
-        LOGI("DIAG MSR: all backends failed, using WMI fallback.");
+        LOGI("MSR: all backends failed, using WMI fallback.");
         return false;
     }
 
@@ -396,7 +566,7 @@ namespace Ring0Msr
                              &out64, sizeof(out64),
                              &bytesReturned, nullptr))
         {
-            LOGI("DIAG MSR: DeviceIoControl failed err=%lu", GetLastError());
+            LOGI("MSR: DeviceIoControl failed err=%lu", GetLastError());
             return false;
         }
 
@@ -415,10 +585,12 @@ namespace Ring0Msr
             CloseHandle(s_hDevice);
             s_hDevice = INVALID_HANDLE_VALUE;
         }
+        // The service is intentionally left installed and running: a
+        // demand-start WinRing0 service costs nothing while idle and lets the
+        // next launch open the device without administrator rights (no UAC).
+        // Stopping/deleting it here would force an elevation prompt every run.
         if (s_hSvc)
         {
-            ControlService(s_hSvc, SERVICE_CONTROL_STOP, nullptr);
-            ::DeleteService(s_hSvc);
             CloseServiceHandle(s_hSvc);
             s_hSvc = nullptr;
         }
@@ -436,7 +608,8 @@ namespace Ring0Msr
         s_fnDeinit = nullptr;
         s_fnRdmsr = nullptr;
         s_fnIsMsr = nullptr;
-        s_drvOpened = false;
+        s_drvOpened  = false;
+        s_svcCreated = false;
         s_backend = Backend::None;
     }
 

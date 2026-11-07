@@ -17,21 +17,37 @@ namespace MsrSensor
 
     // Read a 32-bit MSR value using the rdmsr intrinsic.
     // Returns 0xFFFFFFFF on any exception (privilege violation, etc.).
-    // Must be a plain-C function (no objects with destructors) for SEH.
-    static uint32_t RdmsrSafe(uint32_t msr)
+    // Must be a plain-C function (no objects with destructors) for SEH:
+    // MSVC error C2712 forbids __try in functions requiring unwinding.
+    // The exception code is reported through outExcCode (POD only).
+    static uint32_t RdmsrRaw(uint32_t msr, ULONG& outExcCode)
     {
-        ULONG excCode = 0;
+        outExcCode = 0;
+        uint32_t value = 0xFFFFFFFFu;
         __try
         {
-            return static_cast<uint32_t>(__readmsr(msr));
+            value = static_cast<uint32_t>(__readmsr(msr));
         }
-        __except((excCode = GetExceptionCode()) == 0xC0000096
+        __except((outExcCode = GetExceptionCode()) == 0xC0000096
                  ? EXCEPTION_EXECUTE_HANDLER
                  : EXCEPTION_CONTINUE_SEARCH)
         {
-            printf("DIAG MSR: rdmsr 0x%08X raised 0x%08X\n", msr, excCode);
-            return 0xFFFFFFFF;
+            value = 0xFFFFFFFFu;
         }
+        return value;
+    }
+
+    // SEH-safe wrapper: performs the read and logs a failure once.
+    // Logging lives here (not in RdmsrRaw) because wxString temporaries make
+    // a function ineligible for __try.
+    static uint32_t RdmsrSafe(uint32_t msr)
+    {
+        ULONG excCode = 0;
+        const uint32_t value = RdmsrRaw(msr, excCode);
+        if (excCode != 0)
+            LOGI("MSR 0x%08X read raised 0x%08X, treating as unavailable",
+                 msr, static_cast<unsigned>(excCode));
+        return value;
     }
 
     // Pin thread to a specific logical processor and read an MSR.
@@ -70,7 +86,8 @@ namespace MsrSensor
         uint32_t dllLo = 0, dllHi = 0;
         if (Ring0Msr::ReadMsr(kTargetMsr, dllLo, dllHi))
         {
-            int computedTjmax = static_cast<int>((dllHi >> 16) & 0xFF);
+            // Tjmax is in bits[23:16] of EAX (low part), not EDX.
+            int computedTjmax = static_cast<int>((dllLo >> 16) & 0xFF);
             if (computedTjmax <= 0 || computedTjmax > 150)
                 computedTjmax = static_cast<int>(tjmax);
 
@@ -87,6 +104,7 @@ namespace MsrSensor
         auto [loT, hiT] = ReadMsrOnCore(kTargetMsr);
         if (loT != 0xFFFFFFFF)
         {
+            // Tjmax is in bits[23:16] of EAX (low part).
             int computedTjmax = (loT >> 16) & 0xFF;
             if (computedTjmax <= 0 || computedTjmax > 150)
                 computedTjmax = static_cast<int>(tjmax);
@@ -107,6 +125,70 @@ namespace MsrSensor
     void InitDriver(const wchar_t* exeDir)
     {
         Ring0Msr::Open(exeDir);
+    }
+
+    bool IsAvailable()
+    {
+        return Ring0Msr::IsOpen();
+    }
+
+    void EnsureDriver(const wchar_t* exeDir)
+    {
+        // Backend already works (e.g. RealTemp loaded the driver): nothing to do.
+        if (Ring0Msr::IsOpen())
+            return;
+
+        // Nothing we could install: no .sys next to the exe, no registry path
+        // and no registered WinRing0 service. Elevation would not help.
+        if (!Ring0Msr::HasDriverAssets(exeDir))
+        {
+            LOGI("MSR: no driver assets found, using WMI fallback.");
+            return;
+        }
+
+        // Assets exist but we are already elevated: the install was attempted
+        // and failed for another reason (bad .sys, blocked service, ...).
+        // Asking for UAC again would not change anything.
+        if (Ring0Msr::IsElevated())
+        {
+            LOGI("MSR: driver assets present but backend failed even when "
+                 "elevated, using WMI fallback.");
+            return;
+        }
+
+        const int answer = wxMessageBox(
+            "LoadGraph needs a small kernel driver (WinRing0) to read the "
+            "CPU temperature.\n\n"
+            "Install it now? Windows will ask for administrator permission.\n\n"
+            "If you decline, temperature will be shown as N/A.",
+            "LoadGraph - CPU temperature",
+            wxYES_NO | wxICON_QUESTION);
+
+        if (answer != wxYES)
+        {
+            LOGI("MSR: driver installation declined by user, using WMI fallback.");
+            return;
+        }
+
+        if (!Ring0Msr::InstallElevated())
+        {
+            LOGI("MSR: elevated installation failed or was cancelled, "
+                 "using WMI fallback.");
+            return;
+        }
+
+        // The helper left the service running: reopen the backend without
+        // any privileges (device ACL allows plain users to open it).
+        if (Ring0Msr::Open(exeDir))
+            LOGI("MSR: backend opened after elevated driver install.");
+        else
+            LOGI("MSR: backend still unavailable after elevated install, "
+                 "using WMI fallback.");
+    }
+
+    int RunInstallHelper(const wchar_t* exeDir)
+    {
+        return Ring0Msr::RunInstallHelper(exeDir);
     }
 
     void Shutdown()

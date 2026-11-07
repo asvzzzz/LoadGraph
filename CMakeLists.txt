@@ -178,7 +178,7 @@ if(WIN32)
         "C:/Program Files (x86)/Windows Kits/10/Include/10.0.26100.0/um"
     )
 
-    set(WINDOWS_LIBS ws2_32 rpcrt4 odbc32 shlwapi comctl32 ole32 oleaut32 uuid winmm psapi advapi32 dwmapi)
+    set(WINDOWS_LIBS ws2_32 rpcrt4 odbc32 shlwapi shell32 comctl32 ole32 oleaut32 uuid winmm psapi advapi32 dwmapi)
 
     target_link_libraries(${PROJECT_NAME}
         ${wxWidgets_LIBRARIES}
