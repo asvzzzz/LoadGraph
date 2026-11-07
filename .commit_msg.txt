@@ -1,12 +1,11 @@
-Fix remaining low-priority review items
+Fix last review items: ring0_msr %ls, remove dead ToggleGroup, FormatUptime units
 
-- cpu_monitor_linux.cpp::SampleLoad: move static prev-user/nice/system/idle
-  and first-sample flag to class members (m_prevUser etc., m_loadFirst) so
-  multiple CpuMonitor instances do not share state.
-- cpu_monitor_linux.cpp::ReadRaplPowerWatts: same treatment for s_rapl — moved
-  RaplState struct and its instance to CpuMonitor as m_rapl; function promoted
-  to a member method. Eliminates the latent multi-instance sharing bug.
-- CMakeLists.txt (Linux): add INSTALL_RPATH "$ORIGIN/../libs" so a copied tree
-  or "make install" layout finds bundled .so files without LD_LIBRARY_PATH.
-- CMakeLists.txt (WXSTATIC_ROOT): document which wxWidgets libraries are
-  required and what happens if new features pull in additional ones.
+- ring0_msr.cpp: fix remaining .mb_str().data() + %s to use %ls with wchar_t*
+  (dllPath.c_str()) — the only place still doing narrow conversion in Unicode
+  builds.
+- main_frame.h / main_frame.cpp: remove dead ToggleGroup struct and m_toggleGroups
+  map entirely, along with all push_back calls that populated it. The height
+  adjustment is computed dynamically via sizer->CalcMin() — the container was
+  never read after deltaH was removed and only confused readers.
+- main_frame.cpp::FormatUptime: sub-minute uptimes now render as "<N> s" (e.g.
+  "05 s") instead of a bare "05", making the unit explicit.

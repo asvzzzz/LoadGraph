@@ -117,18 +117,6 @@ private:
     // when a previously-hidden row is made visible again.
     wxSize m_lastFullSize;
 
-    // Sizer items belonging to each toggleable key: hiding such an item must
-    // shrink the window by exactly this item's height, without empty space and
-    // without moving the window position (proportions are preserved).
-    struct ToggleGroup
-    {
-        std::vector<wxSizerItem*> items;   // sizer entries to show/hide together
-        // Note: deltaH was historically used to track row height, but the actual
-        // resize is computed dynamically via sizer->CalcMin() in ApplyHeightAdjustment.
-    };
-    // Keys: "CPU Load", "RAM Usage", ..., plus GPU group keys ("gpu_load", ...).
-    std::unordered_map<std::string, ToggleGroup> m_toggleGroups;
-
     void BuildViewMenu(wxMenuBar* menuBar,
                        const std::map<std::string, bool>& initialState);
     void OnViewToggle(wxCommandEvent& evt);

@@ -155,8 +155,7 @@ namespace Ring0Msr
             return false;
         }
 
-        LOGI("MSR: loaded WinRing0x64.dll from %s",
-             wxString(dllPath.c_str()).mb_str().data());
+        LOGI("MSR: loaded WinRing0x64.dll from %ls", dllPath.c_str());
         s_backend = Backend::Dll;
         return true;
     }
