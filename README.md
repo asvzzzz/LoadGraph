@@ -2,6 +2,8 @@
 
 Real-time system resource monitor tailored for visual oversight of local LLM workloads. Windows 10/11 + Linux (Ubuntu 22.04 / Linux Mint). One graph per metric, single window, no tabs, no scrollbar.
 
+[Версия на русском языке](README_rus.md)
+
 **Version:** 1.0.0
 
 ## Why this exists
