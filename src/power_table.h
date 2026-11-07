@@ -26,7 +26,7 @@ namespace PowerTable
     // draws static leakage and uncore power, so pure load x TDP reports ~1 W
     // at idle while the real package draw is tens of watts.
     //   P = P_idle + load% * (TDP - P_idle)
-    //   P_idle = min(0.35 * TDP, 2.5 W * physicalCores)
+    //   P_idle = min(0.30 * TDP, 1.5 W * physicalCores)
     // physicalCores = 0 -> fallback P_idle = 0.25 * TDP.
     // The result is clamped to [0, TDP]; loadPercent is clamped to [0, 100].
     double EstimateCpuPowerWatts(double loadPercent, uint32_t tdpWatts,

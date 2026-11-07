@@ -11,8 +11,10 @@
 
 namespace
 {
-    // Palette cache. false = light scheme (safe default).
-    bool g_dark = false;
+    // Palette cache with timestamp: re-read gsettings at most once per 30 s to
+    // avoid forking it every second from OnTimer.
+    bool   g_dark       = false;
+    double g_darkCached = 0.0;
 
     // Minimal INI reader — only parses a single key under [Settings].
     // Returns true if the file exists and key was found with value "1".
@@ -191,8 +193,15 @@ namespace
 
 bool Theme::Update()
 {
+    // Cache the result for 30 s to avoid popen("gsettings ...") every timer tick.
+    static constexpr double kCacheSec = 30.0;
     const bool wasDark = g_dark;
-    g_dark = ReadDarkFlag();
+    double now = wxGetLocalTime().GetValue(); // seconds since midnight — monotonic enough
+    if (now - g_darkCached > kCacheSec || g_darkCached == 0.0)
+    {
+        g_dark = ReadDarkFlag();
+        g_darkCached = now;
+    }
     return g_dark != wasDark;
 }
 

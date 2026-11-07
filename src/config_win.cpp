@@ -65,6 +65,14 @@ bool Config::LoadWindowSize(int& w, int& h)
 
 void Config::SaveWindowPosition(int x, int y, int w, int h)
 {
+    // Clamp before encoding: EncodePos truncates to USHORT (0..65535), and the
+    // signed decode interprets high bits as negative. Values outside [-32768,
+    // 32767] would silently corrupt the stored coordinate.
+    if (x < -32768) x = -32768; else if (x > 32767) x = 32767;
+    if (y < -32768) y = -32768; else if (y > 32767) y = 32767;
+    if (w < 0)      w = 0;      else if (w > 32767) w = 32767;
+    if (h < 0)      h = 0;      else if (h > 32767) h = 32767;
+
     HKEY hKey;
     if (RegCreateKeyExW(HKEY_CURRENT_USER, kRegPath, 0, nullptr, 0,
                         KEY_SET_VALUE, nullptr, &hKey, nullptr) == ERROR_SUCCESS)

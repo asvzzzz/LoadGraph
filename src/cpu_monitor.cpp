@@ -365,7 +365,7 @@ void CpuMonitor::Collect()
                 m_powerLhmNs  = kPowerNs[i];
                 m_powerLhmOk  = true;
                 power         = v;
-                LOGI("CPU power sensor found (%S): %.1f W", kPowerNs[i], v);
+                LOGI("CPU power sensor found (%s): %.1f W", kPowerNs[i], v);
             }
         }
         if (!m_powerLhmOk)
@@ -547,7 +547,7 @@ static void DumpWmiObject(IWbemClassObject* pObj)
                 {
                     swprintf(desc, 128, L"Get err=0x%08X", (unsigned)hr2);
                 }
-                LOGI("DIAG WMI prop %S: %s", bName, desc);
+                LOGI("DIAG WMI prop %s: %s", bName, desc);
                 VariantClear(&vt);
                 SysFreeString(bName);
             }
@@ -561,6 +561,13 @@ static void DumpWmiObject(IWbemClassObject* pObj)
 // driver or admin privileges. Call once at startup from Collect().
 static void ProbeAllTempSources()
 {
+    // COM must be initialized before any CoCreateInstance / CoInitializeEx call.
+    // QueryWmiValueRaw does its own per-call init, but this function calls
+    // CoCreateInstance directly without wrapping it — initialize once here.
+    HRESULT comHres = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+    bool comInit = (comHres == S_OK || comHres == S_FALSE);
+    (void)comInit;
+
     // ---- WMI: Win32_TemperatureProbe (root\cimv2) — enumerate ALL rows + props --
     {
         IWbemLocator* pLoc = nullptr;
@@ -700,12 +707,12 @@ static void ProbeAllTempSources()
                                  reinterpret_cast<LPBYTE>(val), &vsize) == ERROR_SUCCESS)
             {
                 if (type == REG_SZ || type == REG_EXPAND_SZ)
-                    LOGI("DIAG Reg %S = \"%s\" (type=%lu)", name, val, static_cast<unsigned long>(type));
+                    LOGI("DIAG Reg %s = \"%s\" (type=%lu)", name, val, static_cast<unsigned long>(type));
                 else if (type == REG_DWORD)
-                    LOGI("DIAG Reg %S = 0x%08X (type=%lu)", name,
+                    LOGI("DIAG Reg %s = 0x%08X (type=%lu)", name,
                          *reinterpret_cast<uint32_t*>(val), static_cast<unsigned long>(type));
                 else
-                    LOGI("DIAG Reg %S = <binary %lu bytes type=%lu>", name,
+                    LOGI("DIAG Reg %s = <binary %lu bytes type=%lu>", name,
                          static_cast<unsigned long>(vsize), static_cast<unsigned long>(type));
             }
         }
@@ -746,6 +753,8 @@ static void ProbeAllTempSources()
     {
         LOGI("DIAG PDH Temperature counter: open failed st=0x%08X", static_cast<unsigned>(st));
     }
+
+    if (comInit) CoUninitialize();
 }
 
 // Read the CPU model name from registry (HKLM\HARDWARE\DESCRIPTION\System\CentralProcessor\0\ProcessorNameString).
@@ -767,7 +776,7 @@ void CpuMonitor::QueryCpuName()
         {
             std::lock_guard<std::mutex> lock(m_mutex);
             m_metrics.cpuName = name;
-            LOGI("CPU name: %S", name);
+            LOGI("CPU name: %s", name);
         }
         RegCloseKey(hKey);
     }

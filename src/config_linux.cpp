@@ -135,9 +135,11 @@ bool LoadViewMenuState(std::map<std::string, bool>& out)
         size_t colon = content.find(':', keyEnd);
         if (colon == std::string::npos) { pos = keyEnd + 1; continue; }
 
-        // Find 0 or 1 after optional whitespace.
+        // Find 0 or 1 after optional whitespace. Guard against npos: without it
+        // numStart+1 wraps to 0 and the loop re-scans the same key forever.
         size_t numStart = content.find_first_of("01", colon + 1);
-        bool val = (numStart != std::string::npos && content[numStart] == '1');
+        if (numStart == std::string::npos) { pos = colon + 1; continue; }
+        bool val = (content[numStart] == '1');
         out[key] = val;
         pos = numStart + 1;
     }

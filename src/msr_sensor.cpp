@@ -51,7 +51,9 @@ namespace MsrSensor
     }
 
     // Pin thread to a specific logical processor and read an MSR.
-    // Returns {valid=false} on any failure.
+    // Returns {EAX, EDX} from the single rdmsr instruction. RdmsrRaw returns
+    // only EAX (low 32 bits); EDX is not separately addressable here, so hi is
+    // set to 0 — callers that need the high half should use Ring0Msr::ReadMsr().
     static std::pair<uint32_t, uint32_t> ReadMsrOnCore(uint32_t msr)
     {
         HANDLE hThread = GetCurrentThread();
@@ -59,11 +61,14 @@ namespace MsrSensor
         if (oldAff == 0)
             return {0, 0};
 
-        uint32_t lo = RdmsrSafe(msr);
-        uint32_t hi = RdmsrSafe(msr);
+        ULONG excCode = 0;
+        const uint32_t lo = RdmsrRaw(msr, excCode);
+        // hi is intentionally left as 0: rdmsr returns EDX:EAX in one instruction
+        // and RdmsrRaw only captures EAX. A second call would read the SAME MSR
+        // (not EDX), so we avoid the misleading double-read.
 
         SetThreadAffinityMask(hThread, oldAff);
-        return {lo, hi};
+        return {lo, 0u};
     }
 
     // Decode current temperature from IA32_THERM_STATUS (MSR 0x19C).

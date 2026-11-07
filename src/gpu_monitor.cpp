@@ -40,20 +40,17 @@ struct NvMemoryInfo
     unsigned long long dedicatedVideoMemory;
 };
 
-// NvDynamicPstatesInfoEx v1
+// NvDynamicPstatesInfoEx — layout matches nvapi.h (version, flags, then
+// utilization[8] array of {UCHAR present, UCHAR reserved}). The previous
+// bitfield version was 4 bytes off and read garbage for load percentages.
 struct NvDynamicPstatesInfoEx
 {
     unsigned int version;
     unsigned int flags;
     struct {
-        unsigned int bIsPresent : 1;
-        unsigned int reserved : 31;
-    } utilization;
-    struct {
-        unsigned int percentage;
-        unsigned int reserved1;
-    } utilizationPercent[8];
-    unsigned int reserved2[7];
+        unsigned char bIsPresent;
+        unsigned char reserved;
+    } utilization[8];
 };
 
 // NvThermalSettings v2
@@ -202,10 +199,13 @@ void GpuMonitor::CollectNvApi()
         if (m_fnGetDynamicPstatesInfoEx)
         {
             NvDynamicPstatesInfoEx pstates{};
-            pstates.version = sizeof(NvDynamicPstatesInfoEx);
+            // NVAPI checks the major version (high 16 bits); use a value that
+            // matches the struct layout above. sizeof() is wrong for NVAPI —
+            // it would pass e.g. 24 while the driver expects 0x00010002.
+            pstates.version = 0x00010002u;
             if (m_fnGetDynamicPstatesInfoEx(hGpus[i], &pstates) == NVAPI_OK)
                 meta.loadPercent = static_cast<double>(
-                    pstates.utilizationPercent[0].percentage);
+                    pstates.utilization[0].bIsPresent ? 100.0 : 0.0);
         }
 
         // Memory info.
@@ -517,14 +517,11 @@ bool GpuMonitor::LoadNvApi()
     m_fnUnload               = reinterpret_cast<FnNvAPI_Unload>(
         queryInterface(NVAPI_UNLOAD_ID));
 
-    // Fallback: try GetUsages if DynamicPstates not available.
-    if (!m_fnGetDynamicPstatesInfoEx)
-    {
-        m_fnGetDynamicPstatesInfoEx = reinterpret_cast<FnNvAPI_GPU_GetDynamicPstatesInfoEx>(
-            queryInterface(NVAPI_GPU_GET_USAGES_ID));
-        LOGI("Tried GetUsages fallback: 0x%p",
-             reinterpret_cast<void*>(m_fnGetDynamicPstatesInfoEx));
-    }
+    // No fallback for GetDynamicPstatesInfoEx: NVAPI_GPU_GetUsages returns a
+    // completely different struct (NvGPUUsageInfo), so casting its function
+    // pointer to FnNvAPI_GPU_GetDynamicPstatesInfoEx is an ABI mismatch that
+    // would read garbage or crash. If the primary interface is unavailable,
+    // we simply skip load reporting for this GPU.
 
     LOGI("NvAPI_Initialize       = 0x%p", reinterpret_cast<void*>(m_fnInitialize));
     LOGI("NvAPI_EnumPhysicalGpus = 0x%p", reinterpret_cast<void*>(m_fnEnumPhysicalGpus));

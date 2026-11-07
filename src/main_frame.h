@@ -123,7 +123,8 @@ private:
     struct ToggleGroup
     {
         std::vector<wxSizerItem*> items;   // sizer entries to show/hide together
-        int                       deltaH = 0; // their combined pixel height at full layout
+        // Note: deltaH was historically used to track row height, but the actual
+        // resize is computed dynamically via sizer->CalcMin() in ApplyHeightAdjustment.
     };
     // Keys: "CPU Load", "RAM Usage", ..., plus GPU group keys ("gpu_load", ...).
     std::unordered_map<std::string, ToggleGroup> m_toggleGroups;

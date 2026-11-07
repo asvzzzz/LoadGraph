@@ -20,7 +20,7 @@ static const double kAlarmTempC  = 80.0;
 static const int    kGraphHeightPx = 40;
 
 // Format uptime in ms as "YY:MM:DD HH:MI:SS", omitting leading zero groups.
-// If all components are zero the result is "0s".
+// If all components are zero the full six-field string is returned ("00:00:00 00:00:00").
 static wxString FormatUptime(uint64_t totalMs)
 {
 	uint64_t s = totalMs / 1000ULL;
@@ -119,7 +119,7 @@ MainFrame::MainFrame(const wxString& title)
 		const std::vector<GpuMetrics> gpus0 = m_gpu.GetMetrics();
 		LOGI("GPU list: %d device(s)", static_cast<int>(gpus0.size()));
 		for (size_t i = 0; i < gpus0.size(); ++i)
-			LOGI("  GPU %d: %s", static_cast<int>(i), gpus0[i].name.c_str());
+			LOGI("  GPU %d: %hs", static_cast<int>(i), gpus0[i].name.c_str());
 	}
 
 	// Start background collectors (1000 ms polling, handled by each monitor).
@@ -310,8 +310,8 @@ void MainFrame::BuildCpuSection(wxBoxSizer* container, wxWindow* parent)
 	m_viewToggles["RAM Usage"] = m_ramUsageGraph;
 	m_toggleGroups["CPU Load"].items.push_back(row1->GetItem(static_cast<size_t>(0)));
 	m_toggleGroups["RAM Usage"].items.push_back(row1->GetItem(static_cast<size_t>(1)));
-	m_toggleGroups["CPU Load"].deltaH  = kGraphHeightPx;
-	m_toggleGroups["RAM Usage"].deltaH = kGraphHeightPx;
+	// deltaH tracking removed — height adjustment is computed dynamically via
+	// sizer->CalcMin() in ApplyHeightAdjustment.
 
 	const CpuMetrics cpuInit = m_cpu.GetMetrics();
 
@@ -330,7 +330,7 @@ void MainFrame::BuildCpuSection(wxBoxSizer* container, wxWindow* parent)
 		m_viewToggles["CPU Power"] = m_cpuPowerGraph;
 		m_toggleGroups["CPU Power"].items.push_back(
 			container->GetItem(static_cast<size_t>(container->GetItemCount() - 1)));
-		m_toggleGroups["CPU Power"].deltaH = kGraphHeightPx;
+
 	}
 
 	// Row 3: CPU Temp (+ CPU Fan when a fan sensor exists).
@@ -355,13 +355,13 @@ void MainFrame::BuildCpuSection(wxBoxSizer* container, wxWindow* parent)
 
 		m_viewToggles["CPU Temp"] = m_cpuTempGraph;
 		m_toggleGroups["CPU Temp"].items.push_back(row2->GetItem(static_cast<size_t>(0)));
-		m_toggleGroups["CPU Temp"].deltaH = kGraphHeightPx;
+
 
 		if (m_cpuFanGraph)
 		{
 			m_viewToggles["CPU Fan"] = m_cpuFanGraph;
 			m_toggleGroups["CPU Fan"].items.push_back(row2->GetItem(static_cast<size_t>(1)));
-			m_toggleGroups["CPU Fan"].deltaH = kGraphHeightPx;
+
 		}
 	}
 }
@@ -395,8 +395,9 @@ void MainFrame::BuildGpuSection(wxBoxSizer* container, wxWindow* parent)
 		{
 			if (g.key == key) { g.panels.push_back(panel); break; }
 		}
-		ToggleGroup& tg = m_toggleGroups[key];
-		tg.deltaH += kGraphHeightPx;
+		// deltaH tracking removed — height adjustment is computed dynamically.
+		(void)m_toggleGroups[key];
+
 	};
 
 	for (size_t i = 0; i < gpus.size(); ++i)
@@ -517,7 +518,7 @@ void MainFrame::BuildTotalPowerRow(wxBoxSizer* container, wxWindow* parent)
 	m_viewToggles["Total Power"] = m_totalPowerGraph;
 	m_toggleGroups["Total Power"].items.push_back(
 		container->GetItem(static_cast<size_t>(container->GetItemCount() - 1)));
-	m_toggleGroups["Total Power"].deltaH = kGraphHeightPx;
+
 }
 
 void MainFrame::BuildViewMenu(wxMenuBar* menuBar, const std::map<std::string, bool>& initialState)
@@ -876,6 +877,7 @@ void MainFrame::OnContentPaint(wxPaintEvent&)
 
 	// Diagnostic: space between the Total Power graph bottom and the content
 	// bottom - must stay at the 6 px bottom gap at any window size.
+#ifdef LOADGRAPH_DEBUG
 	if (m_totalPowerGraph)
 	{
 		int x = 0, y = 0, w = 0, h = 0;
@@ -886,6 +888,7 @@ void MainFrame::OnContentPaint(wxPaintEvent&)
 		     cc.x, cc.y, y + h, cc.y - (y + h),
 		     static_cast<int>(m_sectionBoxes.size()));
 	}
+#endif
 
 	const wxColour frameCol(200, 200, 200);
 	dc.SetPen(wxPen(frameCol, 1));

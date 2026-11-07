@@ -327,6 +327,7 @@ std::vector<double> GraphPanel::ComputeYTicks(double minVal, double maxVal,
 {
     std::vector<double> ticks;
     if (count <= 0) return ticks;
+    if (count == 1) count = 2; // avoid division by zero in forcedStep calc
 
     double range = maxVal - minVal;
     if (range <= 0.0) range = 1.0;

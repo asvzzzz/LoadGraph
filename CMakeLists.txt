@@ -172,11 +172,10 @@ target_include_directories(${PROJECT_NAME} PRIVATE
 )
 
 if(WIN32)
-    target_include_directories(${PROJECT_NAME} PRIVATE
-        ${wxWidgets_INCLUDE_DIRS}
-        "C:/Program Files (x86)/Windows Kits/10/Include/10.0.26100.0/shared"
-        "C:/Program Files (x86)/Windows Kits/10/Include/10.0.26100.0/um"
-    )
+    # Windows SDK include paths are supplied automatically by the MSVC generator;
+    # hard-coding a specific SDK version (10.0.26100.0) would break on machines
+    # with any other SDK revision installed.
+    target_include_directories(${PROJECT_NAME} PRIVATE ${wxWidgets_INCLUDE_DIRS})
 
     set(WINDOWS_LIBS ws2_32 rpcrt4 odbc32 shlwapi shell32 comctl32 ole32 oleaut32 uuid winmm psapi advapi32 dwmapi)
 
@@ -193,6 +192,9 @@ if(WIN32)
         WIN32_EXECUTABLE ON
     )
 
+    # Suppress C4996 (unsafe CRT) from our own code; wxWidgets headers emit it
+    # regardless, and we use safe equivalents where it matters (snprintf/strncpy).
+    target_compile_definitions(${PROJECT_NAME} PRIVATE _CRT_SECURE_NO_WARNINGS)
     target_compile_options(${PROJECT_NAME} PRIVATE /W4 /WX-)
     target_link_options(${PROJECT_NAME} PRIVATE /SUBSYSTEM:WINDOWS)
 elseif(UNIX AND NOT APPLE)

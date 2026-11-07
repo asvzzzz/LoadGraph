@@ -309,7 +309,7 @@ CpuMonitor::CpuMonitor()
     std::string name = ReadCpuName();
     if (!name.empty())
         m_metrics.cpuName = std::wstring(name.begin(), name.end());
-    LOGI("CPU name: %S", m_metrics.cpuName.c_str());
+    LOGI("CPU name: %s", m_metrics.cpuName.c_str());
 
     // Resolve the TDP limit once from the static table via family+model key.
     const std::string famModel = ReadCpuFamilyModel();
@@ -456,20 +456,5 @@ void CpuMonitor::Collect()
     // Fan speed - not commonly available on Linux desktops without special drivers.
     // Leaving as N/A by default.
 }
-
-#ifdef PLATFORM_WINDOWS
-bool CpuMonitor::QueryOverallLoad(double& loadPercent)
-{
-    loadPercent = SampleLoad();
-    return loadPercent >= 0.0;
-}
-
-unsigned int CpuMonitor::ProbeWmiSensor(double& tempC, int& fanRpm)
-{
-    tempC = ReadCpuTemperature();
-    fanRpm = -1;
-    return (tempC >= 0.0) ? 1 : 0;
-}
-#endif
 
 #endif // PLATFORM_LINUX

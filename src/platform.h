@@ -90,16 +90,28 @@ inline std::string GetAppConfigPath(const char* filename)
     return dir + PATH_SEP_STR + "loadgraph" + PATH_SEP_STR + filename;
 }
 
-// Ensure directory exists (Linux only).
+// Ensure directory exists (Linux only). Recursively creates parent dirs.
 #ifdef PLATFORM_LINUX
+#include <sys/stat.h>
 inline void EnsureDirectoryExists(const std::string& path)
 {
-    // Simple implementation: try to create with mkdir -p logic.
-    // For now just ensure parent dir exists.
-    size_t pos = path.find_last_of('/');
-    if (pos == std::string::npos) return;
-    std::string dir = path.substr(0, pos);
-    mkdir(dir.c_str(), 0755);
+    // Walk up the path creating each missing component, like mkdir -p.
+    std::string cur;
+    for (size_t i = 0; i <= path.size(); ++i)
+    {
+        if (i == path.size() || path[i] == '/')
+        {
+            if (!cur.empty())
+            {
+                mkdir(cur.c_str(), 0755);
+                cur += '/';
+            }
+        }
+        else
+        {
+            cur += path[i];
+        }
+    }
 }
 #endif
 

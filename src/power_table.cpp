@@ -249,24 +249,28 @@ namespace PowerTable
         { "H100 NVL",          700 },
 
         // ---- A-series (Ampere datacenter) ----
+        // Longer / more specific names MUST come before shorter ones because
+        // ContainsNoCase does substring matching: "RTX A4000" contains "A40",
+        // "RTX A2000" contains "A2". If the short pattern is checked first,
+        // the RTX card gets the wrong (datacenter) TDP.
+        { "RTX A6000",         300 },
         { "A6000",             300 },
+        { "RTX A4000",         140 },
         { "A40",               300 },
         { "A100 80GB",         300 },
         { "A100 40GB",         250 },
         { "A100",              300 },
         { "A30",               200 },
         { "A10",               175 },
+        { "RTX A2000 12GB",    70  },
+        { "RTX A2000",         70  },
         { "A2",                75  },
 
-        // ---- RTX professional (Ampere/Ada) ----
+        // ---- RTX professional (Ada) ----
         { "RTX 6000 Ada",      300 },
         { "RTX 4000 SFF Ada",  180 },
         { "RTX 4000 Ada",      140 },
-        { "RTX A6000",         300 },
         { "RTX A5000",         230 },
-        { "RTX A4000",         140 },
-        { "RTX A2000",         70  },
-        { "RTX A2000 12GB",    70  },
 
         // ---- Tesla (Volta) ----
         { "Tesla V100 32GB",   300 },

@@ -28,8 +28,16 @@ static void CrashHandler(int sig)
 
 static void WriteCrashLog(const char* msg)
 {
-    const wchar_t* path = L"C:\\Projects\\OpenCode\\loadgraph\\build\\bin\\Release\\crash.log";
-    HANDLE h = CreateFileW(path, GENERIC_WRITE, 0, nullptr,
+    // Place crash.log next to the executable so it survives on any machine.
+    wchar_t exePath[MAX_PATH] = {};
+    DWORD len = GetModuleFileNameW(nullptr, exePath, MAX_PATH);
+    if (len == 0 || len >= MAX_PATH) return;
+    std::wstring path(exePath);
+    auto slash = path.find_last_of(L"\\/");
+    if (slash != std::wstring::npos) path.resize(slash + 1);
+    path += L"crash.log";
+
+    HANDLE h = CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr,
                            CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
     if (h != INVALID_HANDLE_VALUE)
     {
@@ -64,7 +72,8 @@ public:
 
 #ifdef PLATFORM_LINUX
         signal(SIGSEGV, CrashHandler);
-        signal(SIGABRT, SIG_IGN);
+        // Do NOT ignore SIGABRT: GLib/GCC assert() calls abort(), and silencing it
+        // suppresses the crash log and core dump. Let the default handler run.
 #endif
 
         wxString logPath = wxGetCwd() + "/loadgraph.log";
@@ -99,18 +108,9 @@ public:
             if (!frame) return false;
             LOGI("Frame created 0x%p", static_cast<void*>(frame));
 
-#ifdef PLATFORM_LINUX
-            // On Linux (wxWidgets 3.0.x / GTK) the native widget is not ready
-            // during construction. We show the frame first; UI creation is
-            // skipped — app collects metrics but shows no graphs.
             LOGI("Showing frame...");
             frame->Show(true);
             frame->Raise();
-#else
-            LOGI("Showing...");
-            frame->Show(true);
-            frame->Raise();
-#endif
             LOGI("Done.");
             return true;
         }
