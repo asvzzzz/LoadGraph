@@ -19,9 +19,9 @@ LoadGraph solves this: **all metrics for all GPUs are visible at once in a singl
 
 ## What it shows
 
-- **CPU Load (%)** — overall processor utilization (`/proc/stat` delta-method on Linux, PDH `\Processor(_Total)\% Processor Time` on Windows)
+- **CPU Load (%)** — overall processor utilization (`/proc/stat` delta-method on Linux, PDH `\\Processor(_Total)\\% Processor Time` on Windows)
 - **RAM Usage (GB)** — used memory with adaptive Y-axis
-- **GPU Load (%)** — per-GPU utilization (one row per detected NVIDIA card)
+- **GPU Load (%)** — per-GPU utilization (one section per detected NVIDIA card; each section contains Load, VRAM, Temperature, Fan and Power graphs)
 - **VRAM (GB)** — video memory used on each card
 - **Temperature (°C)** — GPU temperature; CPU temperature on Windows via MSR (IA32_THERM_STATUS 0x19C, per-family Tjmax: 84 for Haswell-E/EP, 85 for Broadwell-EP, 100 for Skylake and newer); red alarm line above 80°C
 - **Fan (% / RPM)** — GPU fan in percent (or RPM fallback), CPU fan in RPM (when sensor is available)
@@ -147,7 +147,7 @@ src/
 
 - **MetricsCollector** uses a `condition_variable` for stop — thread exits in milliseconds, not seconds.
 - **SEH protection** around `rdmsr` and WMI calls prevents crashes on systems where these APIs misbehave.
-- **Driver lifecycle**: `Open()` tries DLL first, then kernel device, then known service, then registers from `.sys`. `Close()` does *not* stop or delete services — the driver stays loaded across runs.
+- **Driver lifecycle**: `Open()` tries DLL first, then kernel device, then known service, then registers from `.sys`. `Close()` does *not* stop or delete services — the driver stays installed across runs (the DEMAND_START service survives without requiring reinstall; the driver itself is loaded on first use).
 - **UAC elevation** is one-shot: the helper process installs/starts the service and exits; subsequent non-elevated launches reuse the running service.
 - **GPU TDP table** matches by substring with longer patterns first (e.g. `"RTX A4000"` before `"A40"`) to avoid shadowing.
 
