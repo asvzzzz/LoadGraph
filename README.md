@@ -21,7 +21,7 @@ LoadGraph solves this: **all metrics for all GPUs are visible at once in a singl
 
 - **CPU Load (%)** — overall processor utilization (`/proc/stat` delta-method on Linux, PDH `\Processor(_Total)\% Processor Time` on Windows)
 - **RAM Usage (GB)** — used memory with adaptive Y-axis
-- **GPU Load (%)** — per-GPU utilization (RTX 5060 Ti #0, RTX 5060 Ti #1, …)
+- **GPU Load (%)** — per-GPU utilization (one row per detected NVIDIA card)
 - **VRAM (GB)** — video memory used on each card
 - **Temperature (°C)** — GPU temperature; CPU temperature on Windows via MSR (Tjmax=85 for Broadwell-EP and newer Intel); red alarm line above 80°C
 - **Fan (%)** — fan speed (when sensor is available)
@@ -30,15 +30,9 @@ LoadGraph solves this: **all metrics for all GPUs are visible at once in a singl
 
 ## Screenshots
 
-### Windows (dark theme, 2x RTX 5060 Ti)
+_Screenshots are not included in the repository — build and run to see the UI._
 
-![Windows](win_scr.png)
-
-### Linux / WSL2
-
-Works on native Linux and inside WSL2 thanks to the GPU-PV bridge (NVML exposed at `/usr/lib/wsl/lib/libnvidia-ml.so.1`). NVAPI is Windows-only; Linux uses NVML exclusively.
-
-![Linux](lin_src.png)
+The window layout (top to bottom): CPU Load · RAM Usage · [CPU Power if TDP known] · [CPU Temp + Fan if sensors exist] · one row per GPU (Load · VRAM · Temp · Fan · Power) · Total Power summary. Each metric is a scrollable time-series graph with adaptive Y-axis and red alarm line above 80°C.
 
 ## Requirements
 
