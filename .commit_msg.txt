@@ -1,15 +1,9 @@
-Fix %s vs %hs inconsistency for narrow char* arguments in LOGI/LOGE
+Fix remaining %s vs %hs: exception.what(), WMI probe, ACPI TRAC
 
-In Unicode builds wxString::Format uses wide vswprintf internally, so %s
-expects wchar_t*. Narrow char* strings must use %hs to avoid garbage in logs.
+- main.cpp: e.what() returns const char*, use %hs
+- cpu_monitor.cpp: ternary "OK"/"N/A" literals are narrow, use %hs for WMI probe status
+- cpu_monitor.cpp: ternary "YES"/"NO" literal is narrow, use %hs for ACPI TRAC diagnostic
 
-Changed from %s to %hs in:
-- cpu_monitor.cpp: hex buffer (DIAG ACPI DSPT), nameA.c_str() (TDP lookup)
-- cpu_monitor_linux.cpp: famModel.c_str() (family/model), m_rapl.path.c_str() (RAPL path)
-- gpu_monitor_linux.cpp: dlerror() return value
-- config_linux.cpp: path.c_str() in two LOGE calls (position and view state)
-
-Already correct with %s (wide wchar_t* or literal):
-- main_frame.cpp GPU name (%hs already used), cpuName via wstring c_str()
-- kPowerNs[] wide literals, desc wide buffer, registry name wide buffer
-- String literals "OK"/"N/A", hex output in other places
+After this fix all remaining %s in LOGI/LOGE are paired with wchar_t* arguments
+(wstring c_str(), BSTR, wchar_t[] buffers, const wchar_t* literals) or with
+non-string format specifiers (%lu, %.0f, etc.) — no more narrow/wide mismatches.

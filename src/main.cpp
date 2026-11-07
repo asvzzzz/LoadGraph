@@ -116,7 +116,7 @@ public:
         }
         catch (const std::exception& e)
         {
-            LOGE("Exception: %s", e.what());
+            LOGE("Exception: %hs", e.what());
 #ifdef PLATFORM_WINDOWS
             WriteCrashLog(e.what());
             WriteCrashLog("\n");

@@ -327,7 +327,7 @@ void CpuMonitor::Collect()
         m_wmiTried = true;
         filled = ProbeWmiSensor(temp, fan);
         m_wmiOk = (filled != 0);
-        LOGI("WMI sensor probe: temp=%s fan=%s",
+        LOGI("WMI sensor probe: temp=%hs fan=%hs",
              (filled & 1u) ? "OK" : "N/A",
              (filled & 2u) ? "OK" : "N/A");
         // Probe every available non-admin source so we know what works on this machine.
@@ -681,7 +681,7 @@ static void ProbeAllTempSources()
 
     // ---- GetSystemFirmwareTable('ACPI', 0x54524143='TRAC') ------------------
     sz = GetSystemFirmwareTable('ACPI', 0x54524143, nullptr, 0);
-    LOGI("DIAG ACPI TRAC firmware table: present=%s (size=%lu)",
+    LOGI("DIAG ACPI TRAC firmware table: present=%hs (size=%lu)",
          sz > 0 ? "YES" : "NO", static_cast<unsigned long>(sz));
 
     // ---- Registry: enumerate HKLM\HARDWARE\DESCRIPTION\System\CentralProcessor\0 ---
