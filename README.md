@@ -30,9 +30,15 @@ LoadGraph solves this: **all metrics for all GPUs are visible at once in a singl
 
 ## Screenshots
 
-_Screenshots are not included in the repository — build and run to see the UI._
+### Windows
 
-The window layout (top to bottom): CPU Load · RAM Usage · [CPU Power if TDP known] · [CPU Temp + Fan if sensors exist] · one row per GPU (Load · VRAM · Temp · Fan · Power) · Total Power summary. Each metric is a scrollable time-series graph with adaptive Y-axis and red alarm line above 80°C.
+![Windows](lgwin.png)
+
+### Linux / WSL2
+
+Works on native Linux and inside WSL2 thanks to the GPU-PV bridge (NVML exposed at `/usr/lib/wsl/lib/libnvidia-ml.so.1`). NVAPI is Windows-only; Linux uses NVML exclusively.
+
+![Linux](lglin.png)
 
 ## Requirements
 
