@@ -1,15 +1,12 @@
-Fix NVAPI struct ABI and clean up remaining review items
+Fix remaining low-priority review items
 
-- gpu_monitor.cpp::NvDynamicPstatesInfoEx: add missing percentage and reserved
-  fields to the utilization array element (sizeof was 24, should be 40); fix
-  usage to read actual percentage instead of interpreting bIsPresent as load.
-  This fixes GPU Load showing only 0% or 100% on NVAPI-only fallback path.
-- ring0_msr.cpp: replace .mb_str().data() + %s with direct wchar_t* (%s) in
-  Unicode builds — avoids potential UB when logging wide-path strings.
-- theme_linux.cpp: fix misleading comment (wxGetLocalTime::GetValue is epoch
-  seconds, not seconds-since-midnight); logic unchanged.
-- power_table.cpp: reorder H100 NVL before plain H100 so substring matching
-  does not shadow the more specific name (harmless at equal TDP but correct).
-- main_frame.cpp: remove dead (void)m_toggleGroups[key] entry in addPanel lambda.
-- theme.h/theme.cpp/theme_linux.cpp: remove unused Theme::Line() declaration
-  and definitions — graph colors are hardcoded in GraphPanel.
+- cpu_monitor_linux.cpp::SampleLoad: move static prev-user/nice/system/idle
+  and first-sample flag to class members (m_prevUser etc., m_loadFirst) so
+  multiple CpuMonitor instances do not share state.
+- cpu_monitor_linux.cpp::ReadRaplPowerWatts: same treatment for s_rapl — moved
+  RaplState struct and its instance to CpuMonitor as m_rapl; function promoted
+  to a member method. Eliminates the latent multi-instance sharing bug.
+- CMakeLists.txt (Linux): add INSTALL_RPATH "$ORIGIN/../libs" so a copied tree
+  or "make install" layout finds bundled .so files without LD_LIBRARY_PATH.
+- CMakeLists.txt (WXSTATIC_ROOT): document which wxWidgets libraries are
+  required and what happens if new features pull in additional ones.

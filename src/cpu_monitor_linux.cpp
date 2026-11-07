@@ -207,94 +207,6 @@ namespace
         return (processors > 0) ? static_cast<uint32_t>(processors) : 0;
     }
 
-    // RAPL package energy counter state. The counter is monotonic in microjoules
-    // and wraps at max_energy_range_uj; power = deltaE / deltaTime.
-    // Only SampleLoad() (GUI thread, 1000 ms tick) touches this state, so no
-    // extra locking is required.
-    struct RaplState
-    {
-        bool        opened      = false;  // probe already attempted
-        bool        valid       = false;  // counter path found and readable
-        std::string path;                 // energy_uj file path
-        long long   prevEnergyUj = 0;
-        double      prevTimeSec  = 0.0;
-        long long   maxEnergyUj  = 0;     // wrap-around range (0 = unknown)
-    };
-    static RaplState s_rapl;
-
-    // Read the RAPL energy counter and return package power in watts.
-    // Returns -1.0 when RAPL is unavailable (WSL2, AMD, root-only perms).
-    double ReadRaplPowerWatts()
-    {
-        if (!s_rapl.opened)
-        {
-            s_rapl.opened = true;
-            const char* paths[] = {
-                "/sys/class/powercap/intel-rapl:0/energy_uj",
-                "/sys/class/powercap/intel-rapl/intel-rapl:0/energy_uj",
-                nullptr
-            };
-            for (int i = 0; paths[i]; ++i)
-            {
-                std::string probe;
-                if (ReadFileToString(paths[i], probe))
-                {
-                    s_rapl.path  = paths[i];
-                    s_rapl.valid = true;
-                    break;
-                }
-            }
-            if (s_rapl.valid)
-            {
-                // max_energy_range_uj lives next to energy_uj.
-                std::string dir = s_rapl.path.substr(0, s_rapl.path.rfind('/'));
-                std::string maxContent;
-                if (ReadFileToString((dir + "/max_energy_range_uj").c_str(), maxContent))
-                {
-                    try { s_rapl.maxEnergyUj = std::stoll(maxContent); }
-                    catch (...) { s_rapl.maxEnergyUj = 0; }
-                }
-                LOGI("RAPL energy counter found: %s", s_rapl.path.c_str());
-            }
-            else
-            {
-                LOGI("RAPL unavailable - CPU power uses idle-floor estimate.");
-            }
-        }
-        if (!s_rapl.valid)
-            return -1.0;
-
-        std::string content;
-        if (!ReadFileToString(s_rapl.path.c_str(), content))
-        {
-            s_rapl.valid = false; // counter disappeared (module unloaded)
-            LOGI("RAPL energy counter became unreadable - disabling.");
-            return -1.0;
-        }
-
-        long long energyUj = 0;
-        try { energyUj = std::stoll(content); }
-        catch (...) { return -1.0; }
-
-        const auto now = std::chrono::steady_clock::now();
-        const double nowSec =
-            std::chrono::duration<double>(now.time_since_epoch()).count();
-
-        double watts = -1.0;
-        if (s_rapl.prevTimeSec > 0.0)
-        {
-            long long dE = energyUj - s_rapl.prevEnergyUj;
-            // The 64-bit counter wraps at max_energy_range_uj.
-            if (dE < 0 && s_rapl.maxEnergyUj > 0)
-                dE += s_rapl.maxEnergyUj;
-            const double dt = nowSec - s_rapl.prevTimeSec;
-            if (dE >= 0 && dt > 0.1)
-                watts = static_cast<double>(dE) / 1000000.0 / dt; // uJ -> J
-        }
-        s_rapl.prevEnergyUj = energyUj;
-        s_rapl.prevTimeSec  = nowSec;
-        return watts;
-    }
 } // anonymous namespace
 
 // ----------------------------------------------------------------------------
@@ -346,6 +258,80 @@ CpuMetrics CpuMonitor::GetMetrics()
     return m_metrics;
 }
 
+// Read the RAPL energy counter and return package power in watts.
+// Returns -1.0 when RAPL is unavailable (WSL2, AMD, root-only perms).
+double CpuMonitor::ReadRaplPowerWatts()
+{
+    if (!m_rapl.opened)
+    {
+        m_rapl.opened = true;
+        const char* paths[] = {
+            "/sys/class/powercap/intel-rapl:0/energy_uj",
+            "/sys/class/powercap/intel-rapl/intel-rapl:0/energy_uj",
+            nullptr
+        };
+        for (int i = 0; paths[i]; ++i)
+        {
+            std::string probe;
+            if (ReadFileToString(paths[i], probe))
+            {
+                m_rapl.path  = paths[i];
+                m_rapl.valid = true;
+                break;
+            }
+        }
+        if (m_rapl.valid)
+        {
+            // max_energy_range_uj lives next to energy_uj.
+            std::string dir = m_rapl.path.substr(0, m_rapl.path.rfind('/'));
+            std::string maxContent;
+            if (ReadFileToString((dir + "/max_energy_range_uj").c_str(), maxContent))
+            {
+                try { m_rapl.maxEnergyUj = std::stoll(maxContent); }
+                catch (...) { m_rapl.maxEnergyUj = 0; }
+            }
+            LOGI("RAPL energy counter found: %s", m_rapl.path.c_str());
+        }
+        else
+        {
+            LOGI("RAPL unavailable - CPU power uses idle-floor estimate.");
+        }
+    }
+    if (!m_rapl.valid)
+        return -1.0;
+
+    std::string content;
+    if (!ReadFileToString(m_rapl.path.c_str(), content))
+    {
+        m_rapl.valid = false; // counter disappeared (module unloaded)
+        LOGI("RAPL energy counter became unreadable - disabling.");
+        return -1.0;
+    }
+
+    long long energyUj = 0;
+    try { energyUj = std::stoll(content); }
+    catch (...) { return -1.0; }
+
+    const auto now = std::chrono::steady_clock::now();
+    const double nowSec =
+        std::chrono::duration<double>(now.time_since_epoch()).count();
+
+    double watts = -1.0;
+    if (m_rapl.prevTimeSec > 0.0)
+    {
+        long long dE = energyUj - m_rapl.prevEnergyUj;
+        // The 64-bit counter wraps at max_energy_range_uj.
+        if (dE < 0 && m_rapl.maxEnergyUj > 0)
+            dE += m_rapl.maxEnergyUj;
+        const double dt = nowSec - m_rapl.prevTimeSec;
+        if (dE >= 0 && dt > 0.1)
+            watts = static_cast<double>(dE) / 1000000.0 / dt; // uJ -> J
+    }
+    m_rapl.prevEnergyUj = energyUj;
+    m_rapl.prevTimeSec  = nowSec;
+    return watts;
+}
+
 double CpuMonitor::SampleLoad()
 {
     double user = 0, nice = 0, system = 0, idle = 0;
@@ -353,28 +339,27 @@ double CpuMonitor::SampleLoad()
         return -1.0;
 
     // Calculate CPU usage since last sample.
-    static double s_prevUser = 0, s_prevNice = 0, s_prevSystem = 0, s_prevIdle = 0;
-    static bool s_first = true;
-
-    if (s_first)
+    // State lives in class members (m_prevUser etc.) so multiple CpuMonitor
+    // instances do not share counters — the old statics were a latent bug.
+    if (m_loadFirst)
     {
-        s_prevUser = user;
-        s_prevNice = nice;
-        s_prevSystem = system;
-        s_prevIdle = idle;
-        s_first = false;
+        m_prevUser  = user;
+        m_prevNice  = nice;
+        m_prevSystem = system;
+        m_prevIdle  = idle;
+        m_loadFirst = false;
         return -1.0;
     }
 
-    double dUser = user - s_prevUser;
-    double dNice = nice - s_prevNice;
-    double dSystem = system - s_prevSystem;
-    double dIdle = idle - s_prevIdle;
+    double dUser = user - m_prevUser;
+    double dNice = nice - m_prevNice;
+    double dSystem = system - m_prevSystem;
+    double dIdle = idle - m_prevIdle;
 
-    s_prevUser = user;
-    s_prevNice = nice;
-    s_prevSystem = system;
-    s_prevIdle = idle;
+    m_prevUser  = user;
+    m_prevNice  = nice;
+    m_prevSystem = system;
+    m_prevIdle  = idle;
 
     double total = dUser + dNice + dSystem + dIdle;
     if (total <= 0.0) return -1.0;

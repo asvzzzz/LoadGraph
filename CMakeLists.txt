@@ -19,6 +19,14 @@ if(DEFINED ENV{WXSTATIC_ROOT})
         "${WXSTATIC_ROOT}/include/gtk3-unicode-static-3.2"
     )
     set(wxWidgets_LIBRARY_DIRS "${WXSTATIC_ROOT}")
+    # wxWidgets static libraries required by the current feature set:
+    #   core       — all widgets, scrolled windows, sizers (mandatory)
+    #   base       — fundamental classes (strings, containers, IO)
+    #   base_net   — wxWebRequest / networking primitives
+    #   base_xml   — wxXmlDocument / config parsing
+    # If you add features that pull in wxHtml, wxAui, wxMedia or wxImage with
+    # handlers (PNG/JPEG), extend this list accordingly — otherwise linking
+    # will fail with undefined references at link time.
     set(wxWidgets_LIBRARIES
         "${WXSTATIC_ROOT}/libwx_gtk3u_core-3.2.a"
         "${WXSTATIC_ROOT}/libwx_baseu-3.2.a"
@@ -224,9 +232,12 @@ elseif(UNIX AND NOT APPLE)
 
     # Point linker at our bundled .so files.
     target_link_directories(${PROJECT_NAME} PRIVATE "${CMAKE_SOURCE_DIR}/libs")
-    # Embed rpath so the binary finds them at runtime without LD_LIBRARY_PATH.
+    # Embed rpath so the binary finds bundled .so files at runtime without
+    # LD_LIBRARY_PATH. BUILD_RPATH covers the build tree; INSTALL_RPATH uses
+    # $ORIGIN/../libs so a copied tree (install or zip distribution) works too.
     set_target_properties(${PROJECT_NAME} PROPERTIES
         BUILD_RPATH "${CMAKE_SOURCE_DIR}/libs"
+        INSTALL_RPATH "$ORIGIN/../libs"
         INSTALL_RPATH_USE_LINK_PATH OFF
     )
 

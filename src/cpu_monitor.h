@@ -54,9 +54,29 @@ public:
     void QueryCpuName();
     // Probe MSR thermal sensor params on the main thread.
     void ProbeMsrInit();
+#ifdef PLATFORM_LINUX
+    // Read RAPL package energy counter and return power in watts.
+    // Returns -1.0 when RAPL is unavailable (WSL2, AMD, root-only perms).
+    double ReadRaplPowerWatts();
+#endif
 
 protected:
     void Collect() override;
+
+#ifdef PLATFORM_LINUX
+    // RAPL package energy counter state — monotonic microjoule counter with
+    // wrap-around handling. Accessed only from the GUI thread (1 Hz tick), so
+    // no extra locking is needed beyond m_mutex for m_metrics writes.
+    struct RaplState
+    {
+        bool        opened      = false;  // probe already attempted
+        bool        valid       = false;  // counter path found and readable
+        std::string path;                 // energy_uj file path
+        long long   prevEnergyUj = 0;
+        double      prevTimeSec  = 0.0;
+        long long   maxEnergyUj  = 0;     // wrap-around range (0 = unknown)
+    };
+#endif
 
 private:
 #ifdef PLATFORM_WINDOWS
@@ -96,6 +116,12 @@ private:
     // True while a real power sensor (LHM WMI or Linux RAPL) supplies
     // powerWatts; SampleLoad() then skips the load x TDP estimate.
     std::atomic<bool> m_powerReal{false};
+#ifdef PLATFORM_LINUX
+    // Previous /proc/stat values for delta-based CPU load calculation.
+    double   m_prevUser = 0, m_prevNice = 0, m_prevSystem = 0, m_prevIdle = 0;
+    bool     m_loadFirst = true;          // first sample is a warm-up discard
+    RaplState m_rapl;                    // RAPL package energy counter state
+#endif
 };
 
 #endif // CPU_MONITOR_H
