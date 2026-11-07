@@ -665,7 +665,7 @@ static void ProbeAllTempSources()
             char hex[65 * 4];
             for (unsigned i = 0; i < 64 && i < sz; ++i)
                 snprintf(hex + i * 3, sizeof(hex) - i * 3, "%02X ", (unsigned char)buf[i]);
-            LOGI("DIAG ACPI DSPT first64: %s", hex);
+            LOGI("DIAG ACPI DSPT first64: %hs", hex);
         }
         else
         {
@@ -794,7 +794,7 @@ void CpuMonitor::QueryCpuName()
         std::lock_guard<std::mutex> lock(m_mutex);
         m_metrics.tdpWatts = tdp;
     }
-    LOGI("CPU TDP table lookup: %.0f W (name='%s')", tdp, nameA.c_str());
+    LOGI("CPU TDP table lookup: %.0f W (name='%hs')", tdp, nameA.c_str());
 
     // Physical core count feeds the idle-floor power estimate; detected once
     // before the polling threads start.

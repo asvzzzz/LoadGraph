@@ -229,7 +229,7 @@ CpuMonitor::CpuMonitor()
     {
         m_metrics.tdpWatts = static_cast<double>(
             PowerTable::GetCpuTdp(famModel.c_str()));
-        LOGI("CPU family/model: %s, TDP: %.0f W",
+        LOGI("CPU family/model: %hs, TDP: %.0f W",
              famModel.c_str(), m_metrics.tdpWatts);
     }
     else
@@ -290,7 +290,7 @@ double CpuMonitor::ReadRaplPowerWatts()
                 try { m_rapl.maxEnergyUj = std::stoll(maxContent); }
                 catch (...) { m_rapl.maxEnergyUj = 0; }
             }
-            LOGI("RAPL energy counter found: %s", m_rapl.path.c_str());
+            LOGI("RAPL energy counter found: %hs", m_rapl.path.c_str());
         }
         else
         {

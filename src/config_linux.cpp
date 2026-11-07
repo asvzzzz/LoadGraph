@@ -98,7 +98,7 @@ void SaveWindowPosition(int x, int y, int w, int h)
     std::ofstream f(path.c_str());
     if (!f.is_open())
     {
-        LOGE("Failed to save position to %s", path.c_str());
+        LOGE("Failed to save position to %hs", path.c_str());
         return;
     }
 
@@ -156,7 +156,7 @@ void SaveViewMenuState(const std::map<std::string, bool>& state)
     std::ofstream f(path.c_str());
     if (!f.is_open())
     {
-        LOGE("Failed to save view state to %s", path.c_str());
+        LOGE("Failed to save view state to %hs", path.c_str());
         return;
     }
     f << "{\n";

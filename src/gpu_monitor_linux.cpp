@@ -88,7 +88,7 @@ bool GpuMonitor::LoadNvml()
 
     if (!m_hNvml)
     {
-        LOGI("libnvidia-ml.so not found: %s", dlerror());
+        LOGI("libnvidia-ml.so not found: %hs", dlerror());
         return false;
     }
     LOGI("NVML library loaded: %p", m_hNvml);

@@ -1,11 +1,15 @@
-Fix last review items: ring0_msr %ls, remove dead ToggleGroup, FormatUptime units
+Fix %s vs %hs inconsistency for narrow char* arguments in LOGI/LOGE
 
-- ring0_msr.cpp: fix remaining .mb_str().data() + %s to use %ls with wchar_t*
-  (dllPath.c_str()) — the only place still doing narrow conversion in Unicode
-  builds.
-- main_frame.h / main_frame.cpp: remove dead ToggleGroup struct and m_toggleGroups
-  map entirely, along with all push_back calls that populated it. The height
-  adjustment is computed dynamically via sizer->CalcMin() — the container was
-  never read after deltaH was removed and only confused readers.
-- main_frame.cpp::FormatUptime: sub-minute uptimes now render as "<N> s" (e.g.
-  "05 s") instead of a bare "05", making the unit explicit.
+In Unicode builds wxString::Format uses wide vswprintf internally, so %s
+expects wchar_t*. Narrow char* strings must use %hs to avoid garbage in logs.
+
+Changed from %s to %hs in:
+- cpu_monitor.cpp: hex buffer (DIAG ACPI DSPT), nameA.c_str() (TDP lookup)
+- cpu_monitor_linux.cpp: famModel.c_str() (family/model), m_rapl.path.c_str() (RAPL path)
+- gpu_monitor_linux.cpp: dlerror() return value
+- config_linux.cpp: path.c_str() in two LOGE calls (position and view state)
+
+Already correct with %s (wide wchar_t* or literal):
+- main_frame.cpp GPU name (%hs already used), cpuName via wstring c_str()
+- kPowerNs[] wide literals, desc wide buffer, registry name wide buffer
+- String literals "OK"/"N/A", hex output in other places
