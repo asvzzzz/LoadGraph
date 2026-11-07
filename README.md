@@ -23,9 +23,11 @@ LoadGraph solves this: **all metrics for all GPUs are visible at once in a singl
 - **RAM Usage (GB)** — used memory with adaptive Y-axis
 - **GPU Load (%)** — per-GPU utilization (one row per detected NVIDIA card)
 - **VRAM (GB)** — video memory used on each card
-- **Temperature (°C)** — GPU temperature; CPU temperature on Windows via MSR (Tjmax=85 for Broadwell-EP and newer Intel); red alarm line above 80°C
-- **Fan (%)** — fan speed (when sensor is available)
-- **CPU Power (W)** — real RAPL counter on Linux, idle-floor estimate on Windows when no sensor is present
+- **Temperature (°C)** — GPU temperature; CPU temperature on Windows via MSR (IA32_THERM_STATUS 0x19C, per-family Tjmax: 84 for Haswell-E/EP, 85 for Broadwell-EP, 100 for Skylake and newer); red alarm line above 80°C
+- **Fan (% / RPM)** — GPU fan in percent (or RPM fallback), CPU fan in RPM (when sensor is available)
+- **GPU Power (W)** — per-card power draw from NVML `nvmlDeviceGetPowerUsage`
+- **CPU Power (W)** — real RAPL counter on Linux, or LHM/OpenHardwareMonitor WMI sensor on Windows, or idle-floor estimate as last fallback
+- **Total Power (W)** — CPU + all GPUs summed; fixed 0..1000 W scale with 5 ticks
 - **Uptime** — system boot time displayed as `YY:MM:DD HH:MI:SS` or `<N> s` for fresh boots
 
 ## Screenshots
@@ -44,7 +46,7 @@ Works on native Linux and inside WSL2 thanks to the GPU-PV bridge (NVML exposed 
 
 ### Windows
 
-- Visual Studio 2022 (MSVC) or MinGW-w64
+- Visual Studio 2022 (MSVC) — required on Windows (SEH extensions and MSVC-style compiler flags are used; MinGW is not supported)
 - wxWidgets 3.2 static build (`C:/wxWidgets`). Override with: `-DWX_CONFIG_PATH=...`
 - NVIDIA driver (for GPU metrics; CPU/RAM work without a GPU)
 - **CPU temperature** requires one of:
@@ -72,7 +74,7 @@ inpoutx64.sys
 WinRing0x64.sys
 ```
 
-The app will also detect an already-registered well-known service (e.g. `WinRing0_1_2_0` left by RealTemp or LibreHardwareMonitor) and reuse it without needing the `.sys` file.
+The app will also detect any of three already-registered well-known services and reuse them without needing the `.sys` file: `WinRing0_1_2_0` (RealTemp / LibreHardwareMonitor), `hwinterfacex64`, or `inpoutx64`.
 
 ### Installing the driver via UAC
 
@@ -80,7 +82,7 @@ When no backend is available but a `.sys` file is present, LoadGraph shows a one
 
 > "Install kernel driver for CPU temperature monitoring?"
 
-Accepting the prompt elevates the process via `ShellExecute(runas)`, runs the built-in helper (`--install-driver`), which registers and starts the service — leaving it running across reboots if set to AUTO_START (currently DEMAND_START). Declining or cancelling falls back gracefully to WMI / N/A for temperature.
+Accepting the prompt elevates the process via `ShellExecute(runas)`, runs the built-in helper (`--install-driver`), which registers and starts the service — leaving it installed. With the current `SERVICE_DEMAND_START` type the service survives within the current session without further UAC prompts, but the first launch after a reboot will require elevation again. Set the service to `AUTO_START` if you want it to load automatically at boot. Declining or cancelling falls back gracefully to WMI / N/A for temperature.
 
 > **Note:** WinRing0 is on Microsoft's Vulnerable Driver Blocklist. Windows Defender may delete the `.sys` file automatically. If this happens, add an exclusion for the LoadGraph executable directory in Windows Security → Virus & threat protection → Manage settings → Exclusions. This is the same workaround used by RealTemp and HWiNFO communities.
 
@@ -97,13 +99,6 @@ cd build
 cmake .. -G "Visual Studio 17 2022" -A x64
 cmake --build . --config Release
 .\bin\Release\LoadGraph.exe
-```
-
-MinGW:
-
-```powershell
-cmake .. -G "MinGW Makefiles"
-cmake --build .
 ```
 
 ### Linux
@@ -127,10 +122,10 @@ WX_CONFIG=/opt/wx/3.2/bin/wx-config cmake ..
 src/
   main.cpp                  # entry point, platform guards, SIGSEGV handler (Linux),
                             # --install-driver elevated helper mode, crash.log placement
-  main_frame.{h,cpp}        # window: header + scrollable graph rows, toggle menu
+  main_frame.{h,cpp}        # window: header + proportionally stretched graph rows, View menu toggle
   graph_panel.{h,cpp}       # custom wxPanel, rendering via wxGraphicsContext
   metrics_collector.{h,cpp} # base class: poll thread, 1000 ms interval, condition_variable stop
-  cpu_monitor.{h,cpp}       # Windows — PDH load, WMI thermal probe, MSR driver init
+  cpu_monitor.{h,cpp}       # Windows — PDH load, WMI thermal probe, MSR driver init, LHM/WMI power sensor
   cpu_monitor_linux.cpp     # Linux — /proc/stat (delta-method), /sys/class/thermal, RAPL power
   ram_monitor.{h,cpp}       # Windows — GlobalMemoryStatusEx
   ram_monitor_linux.cpp     # Linux — /proc/meminfo
@@ -138,12 +133,13 @@ src/
   gpu_monitor_linux.cpp     # Linux — dlopen libnvidia-ml.so.1 (real symbol names)
   ring0_msr.{h,cpp}         # WinRing0 DLL / kernel driver back-end, UAC elevation helpers
   msr_sensor.{h,cpp}        # MSR temperature reader: Tjmax decode, EnsureDriver prompt
-  power_table.{h,cpp}       # Static TDP table for Intel CPUs and NVIDIA GPUs (substring match)
+  power_table.{h,cpp}       # Static TDP table for Intel/AMD CPUs and NVIDIA GPUs (substring match)
   theme.{h,cpp}             # Windows — Registry AppsUseLightTheme, dark palette cache
   theme_linux.cpp           # Linux — GTK_THEME, XDG_CURRENT_DESKTOP, gsettings 30 s cache
-  config.{h,cpp}            # Windows — Registry (window pos/size)
-  config_win.cpp / config_linux.cpp
-  logger.{h,cpp}            # file logger (loadgraph.log next to exe; stderr fallback on fopen fail)
+  config.h                  # shared Config API
+  config_win.cpp            # Windows — Registry (window pos/size)
+  config_linux.cpp          # Linux — $XDG_CONFIG_HOME/loadgraph/*.json
+  logger.{h,cpp}            # file logger (loadgraph.log in CWD; stderr fallback on fopen fail)
   platform.h                # PLATFORM_WINDOWS / PLATFORM_LINUX, ReadFileToString, mkdir -p helper
 ```
 
