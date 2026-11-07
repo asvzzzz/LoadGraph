@@ -2,6 +2,8 @@
 
 Real-time system resource monitor tailored for visual oversight of local LLM workloads. Windows 10/11 + Linux (Ubuntu 22.04 / Linux Mint). One graph per metric, single window, no tabs, no scrollbar.
 
+**Version:** 1.0.0
+
 ## Why this exists
 
 Standard GPU monitoring tools fall short when you need to watch multiple cards at once — exactly the situation when running local LLMs:
@@ -17,12 +19,14 @@ LoadGraph solves this: **all metrics for all GPUs are visible at once in a singl
 
 ## What it shows
 
-- **CPU Load (%)** — overall processor utilization (`/proc/stat` delta-method on Linux, PDH `\\Processor(_Total)\% Processor Time` on Windows)
+- **CPU Load (%)** — overall processor utilization (`/proc/stat` delta-method on Linux, PDH `\Processor(_Total)\% Processor Time` on Windows)
 - **RAM Usage (GB)** — used memory with adaptive Y-axis
 - **GPU Load (%)** — per-GPU utilization (RTX 5060 Ti #0, RTX 5060 Ti #1, …)
 - **VRAM (GB)** — video memory used on each card
-- **Temperature (°C)** — GPU temperature; red alarm line above 80°C
+- **Temperature (°C)** — GPU temperature; CPU temperature on Windows via MSR (Tjmax=85 for Broadwell-EP and newer Intel); red alarm line above 80°C
 - **Fan (%)** — fan speed (when sensor is available)
+- **CPU Power (W)** — real RAPL counter on Linux, idle-floor estimate on Windows when no sensor is present
+- **Uptime** — system boot time displayed as `YY:MM:DD HH:MI:SS` or `<N> s` for fresh boots
 
 ## Screenshots
 
@@ -43,6 +47,9 @@ Works on native Linux and inside WSL2 thanks to the GPU-PV bridge (NVML exposed 
 - Visual Studio 2022 (MSVC) or MinGW-w64
 - wxWidgets 3.2 static build (`C:/wxWidgets`). Override with: `-DWX_CONFIG_PATH=...`
 - NVIDIA driver (for GPU metrics; CPU/RAM work without a GPU)
+- **CPU temperature** requires one of:
+  - A WinRing0-compatible kernel driver (`.sys`) placed next to the executable — see [Driver](#driver) below
+  - Or direct `rdmsr` access (works on some systems where HVCI / Memory Integrity is off and the CPU does not block user-mode MSR reads)
 
 ### Linux
 
@@ -50,6 +57,36 @@ Works on native Linux and inside WSL2 thanks to the GPU-PV bridge (NVML exposed 
 - wxWidgets 3.2: `sudo apt install libwxgtk3.2-dev` (or set `$WX_CONFIG`)
 - NVIDIA driver + `libnvidia-ml` for GPU metrics (`nvidia-smi` must work)
 - WSL2: GPU-PV bridge exposes NVML automatically, no extra setup needed
+
+## Driver
+
+CPU temperature on Windows is read from IA32_THERM_STATUS (MSR 0x19C). This requires a kernel-mode driver because user-mode `rdmsr` is blocked by default on modern Intel CPUs.
+
+### Shipping the driver
+
+Place a WinRing0-compatible `.sys` file next to the executable before distribution. Supported names (checked in order):
+
+```
+hwinterfacex64.sys
+inpoutx64.sys
+WinRing0x64.sys
+```
+
+The app will also detect an already-registered well-known service (e.g. `WinRing0_1_2_0` left by RealTemp or LibreHardwareMonitor) and reuse it without needing the `.sys` file.
+
+### Installing the driver via UAC
+
+When no backend is available but a `.sys` file is present, LoadGraph shows a one-time prompt:
+
+> "Install kernel driver for CPU temperature monitoring?"
+
+Accepting the prompt elevates the process via `ShellExecute(runas)`, runs the built-in helper (`--install-driver`), which registers and starts the service — leaving it running across reboots if set to AUTO_START (currently DEMAND_START). Declining or cancelling falls back gracefully to WMI / N/A for temperature.
+
+> **Note:** WinRing0 is on Microsoft's Vulnerable Driver Blocklist. Windows Defender may delete the `.sys` file automatically. If this happens, add an exclusion for the LoadGraph executable directory in Windows Security → Virus & threat protection → Manage settings → Exclusions. This is the same workaround used by RealTemp and HWiNFO communities.
+
+### Direct rdmsr fallback
+
+On systems where HVCI / Memory Integrity is disabled and the CPU does not block user-mode MSR access, LoadGraph falls back to `__readmsr()` without any driver. Temperature will show correctly even in this case. If the intrinsic raises an exception (privilege violation), the app silently falls back to WMI.
 
 ## Building
 
@@ -88,28 +125,43 @@ WX_CONFIG=/opt/wx/3.2/bin/wx-config cmake ..
 
 ```
 src/
-  main.cpp                  # entry point, platform guards, SIGSEGV handler (Linux)
-  main_frame.{h,cpp}        # window: header + scrollable graph rows
+  main.cpp                  # entry point, platform guards, SIGSEGV handler (Linux),
+                            # --install-driver elevated helper mode, crash.log placement
+  main_frame.{h,cpp}        # window: header + scrollable graph rows, toggle menu
   graph_panel.{h,cpp}       # custom wxPanel, rendering via wxGraphicsContext
-  metrics_collector.{h,cpp} # base class: poll thread, 1000 ms interval
-  cpu_monitor.{h,cpp}       # Windows — PDH
-  cpu_monitor_linux.cpp     # Linux — /proc/stat (delta-method)
+  metrics_collector.{h,cpp} # base class: poll thread, 1000 ms interval, condition_variable stop
+  cpu_monitor.{h,cpp}       # Windows — PDH load, WMI thermal probe, MSR driver init
+  cpu_monitor_linux.cpp     # Linux — /proc/stat (delta-method), /sys/class/thermal, RAPL power
   ram_monitor.{h,cpp}       # Windows — GlobalMemoryStatusEx
   ram_monitor_linux.cpp     # Linux — /proc/meminfo
-  gpu_monitor.{h,cpp}       # Windows — NVML + NVAPI fallback
+  gpu_monitor.{h,cpp}       # Windows — NVML primary + NVAPI fallback (GetDynamicPstates)
   gpu_monitor_linux.cpp     # Linux — dlopen libnvidia-ml.so.1 (real symbol names)
-  theme.{h,cpp}             # Windows — Registry AppsUseLightTheme
-  theme_linux.cpp           # Linux — GTK_THEME, XDG_CURRENT_DESKTOP, settings.ini
-  config.{h,cpp}            # Windows — Registry
+  ring0_msr.{h,cpp}         # WinRing0 DLL / kernel driver back-end, UAC elevation helpers
+  msr_sensor.{h,cpp}        # MSR temperature reader: Tjmax decode, EnsureDriver prompt
+  power_table.{h,cpp}       # Static TDP table for Intel CPUs and NVIDIA GPUs (substring match)
+  theme.{h,cpp}             # Windows — Registry AppsUseLightTheme, dark palette cache
+  theme_linux.cpp           # Linux — GTK_THEME, XDG_CURRENT_DESKTOP, gsettings 30 s cache
+  config.{h,cpp}            # Windows — Registry (window pos/size)
   config_win.cpp / config_linux.cpp
-  logger.{h,cpp}            # file logger (loadgraph.log)
-  platform.h                # PLATFORM_WINDOWS / PLATFORM_LINUX, ReadFileToString
+  logger.{h,cpp}            # file logger (loadgraph.log next to exe; stderr fallback on fopen fail)
+  platform.h                # PLATFORM_WINDOWS / PLATFORM_LINUX, ReadFileToString, mkdir -p helper
 ```
+
+### Key design decisions
+
+- **MetricsCollector** uses a `condition_variable` for stop — thread exits in milliseconds, not seconds.
+- **SEH protection** around `rdmsr` and WMI calls prevents crashes on systems where these APIs misbehave.
+- **Driver lifecycle**: `Open()` tries DLL first, then kernel device, then known service, then registers from `.sys`. `Close()` does *not* stop or delete services — the driver stays loaded across runs.
+- **UAC elevation** is one-shot: the helper process installs/starts the service and exits; subsequent non-elevated launches reuse the running service.
+- **GPU TDP table** matches by substring with longer patterns first (e.g. `"RTX A4000"` before `"A40"`) to avoid shadowing.
 
 ## Known limitations
 
 - **AMD / Intel GPU** — not supported (NVML is NVIDIA-only).
 - **macOS** — not a target platform.
+- **CPU temperature on Linux** — reads `/sys/class/thermal/thermal_zone0/temp`; many desktop boards expose no thermal zone, so N/A is common.
+- **HVCI / Memory Integrity** — if enabled in Windows Security, user-mode `rdmsr` is blocked and a kernel driver is required.
+- **WinRing0 blocklist** — Microsoft actively blocks WinRing0 drivers on Windows 11 22H2+. Defender may delete the `.sys` file; add an exclusion for the LoadGraph directory if needed.
 
 ## License
 

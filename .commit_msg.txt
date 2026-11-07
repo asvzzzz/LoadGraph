@@ -1,9 +1,0 @@
-Fix remaining %s vs %hs: exception.what(), WMI probe, ACPI TRAC
-
-- main.cpp: e.what() returns const char*, use %hs
-- cpu_monitor.cpp: ternary "OK"/"N/A" literals are narrow, use %hs for WMI probe status
-- cpu_monitor.cpp: ternary "YES"/"NO" literal is narrow, use %hs for ACPI TRAC diagnostic
-
-After this fix all remaining %s in LOGI/LOGE are paired with wchar_t* arguments
-(wstring c_str(), BSTR, wchar_t[] buffers, const wchar_t* literals) or with
-non-string format specifiers (%lu, %.0f, etc.) — no more narrow/wide mismatches.
