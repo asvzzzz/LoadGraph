@@ -6,6 +6,10 @@ Real-time system resource monitor tailored for visual oversight of local LLM wor
 
 **Version:** 1.0.0
 
+## Download
+
+A pre-built 64-bit Windows binary is available at [andyk.ru/files/LoadGraph.zip](https://andyk.ru/files/LoadGraph.zip). Extract and run `LoadGraph.exe` — no installation required. Place a WinRing0-compatible `.sys` file next to the executable for CPU temperature monitoring (see [Driver](#driver)).
+
 ## Why this exists
 
 Standard GPU monitoring tools fall short when you need to watch multiple cards at once — exactly the situation when running local LLMs:
