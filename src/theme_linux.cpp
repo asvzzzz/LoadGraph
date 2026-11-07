@@ -194,9 +194,12 @@ namespace
 bool Theme::Update()
 {
     // Cache the result for 30 s to avoid popen("gsettings ...") every timer tick.
+    // wxDateTime::GetValue() returns time_t (epoch seconds); sufficient as a
+    // monotonic-enough wall-clock reference for this purpose (clock skew would
+    // only delay cache refresh, never cause spurious updates).
     static constexpr double kCacheSec = 30.0;
     const bool wasDark = g_dark;
-    double now = wxGetLocalTime().GetValue(); // seconds since midnight — monotonic enough
+    double now = static_cast<double>(wxGetLocalTime().GetValue());
     if (now - g_darkCached > kCacheSec || g_darkCached == 0.0)
     {
         g_dark = ReadDarkFlag();
@@ -238,14 +241,6 @@ wxColour Theme::Grid()
 wxColour Theme::Border()
 {
     return g_dark ? wxColour(90, 90, 90) : wxColour(220, 220, 220);
-}
-
-wxColour Theme::Line()
-{
-    // Use a nice blue accent on dark backgrounds.
-    if (g_dark)
-        return wxColour(76, 194, 255);
-    return wxColour(0, 120, 215);
 }
 
 #endif // PLATFORM_LINUX

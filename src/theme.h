@@ -32,9 +32,6 @@ namespace Theme
 
     // Chart plot area border color.
     wxColour Border();
-
-    // Chart data line color (system accent in light mode).
-    wxColour Line();
 }
 
 #endif // THEME_H

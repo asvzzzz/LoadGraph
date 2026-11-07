@@ -41,15 +41,17 @@ struct NvMemoryInfo
 };
 
 // NvDynamicPstatesInfoEx — layout matches nvapi.h (version, flags, then
-// utilization[8] array of {UCHAR present, UCHAR reserved}). The previous
-// bitfield version was 4 bytes off and read garbage for load percentages.
+// utilization[8] array). Each element: {UCHAR present, UCHAR percentage,
+// USHORT reserved}. The previous bitfield version was 4 bytes off and the
+// usage code read bIsPresent as a percentage flag — fixed below.
 struct NvDynamicPstatesInfoEx
 {
     unsigned int version;
     unsigned int flags;
     struct {
-        unsigned char bIsPresent;
-        unsigned char reserved;
+        unsigned char  bIsPresent;
+        unsigned char  percentage;
+        unsigned short reserved;
     } utilization[8];
 };
 
@@ -203,9 +205,10 @@ void GpuMonitor::CollectNvApi()
             // matches the struct layout above. sizeof() is wrong for NVAPI —
             // it would pass e.g. 24 while the driver expects 0x00010002.
             pstates.version = 0x00010002u;
-            if (m_fnGetDynamicPstatesInfoEx(hGpus[i], &pstates) == NVAPI_OK)
+            if (m_fnGetDynamicPstatesInfoEx(hGpus[i], &pstates) == NVAPI_OK &&
+                pstates.utilization[0].bIsPresent)
                 meta.loadPercent = static_cast<double>(
-                    pstates.utilization[0].bIsPresent ? 100.0 : 0.0);
+                    pstates.utilization[0].percentage);
         }
 
         // Memory info.

@@ -187,7 +187,7 @@ namespace Ring0Msr
                                  reinterpret_cast<LPBYTE>(path), &size) == ERROR_SUCCESS
                 && path[0])
             {
-                LOGI("MSR driver from registry: %s", wxString(path).mb_str().data());
+                LOGI("MSR driver from registry: %s", wxString(path).c_str());
                 RegCloseKey(hKey);
                 return std::wstring(path);
             }
@@ -218,7 +218,7 @@ namespace Ring0Msr
             path += name;
             if (GetFileAttributesW(path.c_str()) != INVALID_FILE_ATTRIBUTES)
             {
-                LOGI("MSR driver found: %s", wxString(path.c_str()).mb_str().data());
+                LOGI("MSR driver found: %s", path.c_str());
                 return path;
             }
         }
@@ -240,7 +240,7 @@ namespace Ring0Msr
             if (h != INVALID_HANDLE_VALUE)
             {
                 s_hDevice = h;
-                LOGI("MSR: driver open OK via %s", wxString(devName).mb_str().data());
+                LOGI("MSR: driver open OK via %s", devName);
                 s_drvOpened = true;
                 return true;
             }

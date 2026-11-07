@@ -245,8 +245,8 @@ namespace PowerTable
         // ---- H-series (Hopper, 2023+) ----
         { "H200",              700 },
         { "H100 80GB",         700 },
+        { "H100 NVL",          700 },   // must come before "H100" — substring match would shadow it otherwise
         { "H100",              700 },
-        { "H100 NVL",          700 },
 
         // ---- A-series (Ampere datacenter) ----
         // Longer / more specific names MUST come before shorter ones because

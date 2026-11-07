@@ -72,18 +72,3 @@ wxColour Theme::Border()
 {
     return g_dark ? wxColour(90, 90, 90) : wxColour(220, 220, 220);
 }
-
-wxColour Theme::Line()
-{
-    // System accent color follows the user's personalization choice.
-    const wxColour accent = wxSystemSettings::GetColour(wxSYS_COLOUR_HIGHLIGHT);
-    if (g_dark)
-    {
-        // Ensure the accent stays visible on a dark background.
-        const int lum = (accent.Red() * 299 + accent.Green() * 587 +
-                         accent.Blue() * 114) / 1000;
-        if (lum < 100)
-            return wxColour(76, 194, 255);
-    }
-    return accent;
-}

@@ -1,0 +1,15 @@
+Fix NVAPI struct ABI and clean up remaining review items
+
+- gpu_monitor.cpp::NvDynamicPstatesInfoEx: add missing percentage and reserved
+  fields to the utilization array element (sizeof was 24, should be 40); fix
+  usage to read actual percentage instead of interpreting bIsPresent as load.
+  This fixes GPU Load showing only 0% or 100% on NVAPI-only fallback path.
+- ring0_msr.cpp: replace .mb_str().data() + %s with direct wchar_t* (%s) in
+  Unicode builds — avoids potential UB when logging wide-path strings.
+- theme_linux.cpp: fix misleading comment (wxGetLocalTime::GetValue is epoch
+  seconds, not seconds-since-midnight); logic unchanged.
+- power_table.cpp: reorder H100 NVL before plain H100 so substring matching
+  does not shadow the more specific name (harmless at equal TDP but correct).
+- main_frame.cpp: remove dead (void)m_toggleGroups[key] entry in addPanel lambda.
+- theme.h/theme.cpp/theme_linux.cpp: remove unused Theme::Line() declaration
+  and definitions — graph colors are hardcoded in GraphPanel.

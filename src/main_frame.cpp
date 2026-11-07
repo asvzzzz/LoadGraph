@@ -395,9 +395,8 @@ void MainFrame::BuildGpuSection(wxBoxSizer* container, wxWindow* parent)
 		{
 			if (g.key == key) { g.panels.push_back(panel); break; }
 		}
-		// deltaH tracking removed — height adjustment is computed dynamically.
-		(void)m_toggleGroups[key];
-
+		// deltaH tracking removed — height adjustment is computed dynamically
+		// via sizer->CalcMin() in ApplyHeightAdjustment.
 	};
 
 	for (size_t i = 0; i < gpus.size(); ++i)
