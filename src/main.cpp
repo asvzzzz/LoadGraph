@@ -2,8 +2,10 @@
 #include "platform.h"
 #include "logger.h"
 #include "main_frame.h"
+#include "metrics_api.h"
+#include "http_server.h"
 #include <cstdio>
-#include <cstdlib>   // exit() for the elevated helper mode
+#include <cstdlib>
 
 #ifdef PLATFORM_WINDOWS
 #include "msr_sensor.h"
@@ -28,7 +30,6 @@ static void CrashHandler(int sig)
 
 static void WriteCrashLog(const char* msg)
 {
-    // Place crash.log next to the executable so it survives on any machine.
     wchar_t exePath[MAX_PATH] = {};
     DWORD len = GetModuleFileNameW(nullptr, exePath, MAX_PATH);
     if (len == 0 || len >= MAX_PATH) return;
@@ -61,6 +62,41 @@ LONG WINAPI TopLevelFilter(EXCEPTION_POINTERS* ep)
 }
 #endif
 
+// ----------------------------------------------------------------------------
+// Create an NVIDIA-green icon programmatically (no external file needed).
+// Draws a 16x16 rounded rectangle with the NVIDIA green (#76B900) fill and
+// a white "LG" label in the center.
+// ----------------------------------------------------------------------------
+#ifdef PLATFORM_WINDOWS
+static wxIcon MakeNvidiaGreenIcon()
+{
+    // NVIDIA green (#76B900)
+    const int R = 118, G = 185, B = 0;
+
+    // Create a bitmap and draw into it via a memory DC.
+    wxBitmap bmp(64, 64);
+    wxMemoryDC dc(bmp);
+    dc.SetBackground(*wxTRANSPARENT_BRUSH);
+    dc.Clear();
+
+    wxPen   pen(wxColour(R, G, B), 0);
+    wxBrush brush(wxColour(R, G, B));
+    dc.SetPen(pen);
+    dc.SetBrush(brush);
+    dc.DrawRoundedRectangle(0, 0, 64, 64, 12);
+
+    // White "LG" label
+    dc.SetTextForeground(*wxWHITE);
+    wxFont font(28, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_BOLD);
+    dc.SetFont(font);
+    dc.DrawText("LG", 14, 16);
+
+    wxIcon icon;
+    icon.CopyFromBitmap(bmp);
+    return icon;
+}
+#endif
+
 class LoadGraphApp : public wxApp
 {
 public:
@@ -72,9 +108,31 @@ public:
 
 #ifdef PLATFORM_LINUX
         signal(SIGSEGV, CrashHandler);
-        // Do NOT ignore SIGABRT: GLib/GCC assert() calls abort(), and silencing it
-        // suppresses the crash log and core dump. Let the default handler run.
 #endif
+
+        // Parse command-line arguments before logging.
+        int httpPort = 0;
+        for (int i = 1; i < argc; ++i)
+        {
+            wxString arg = argv[i];
+            if (arg == L"-port" && i + 1 < argc)
+            {
+                long p = 0;
+                if (argv[i + 1].ToLong(&p) && p > 0 && p <= 65535)
+                    httpPort = (int)p;
+                else
+                    fprintf(stderr, "Invalid port: %s\n", argv[i + 1]);
+                ++i;
+            }
+            else if (arg == L"-h" || arg == L"--help")
+            {
+                printf("LoadGraph - system monitoring dashboard\n"
+                       "Usage: LoadGraph [-port N] [-h]\n"
+                       "  -port N   Start HTTP server on port N, serve web dashboard\n"
+                       "  -h        Show this help\n");
+                return false;
+            }
+        }
 
         wxString logPath = wxGetCwd() + "/loadgraph.log";
         Logger::Init(logPath);
@@ -83,8 +141,6 @@ public:
 
 #ifdef PLATFORM_WINDOWS
         // Elevated helper mode: invoked via UAC "runas" with --install-driver
-        // to register/start the MSR driver service, then exit immediately.
-        // No GUI is created in this mode.
         for (int i = 1; i < argc; ++i)
         {
             if (wxStrcmp(argv[i], L"--install-driver") == 0)
@@ -92,10 +148,14 @@ public:
                 LOGI("Elevated helper mode (--install-driver).");
                 const int rc = MsrSensor::RunInstallHelper(nullptr);
                 Logger::Close();
-                exit(rc); // 0 = driver installed and running
+                exit(rc);
             }
         }
 #endif
+
+        // Start HTTP server in a background thread if -port was specified.
+        if (httpPort > 0)
+            StartHttpServer(httpPort);
 
         try
         {
@@ -107,6 +167,10 @@ public:
             MainFrame* frame = new MainFrame(L"LoadGraph");
             if (!frame) return false;
             LOGI("Frame created 0x%p", static_cast<void*>(frame));
+
+#ifdef PLATFORM_WINDOWS
+            frame->SetIcon(MakeNvidiaGreenIcon());
+#endif
 
             LOGI("Showing frame...");
             frame->Show(true);

@@ -6,9 +6,7 @@
 #include <unordered_map>
 #include <wx/timer.h>
 #include <map>
-#include "cpu_monitor.h"
-#include "ram_monitor.h"
-#include "gpu_monitor.h"
+#include "metrics_api.h"
 #include "graph_panel.h"
 
 // Main application window. Resizable, contains CPU / RAM / GPU metric panels.
@@ -47,10 +45,7 @@ private:
     // Build the total power row (CPU + all GPUs) at the bottom of the window.
     void BuildTotalPowerRow(wxBoxSizer* container, wxWindow* parent);
 
-    // Monitoring objects.
-    CpuMonitor  m_cpu;
-    RamMonitor  m_ram;
-    GpuMonitor  m_gpu;
+    // Monitoring handled via metrics_api (shared with HTTP server).
 
     // Timer for periodic GUI updates (1000 ms).
     wxTimer     m_timer;

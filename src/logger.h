@@ -14,8 +14,6 @@ public:
         if (s_file) fclose(s_file);
         wxScopedCharBuffer buf = filename.mb_str();
         s_file = fopen(static_cast<const char*>(buf), "a");
-        // If we cannot open the log file (e.g. CWD is unreadable), report once
-        // to stderr so the failure is visible even when no GUI is available.
         if (!s_file)
             fprintf(stderr, "LoadGraph: cannot open %hs for logging\n",
                     static_cast<const char*>(buf));

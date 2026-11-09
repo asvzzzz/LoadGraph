@@ -3,6 +3,7 @@
 #include "theme.h"
 #include "power_table.h"
 #include "logger.h"
+#include "metrics_api.h"
 #include <wx/display.h>
 #include <wx/dcbuffer.h>
 
@@ -107,29 +108,14 @@ MainFrame::MainFrame(const wxString& title)
 		if (icon.IsOk()) SetIcon(icon);
 	}
 
-	// Resolve the CPU name / TDP once: the layout needs tdpWatts before
-	// RealizeUI(), and QueryCpuName() must run before the polling starts.
-	m_cpu.QueryCpuName();
-
-	// Synchronous first collection: the layout (GPU list, CPU TDP / sensors)
-	// is built from these metrics, so they must be filled before RealizeUI().
-	m_cpu.CollectNow();
-	m_ram.CollectNow();
-	if (m_gpu.IsAvailable()) m_gpu.CollectNow();
+	// Initialize the shared metrics system (CPU / RAM / GPU monitors).
+	MetricsInit();
 
 	// Log every detected GPU - helps to spot devices missing from NVML.
-	if (m_gpu.IsAvailable())
-	{
-		const std::vector<GpuMetrics> gpus0 = m_gpu.GetMetrics();
-		LOGI("GPU list: %d device(s)", static_cast<int>(gpus0.size()));
-		for (size_t i = 0; i < gpus0.size(); ++i)
-			LOGI("  GPU %d: %hs", static_cast<int>(i), gpus0[i].name.c_str());
-	}
-
-	// Start background collectors (1000 ms polling, handled by each monitor).
-	m_cpu.Start();
-	m_ram.Start();
-	if (m_gpu.IsAvailable()) m_gpu.Start();
+	const auto gpus0 = MetricsGetGpus();
+	LOGI("GPU list: %d device(s)", static_cast<int>(gpus0.size()));
+	for (size_t i = 0; i < gpus0.size(); ++i)
+		LOGI("  GPU %d: %hs", static_cast<int>(i), gpus0[i].name.c_str());
 
 	// Build the layout first - the View menu needs the created graph panels.
 	RealizeUI();
@@ -226,7 +212,8 @@ void MainFrame::RealizeUI()
 	// CPU model label (the redundant "LoadGraph" title was removed; the label
 	// stretches and ellipsizes so the uptime never gets pushed out).
 	wxString cpuLabel = "CPU";
-	const std::wstring cpuName = m_cpu.GetMetrics().cpuName;
+	const CpuData cpuInit = MetricsGetCpu();
+	const std::wstring cpuName = cpuInit.cpuName;
 	if (!cpuName.empty()) cpuLabel += "  " + wxString(cpuName.c_str());
 	else                  cpuLabel += "  (N/A)";
 	wxStaticText* cpuT = new wxStaticText(m_header, wxID_ANY, cpuLabel);
@@ -268,7 +255,7 @@ void MainFrame::RealizeUI()
 
 	BuildCpuSection(contentS, m_content);
 	contentS->AddSpacer(5);
-	if (m_gpu.IsAvailable()) BuildGpuSection(contentS, m_content);
+	if (MetricsGpuAvailable()) BuildGpuSection(contentS, m_content);
 	BuildTotalPowerRow(contentS, m_content);
 	contentS->AddSpacer(6);
 
@@ -299,7 +286,7 @@ void MainFrame::BuildCpuSection(wxBoxSizer* container, wxWindow* parent)
 	m_ramUsageGraph = new GraphPanel(parent, "RAM Usage", "GB");
 	m_ramUsageGraph->SetYMode(GraphYMode::Gigabytes);
 	// Fixed 0..total RAM range: avoids a drifting auto-scale.
-	const RamMetrics ramInit = m_ram.GetMetrics();
+	const RamData ramInit = MetricsGetRam();
 	if (ramInit.totalBytes > 0)
 		m_ramUsageGraph->SetYRange(0.0, std::ceil(BytesToGbs(ramInit.totalBytes)));
 
@@ -313,7 +300,7 @@ void MainFrame::BuildCpuSection(wxBoxSizer* container, wxWindow* parent)
 	m_viewToggles["CPU Load"]  = m_cpuLoadGraph;
 	m_viewToggles["RAM Usage"] = m_ramUsageGraph;
 
-	const CpuMetrics cpuInit = m_cpu.GetMetrics();
+	const CpuData cpuInit = MetricsGetCpu();
 
 	// Row 2: CPU Power (only when a TDP or a real power sensor is known).
 	if (cpuInit.tdpWatts > 0.0)
@@ -361,7 +348,7 @@ void MainFrame::BuildCpuSection(wxBoxSizer* container, wxWindow* parent)
 
 void MainFrame::BuildGpuSection(wxBoxSizer* container, wxWindow* parent)
 {
-	const std::vector<GpuMetrics> gpus = m_gpu.GetMetrics();
+	const std::vector<GpuData> gpus = MetricsGetGpus();
 	if (gpus.empty()) return;
 
 	// Five group toggles: one checkbox controls this metric type on ALL GPUs.
@@ -392,7 +379,7 @@ void MainFrame::BuildGpuSection(wxBoxSizer* container, wxWindow* parent)
 
 	for (size_t i = 0; i < gpus.size(); ++i)
 	{
-		const GpuMetrics& gpu = gpus[i];
+		const GpuData& gpu = gpus[i];
 
 		const wxString gpuTitle = wxString::Format("GPU %d: ", static_cast<int>(i))
 			+ wxString::FromUTF8(gpu.name);
@@ -642,14 +629,9 @@ void MainFrame::OnTimer(wxTimerEvent&)
 {
 	if (!m_uiCreated) return;
 
-	// SampleLoad() must run on the GUI thread each tick: it reads the PDH
-	// counter and refreshes the CPU power estimate (powerWatts).
-	m_cpu.SampleLoad();
-
-	const CpuMetrics cpu = m_cpu.GetMetrics();
-	const RamMetrics ram = m_ram.GetMetrics();
-	const std::vector<GpuMetrics> gpus =
-		m_gpu.IsAvailable() ? m_gpu.GetMetrics() : std::vector<GpuMetrics>();
+	const CpuData  cpu  = MetricsGetCpu();
+	const RamData  ram  = MetricsGetRam();
+	const std::vector<GpuData> gpus = MetricsGetGpus();
 
 	// React to live light/dark theme switches.
 	if (Theme::Update()) ApplyTheme();
@@ -680,7 +662,7 @@ void MainFrame::OnTimer(wxTimerEvent&)
 	const size_t n = std::min(gpus.size(), m_gpuPanels.size());
 	for (size_t i = 0; i < n; ++i)
 	{
-		const GpuMetrics& gpu = gpus[i];
+		const GpuData& gpu = gpus[i];
 		GpuPanelData& d = m_gpuPanels[i];
 
 		if (d.loadGraph && gpu.loadPercent >= 0.0) d.loadGraph->AddPoint(gpu.loadPercent);
@@ -712,9 +694,7 @@ void MainFrame::OnClose(wxCloseEvent& evt)
 	Config::SaveWindowPosition(x, y, w, h);
 
 	if (m_timer.IsRunning()) m_timer.Stop();
-	m_cpu.Stop();
-	m_ram.Stop();
-	if (m_gpu.IsAvailable()) m_gpu.Stop();
+	MetricsShutdown();
 
 	evt.Skip();
 }

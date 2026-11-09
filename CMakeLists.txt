@@ -152,6 +152,10 @@ if(WIN32)
         src/theme.cpp
         src/config_win.cpp
         src/main_frame.cpp
+        src/metrics_api.h
+        src/metrics_api.cpp
+        src/http_server.h
+        src/http_server.cpp
     )
 elseif(UNIX AND NOT APPLE)
     # Linux
@@ -203,8 +207,24 @@ if(WIN32)
     # Suppress C4996 (unsafe CRT) from our own code; wxWidgets headers emit it
     # regardless, and we use safe equivalents where it matters (snprintf/strncpy).
     target_compile_definitions(${PROJECT_NAME} PRIVATE _CRT_SECURE_NO_WARNINGS)
+    target_compile_definitions(${PROJECT_NAME} PRIVATE USE_HTTP_SERVER)
     target_compile_options(${PROJECT_NAME} PRIVATE /W4 /WX-)
     target_link_options(${PROJECT_NAME} PRIVATE /SUBSYSTEM:WINDOWS)
+
+    # ----------------------------------------------------------------------------
+    # Console-only binary (htop-like, no wxWidgets dependency).
+    # ----------------------------------------------------------------------------
+    set(CONSOLE_SOURCES src/console_app.cpp)
+    add_executable(loadgraph-console ${CONSOLE_SOURCES})
+    target_include_directories(loadgraph-console PRIVATE src)
+    target_compile_definitions(loadgraph-console PRIVATE USE_HTTP_SERVER _CRT_SECURE_NO_WARNINGS)
+    target_compile_options(loadgraph-console PRIVATE /W4 /WX-)
+    target_link_libraries(loadgraph-console pdh psapi)
+    target_compile_options(loadgraph-console PRIVATE /W4 /WX-)
+    target_link_libraries(loadgraph-console pdh psapi iphlpapi wbemuuid)
+    set_target_properties(loadgraph-console PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+    )
 elseif(UNIX AND NOT APPLE)
     # Linux-specific settings.
     target_include_directories(${PROJECT_NAME} PRIVATE ${wxWidgets_INCLUDE_DIRS})
