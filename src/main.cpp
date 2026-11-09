@@ -70,14 +70,23 @@ LONG WINAPI TopLevelFilter(EXCEPTION_POINTERS* ep)
 #ifdef PLATFORM_WINDOWS
 static wxIcon MakeNvidiaGreenIcon()
 {
-    // Load loadgraph.png from the working directory and recolor it to
-    // NVIDIA green (#76B900) while preserving alpha transparency.
+    // Load loadgraph.png, recolor non-transparent pixels to NVIDIA green
+    // (#76B900), preserve alpha. Tries multiple paths for robustness.
     const int R = 118, G = 185, B = 0;
 
-    wxImage img("loadgraph.png", wxBITMAP_TYPE_PNG);
+    wxImage img;
+    // Try paths in order: executable dir (CMake copies it there), then src dir.
+    wxString candidates[] = {
+        "loadgraph.png",
+        wxGetCwd() + "/loadgraph.png",
+    };
+    for (const auto& path : candidates)
+    {
+        img = wxImage(path, wxBITMAP_TYPE_PNG);
+        if (img.IsOk()) break;
+    }
     if (!img.IsOk()) return wxIcon();
 
-    // Recolor every non-transparent pixel to green.
     unsigned char* pixels = img.GetData();
     unsigned char* alpha  = img.GetAlpha();
     const int w = img.GetWidth(), h = img.GetHeight();

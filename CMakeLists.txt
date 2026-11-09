@@ -204,6 +204,10 @@ if(WIN32)
         WIN32_EXECUTABLE ON
     )
 
+    # Copy runtime resources (icon PNG) to the output directory.
+    configure_file("${CMAKE_SOURCE_DIR}/loadgraph.png"
+                   "${CMAKE_BINARY_DIR}/bin/loadgraph.png" COPYONLY)
+
     # Suppress C4996 (unsafe CRT) from our own code; wxWidgets headers emit it
     # regardless, and we use safe equivalents where it matters (snprintf/strncpy).
     target_compile_definitions(${PROJECT_NAME} PRIVATE _CRT_SECURE_NO_WARNINGS)
