@@ -323,7 +323,7 @@ void MainFrame::BuildCpuSection(wxBoxSizer* container, wxWindow* parent)
 	{
 		m_cpuPowerGraph = new GraphPanel(parent, "CPU Power", "W");
 		const double maxP = std::max(250.0, cpuInit.tdpWatts * 1.1);
-		m_cpuPowerGraph->SetYRange(0.0, RoundUpWattsTo50(maxP));
+		m_cpuPowerGraph->SetYRange(0.0, maxP);
 		m_cpuPowerGraph->SetYMode(GraphYMode::Watts);
 		m_cpuPowerGraph->SetColor(HexColor(m_cfg.cpu_power_color));
 		m_cpuPowerGraph->SetBgColor(HexColor(m_cfg.chart_bg_color));
@@ -488,7 +488,7 @@ void MainFrame::BuildGpuSection(wxBoxSizer* container, wxWindow* parent)
 			double limit = gpu.powerLimitWatts;
 			if (limit <= 0.0) limit = static_cast<double>(PowerTable::GetGpuTdp(gpu.name));
 			if (limit <= 0.0) limit = 400.0;
-			data.powerGraph->SetYRange(0.0, RoundUpWattsTo50(limit * 1.1));
+			data.powerGraph->SetYRange(0.0, std::max(250.0, limit * 1.1));
 
 			container->Add(data.powerGraph, 1, wxEXPAND | wxLEFT | wxRIGHT, 5);
 			addPanel("gpu_power", data.powerGraph);
@@ -510,9 +510,9 @@ void MainFrame::BuildGpuSection(wxBoxSizer* container, wxWindow* parent)
 
 void MainFrame::BuildTotalPowerRow(wxBoxSizer* container, wxWindow* parent)
 {
-	// Fixed 0..1000 W range with 5 ticks: 0, 250, 500, 750, 1000.
+	// Fixed 0..500 W range (matches web dashboard).
 	m_totalPowerGraph = new GraphPanel(parent, "Total Power", "W");
-	m_totalPowerGraph->SetYRange(0.0, 1000.0);
+	m_totalPowerGraph->SetYRange(0.0, 500.0);
 	m_totalPowerGraph->SetYMode(GraphYMode::Watts);
 	m_totalPowerGraph->SetTickCount(5);
 	m_totalPowerGraph->SetColor(HexColor(m_cfg.total_power_color));
