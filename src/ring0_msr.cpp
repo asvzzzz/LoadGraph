@@ -35,8 +35,22 @@
 
 // WinRing0-compatible IOCTL codes (fallback path).
 static constexpr uint32_t kOlsType = 40000;
-static constexpr uint32_t kIoctlReadMsr =
-    CTL_CODE(kOlsType, 0x821, METHOD_BUFFERED, FILE_ANY_ACCESS);
+static constexpr uint32_t kIoctlReadMsr     = CTL_CODE(kOlsType, 0x821, METHOD_BUFFERED, FILE_ANY_ACCESS);
+static constexpr uint32_t kIoctlWriteMsr   = CTL_CODE(kOlsType, 0x822, METHOD_BUFFERED, FILE_ANY_ACCESS);
+// I/O port access: instruction byte + USHORT port + ULONG value (input), ULONG data (output).
+static constexpr uint32_t kIoctlReadPortDword = CTL_CODE(kOlsType, 0x802, METHOD_BUFFERED, FILE_ANY_ACCESS);
+static constexpr uint32_t kIoctlWritePortByte = CTL_CODE(kOlsType, 0x803, METHOD_BUFFERED, FILE_ANY_ACCESS);
+
+// Instruction opcodes for I/O port IOCTL.
+static constexpr uint8_t kOlsReadPortDword  = 0x01;
+static constexpr uint8_t kOlsWritePortByte  = 0x05;
+
+// Input buffer layout for port I/O: [instruction:1][port:2(padded)][value:4]
+struct OlsPortIn {
+    uint8_t  instruction;
+    uint16_t pad_port;
+    uint32_t value;
+};
 
 namespace Ring0Msr
 {
@@ -50,14 +64,19 @@ namespace Ring0Msr
     typedef bool(__stdcall* FnIsMsr)();
     typedef int(__stdcall* FnGetDllStatus)();
     typedef int(__stdcall* FnGetDriverType)();
+    // WinRing0 I/O port access (optional — not present in all builds).
+    typedef uint32_t(__stdcall* FnReadPortDword)(uint16_t);
+    typedef void(__stdcall* FnWritePortByte)(uint16_t, uint8_t);
 
-    static HMODULE            s_hDll      = nullptr;
-    static FnInitializeOls    s_fnInit    = nullptr;
-    static FnDeinitOls        s_fnDeinit  = nullptr;
-    static FnRdmsr            s_fnRdmsr   = nullptr;
-    static FnIsMsr            s_fnIsMsr   = nullptr;
+    static HMODULE            s_hDll       = nullptr;
+    static FnInitializeOls    s_fnInit     = nullptr;
+    static FnDeinitOls        s_fnDeinit   = nullptr;
+    static FnRdmsr            s_fnRdmsr    = nullptr;
+    static FnIsMsr            s_fnIsMsr    = nullptr;
     static FnGetDllStatus     s_fnDllStatus = nullptr;
-    static FnGetDriverType    s_fnDrvType   = nullptr;
+    static FnGetDriverType    s_fnDrvType  = nullptr;
+    static FnReadPortDword    s_fnReadPort = nullptr;
+    static FnWritePortByte    s_fnWrPortB  = nullptr;
 
     // Driver-state fields (used when backend == Driver).
     static HANDLE   s_hDevice  = INVALID_HANDLE_VALUE;
@@ -114,11 +133,11 @@ namespace Ring0Msr
             return false;
         }
 
-        s_fnInit  = reinterpret_cast<FnInitializeOls>(
+        s_fnInit    = reinterpret_cast<FnInitializeOls>(
                         GetProcAddress(s_hDll, "InitializeOls"));
-        s_fnDeinit = reinterpret_cast<FnDeinitOls>(
+        s_fnDeinit  = reinterpret_cast<FnDeinitOls>(
                         GetProcAddress(s_hDll, "DeinitializeOls"));
-        s_fnRdmsr = reinterpret_cast<FnRdmsr>(
+        s_fnRdmsr   = reinterpret_cast<FnRdmsr>(
                         GetProcAddress(s_hDll, "Rdmsr"));
         s_fnIsMsr   = reinterpret_cast<FnIsMsr>(
                         GetProcAddress(s_hDll, "IsMsr"));
@@ -126,6 +145,10 @@ namespace Ring0Msr
                         GetProcAddress(s_hDll, "GetDllStatus"));
         s_fnDrvType   = reinterpret_cast<FnGetDriverType>(
                         GetProcAddress(s_hDll, "GetDriverType"));
+        s_fnReadPort  = reinterpret_cast<FnReadPortDword>(
+                        GetProcAddress(s_hDll, "ReadPortDword"));
+        s_fnWrPortB   = reinterpret_cast<FnWritePortByte>(
+                        GetProcAddress(s_hDll, "WritePortByte"));
 
         if (!s_fnInit || !s_fnDeinit || !s_fnRdmsr)
         {
@@ -603,16 +626,75 @@ namespace Ring0Msr
             FreeLibrary(s_hDll);
             s_hDll = nullptr;
         }
-        s_fnInit  = nullptr;
-        s_fnDeinit = nullptr;
-        s_fnRdmsr = nullptr;
-        s_fnIsMsr = nullptr;
+        s_fnInit    = nullptr;
+        s_fnDeinit  = nullptr;
+        s_fnRdmsr   = nullptr;
+        s_fnIsMsr   = nullptr;
+        s_fnReadPort = nullptr;
+        s_fnWrPortB  = nullptr;
         s_drvOpened  = false;
         s_svcCreated = false;
         s_backend = Backend::None;
     }
 
     bool IsOpen() { return s_backend != Backend::None; }
+
+    // Read a 32-bit I/O port. Returns the value read, or 0 on failure.
+    // Works via DLL (ReadPortDword export) or driver IOCTL path.
+    uint32_t ReadIoPortDword(uint16_t port)
+    {
+        // DLL backend: direct call to WinRing0x64.dll's ReadPortDword.
+        if (s_backend == Backend::Dll && s_fnReadPort)
+            return s_fnReadPort(port);
+
+        // Driver backend: IOCTL path.
+        if (s_backend != Backend::Driver || !s_drvOpened ||
+            s_hDevice == INVALID_HANDLE_VALUE)
+            return 0;
+
+        OlsPortIn inp{};
+        inp.instruction = kOlsReadPortDword;
+        inp.pad_port    = 0;   // port is little-endian at offset 1
+        inp.value       = 0;
+        // Pack port number into bytes 1-2 of the buffer.
+        *reinterpret_cast<uint16_t*>(reinterpret_cast<uint8_t*>(&inp) + 1)
+            = port;
+
+        uint32_t outData = 0;
+        DWORD bytesReturned = 0;
+        if (!DeviceIoControl(s_hDevice, kIoctlReadPortDword,
+                             &inp, sizeof(inp),
+                             &outData, sizeof(outData),
+                             &bytesReturned, nullptr))
+            return 0;
+        return outData;
+    }
+
+    // Write a byte to an I/O port. Returns true on success.
+    bool WriteIoPortByte(uint16_t port, uint8_t value)
+    {
+        if (s_backend == Backend::Dll && s_fnWrPortB)
+        {
+            s_fnWrPortB(port, value);
+            return true;
+        }
+
+        if (s_backend != Backend::Driver || !s_drvOpened ||
+            s_hDevice == INVALID_HANDLE_VALUE)
+            return false;
+
+        OlsPortIn inp{};
+        inp.instruction = kOlsWritePortByte;
+        *reinterpret_cast<uint16_t*>(reinterpret_cast<uint8_t*>(&inp) + 1)
+            = port;
+        inp.value = value;
+
+        DWORD bytesReturned = 0;
+        return DeviceIoControl(s_hDevice, kIoctlWritePortByte,
+                               &inp, sizeof(inp),
+                               nullptr, 0,
+                               &bytesReturned, nullptr);
+    }
 }
 
 #endif // PLATFORM_WINDOWS

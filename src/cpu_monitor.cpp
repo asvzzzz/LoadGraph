@@ -1,5 +1,6 @@
 #include "cpu_monitor.h"
 #include "msr_sensor.h"
+#include "ring0_msr.h"
 #include "power_table.h"
 #include "logger.h"
 
@@ -273,6 +274,8 @@ double CpuMonitor::SampleLoad()
 
 // Forward declaration: probes every non-admin temp source on startup.
 static void ProbeAllTempSources();
+// Forward declaration: probes Super I/O fan via WinRing0 port I/O.
+static int ProbeSuperIoFan();
 
 void CpuMonitor::Collect()
 {
@@ -343,6 +346,22 @@ void CpuMonitor::Collect()
         else
         {
             --m_wmiCooldown;
+        }
+    }
+
+    // --- Super I/O fan probe (WinRing0 I/O port access) --------------------
+    // Runs once per session: if no fan RPM yet but the kernel driver is loaded,
+    // try reading the hardware monitoring chip directly. Guarded by m_wmiTried
+    // so we only attempt after WMI has been tried at least once.
+    if (fan < 0 && Ring0Msr::IsOpen() && !m_fanIoTried)
+    {
+        m_fanIoTried = true;
+        int ioFan = ProbeSuperIoFan();
+        if (ioFan > 0)
+        {
+            fan = ioFan;
+            filled |= 2u;
+            LOGI("Super I/O fan probe: RPM=%d", fan);
         }
     }
 
@@ -510,6 +529,126 @@ unsigned int CpuMonitor::ProbeWmiSensor(double& tempC, int& fanRpm)
     }
 
     return filled;
+}
+
+// ----------------------------------------------------------------------------
+// Super I/O hardware monitoring probe via WinRing0 I/O port access.
+// Reads CPU fan RPM from common Super I/O chips (Nuvoton, ITE, SMSC).
+// Returns the RPM value, or -1 if unavailable.
+// ----------------------------------------------------------------------------
+static int ProbeSuperIoFan()
+{
+    // Need WinRing0 backend for port I/O.
+    if (!Ring0Msr::IsOpen()) return -1;
+
+    // Common Super I/O config ports and their data ports.
+    static const struct { uint16_t cfgPort; uint16_t dataPort; } kPorts[] = {
+        { 0x2E, 0x2F },
+        { 0x4E, 0x4F },
+    };
+
+    for (const auto& p : kPorts)
+    {
+        // Exit config mode first (some chips stay locked from previous use).
+        Ring0Msr::WriteIoPortByte(p.cfgPort, 0xAA);
+        Sleep(1);
+
+        // Enter config mode: write 0x55 to config port.
+        if (!Ring0Msr::WriteIoPortByte(p.cfgPort, 0x55))
+            continue;
+        Sleep(1);
+        if (!Ring0Msr::WriteIoPortByte(p.cfgPort, 0x55))
+            continue;
+        Sleep(1);
+
+        // Read vendor ID from logical device config register 0x20.
+        if (!Ring0Msr::WriteIoPortByte(p.cfgPort, 0x20))
+            continue;
+        uint32_t vidReg = Ring0Msr::ReadIoPortDword(p.dataPort);
+        // Vendor IDs: Nuvoton=0xBCDE, ITE=0xACAD, SMSC=0x114B (low word), F718xx=0xF0F1.
+        uint16_t vid = static_cast<uint16_t>(vidReg & 0xFFFF);
+        bool isNuvoton = (vid == 0xBCDE);
+        bool isIte     = (vid == 0xACAD);
+        bool isSmss    = (vid == 0x114B || vid == 0xF0F1);
+        if (!isNuvoton && !isIte && !isSmss) continue;
+
+        LOGI("Super I/O detected at port 0x%04X: vendor=0x%04X", p.cfgPort, vid);
+
+        // Read base I/O address from registers 0x60 (low byte) and 0x61 (high byte).
+        if (!Ring0Msr::WriteIoPortByte(p.cfgPort, 0x60)) continue;
+        uint32_t baseLow = Ring0Msr::ReadIoPortDword(p.dataPort);
+        if (!Ring0Msr::WriteIoPortByte(p.cfgPort, 0x61)) continue;
+        uint32_t baseHigh = Ring0Msr::ReadIoPortDword(p.dataPort);
+        uint16_t baseAddr = static_cast<uint16_t>(
+            (static_cast<uint16_t>(baseHigh & 0xFF) << 8) |
+             static_cast<uint16_t>(baseLow  & 0xFF));
+
+        if (baseAddr < 0x100 || baseAddr > 0xFFFF) continue;
+        LOGI("Super I/O base I/O = 0x%04X", baseAddr);
+
+        // Select logical device #1 (typically fan controller) — config reg 0x07.
+        if (!Ring0Msr::WriteIoPortByte(p.cfgPort, 0x07)) continue;
+        Ring0Msr::ReadIoPortDword(p.dataPort); // LD selection ack.
+        // If LD#1 is not enabled (bit 0 of status reg at offset 0x30), try another.
+        if (!Ring0Msr::WriteIoPortByte(p.cfgPort, 0x30)) continue;
+        uint32_t stReg = Ring0Msr::ReadIoPortDword(p.dataPort);
+        if (!(stReg & 1u))
+        {
+            // Try logical device #2 (some boards route fan to LD#2).
+            if (!Ring0Msr::WriteIoPortByte(p.cfgPort, 0x07)) continue;
+            Ring0Msr::WriteIoPortByte(p.cfgPort, 0x02);
+            Sleep(1);
+            if (!Ring0Msr::WriteIoPortByte(p.cfgPort, 0x30)) continue;
+            stReg = Ring0Msr::ReadIoPortDword(p.dataPort);
+            if (!(stReg & 1u)) continue;
+        }
+
+        // Read fan divisor register. Layout depends on chip family.
+        uint8_t div = 0;
+        if (isNuvoton)
+        {
+            // Nuvoton: fan divisor at config offset 0x43 (low 4 bits of dword read).
+            if (!Ring0Msr::WriteIoPortByte(p.cfgPort, 0x43)) continue;
+            div = static_cast<uint8_t>(Ring0Msr::ReadIoPortDword(p.dataPort) & 0x0F);
+        }
+        else if (isIte)
+        {
+            // ITE: fan divisor at config offset 0x41.
+            if (!Ring0Msr::WriteIoPortByte(p.cfgPort, 0x41)) continue;
+            div = static_cast<uint8_t>(Ring0Msr::ReadIoPortDword(p.dataPort) & 0x0F);
+        }
+        else // SMSC
+        {
+            if (!Ring0Msr::WriteIoPortByte(p.cfgPort, 0x42)) continue;
+            div = static_cast<uint8_t>(Ring0Msr::ReadIoPortDword(p.dataPort) & 0x0F);
+        }
+        // Divisor 0xF means fan input not connected.
+        if (div == 0x0F) { LOGI("Super I/O: fan divisor=0xF (no fan connected)"); return -1; }
+        if (div == 0)    div = 1; // avoid division by zero.
+
+        // Read fan counter register (16-bit). Nuvoton offset 0x4A, ITE 0x48, SMSC 0x49.
+        uint16_t cntRegOff = isNuvoton ? 0x4A : (isIte ? 0x48 : 0x49);
+        if (!Ring0Msr::WriteIoPortByte(p.cfgPort, cntRegOff)) continue;
+        uint32_t cntLow  = Ring0Msr::ReadIoPortDword(p.dataPort);
+        if (!Ring0Msr::WriteIoPortByte(p.cfgPort, cntRegOff + 1)) continue;
+        uint32_t cntHigh = Ring0Msr::ReadIoPortDword(p.dataPort);
+        uint16_t fanCnt = static_cast<uint16_t>(
+            (static_cast<uint16_t>(cntHigh & 0xFF) << 8) |
+             static_cast<uint16_t>(cntLow  & 0xFF));
+
+        // Decode RPM from counter. Formula varies by chip:
+        //   Nuvoton/ITE: RPM = 1_350_000 / (div * cnt)   (12 pulses per rev, 90ms sample)
+        //   SMSC F718xx: RPM = 1_350_000 / (div * cnt)   (same convention).
+        if (fanCnt == 0) return -1;
+        int rpm = static_cast<int>(1350000.0 / (static_cast<double>(div) * fanCnt) + 0.5);
+        if (rpm > 0 && rpm < 50000)
+        {
+            LOGI("Super I/O fan: base=0x%04X div=%u cnt=0x%04X RPM=%d",
+                 baseAddr, div, fanCnt, rpm);
+            return rpm;
+        }
+    }
+    return -1;
 }
 
 // Enumerate all properties of a WMI object and log them for diagnostics.

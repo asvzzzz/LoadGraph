@@ -91,6 +91,7 @@ private:
     ULONGLONG m_prevUser   = 0;
     bool      m_prevTimesValid = false;
     int  m_wmiCooldown = 0;
+    bool m_fanIoTried  = false;  // true after first Super I/O fan probe attempt
     // Optional real CPU package power sensor (LibreHardwareMonitor /
     // OpenHardwareMonitor WMI namespace). Probed once, then read each tick.
     bool        m_powerLhmTried = false;

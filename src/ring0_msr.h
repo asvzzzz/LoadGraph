@@ -17,6 +17,12 @@ namespace Ring0Msr
     // Returns true on success.
     bool ReadMsr(uint32_t msr, uint32_t& outLo, uint32_t& outHi);
 
+    // Read a 32-bit I/O port. Returns the value read, or 0 on failure.
+    uint32_t ReadIoPortDword(uint16_t port);
+
+    // Write a byte to an I/O port. Returns true on success.
+    bool WriteIoPortByte(uint16_t port, uint8_t value);
+
     // Shut down the backend.
     void Close();
 
