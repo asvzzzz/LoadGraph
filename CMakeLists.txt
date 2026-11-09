@@ -128,6 +128,7 @@ endif()
 # ----------------------------------------------------------------------------
 set(SOURCES
     src/main.cpp
+    src/icon_data.h
     src/logger.h
     src/logger.cpp
     src/platform.h
@@ -204,9 +205,11 @@ if(WIN32)
         WIN32_EXECUTABLE ON
     )
 
-    # Copy runtime resources (icon PNG) to the output directory.
-    configure_file("${CMAKE_SOURCE_DIR}/loadgraph.png"
-                   "${CMAKE_BINARY_DIR}/bin/loadgraph.png" COPYONLY)
+    # Icon is embedded as a C++ byte array (icon_data.h) — no .rc needed.
+    if(EXISTS "${CMAKE_SOURCE_DIR}/loadgraph.png")
+        configure_file("${CMAKE_SOURCE_DIR}/loadgraph.png"
+                       "${CMAKE_BINARY_DIR}/bin/loadgraph.png" COPYONLY)
+    endif()
 
     # Suppress C4996 (unsafe CRT) from our own code; wxWidgets headers emit it
     # regardless, and we use safe equivalents where it matters (snprintf/strncpy).

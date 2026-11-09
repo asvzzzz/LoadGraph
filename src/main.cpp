@@ -4,12 +4,14 @@
 #include "main_frame.h"
 #include "metrics_api.h"
 #include "http_server.h"
+#include "icon_data.h"
 #include <cstdio>
 #include <cstdlib>
 
 #ifdef PLATFORM_WINDOWS
 #include "msr_sensor.h"
 #include <cstring>
+#include <shellapi.h>
 #endif
 
 #ifdef PLATFORM_LINUX
@@ -68,44 +70,95 @@ LONG WINAPI TopLevelFilter(EXCEPTION_POINTERS* ep)
 // a white "LG" label in the center.
 // ----------------------------------------------------------------------------
 #ifdef PLATFORM_WINDOWS
-static wxIcon MakeNvidiaGreenIcon()
+static wxIcon MakeEmbeddedGreenIcon()
 {
-    // Load loadgraph.png, recolor non-transparent pixels to NVIDIA green
-    // (#76B900), preserve alpha. Tries multiple paths for robustness.
+    // Create an HICON from the embedded ICO binary data (icon_data.h).
+    // The ICO file is compiled into the source as a byte array — no external
+    // file or .rc resource needed at all.
     const int R = 118, G = 185, B = 0;
 
-    wxImage img;
-    // Try paths in order: executable dir (CMake copies it there), then src dir.
-    wxString candidates[] = {
-        "loadgraph.png",
-        wxGetCwd() + "/loadgraph.png",
-    };
-    for (const auto& path : candidates)
+    // Write icon bytes to a temporary file and load with ExtractIconEx.
+    char tmpPath[MAX_PATH] = {};
+    GetTempPathA(sizeof(tmpPath), tmpPath);
+    strncat_s(tmpPath, sizeof(tmpPath), "lg_icon_.ico", _TRUNCATE);
     {
-        img = wxImage(path, wxBITMAP_TYPE_PNG);
-        if (img.IsOk()) break;
-    }
-    if (!img.IsOk()) return wxIcon();
-
-    unsigned char* pixels = img.GetData();
-    unsigned char* alpha  = img.GetAlpha();
-    const int w = img.GetWidth(), h = img.GetHeight();
-    for (int y = 0; y < h; ++y)
-        for (int x = 0; x < w; ++x)
+        FILE* f = nullptr;
+        fopen_s(&f, tmpPath, "wb");
+        if (f)
         {
-            int idx = (y * w + x) * 3;
-            if (alpha && alpha[y * w + x] > 0)
-            {
-                pixels[idx]   = R;
-                pixels[idx+1] = G;
-                pixels[idx+2] = B;
-            }
-        }
+            fwrite(kIconData, 1, kIconDataSize, f);
+            fclose(f);
 
-    wxBitmap bmp(img);
-    wxIcon icon;
-    icon.CopyFromBitmap(bmp);
-    return icon;
+            HICON hIcon = nullptr;
+            UINT count = ExtractIconExA(tmpPath, 0, nullptr, &hIcon, 1);
+            if (count > 0 && hIcon)
+            {
+                ICONINFO info{};
+                GetIconInfo(hIcon, &info);
+
+                HDC hdcScreen = GetDC(nullptr);
+                HDC hdcMem = CreateCompatibleDC(hdcScreen);
+                HBITMAP hbmOld = (HBITMAP)SelectObject(
+                    hdcMem, info.hbmColor ? info.hbmColor : info.hbmMask);
+
+                BITMAP bm{};
+                GetObject(info.hbmColor ? info.hbmColor : info.hbmMask,
+                          sizeof(bm), &bm);
+
+                BITMAPINFOHEADER bih{};
+                bih.biSize          = sizeof(BITMAPINFOHEADER);
+                bih.biWidth         = bm.bmWidth;
+                bih.biHeight        = -bm.bmHeight;
+                bih.biPlanes        = 1;
+                bih.biBitCount      = 32;
+                bih.biCompression   = BI_RGB;
+
+                void* pBits = nullptr;
+                HBITMAP hbmDIB = CreateDIBSection(
+                    hdcMem, (BITMAPINFO*)&bih, DIB_RGB_COLORS, &pBits,
+                    nullptr, 0);
+                HBITMAP hbmOld2 = (HBITMAP)SelectObject(hdcMem, hbmDIB);
+                BitBlt(hdcMem, 0, 0, bm.bmWidth, bm.bmHeight,
+                       hdcMem, 0, 0, SRCCOPY);
+
+                unsigned char* pixels = static_cast<unsigned char*>(pBits);
+                const int w = bm.bmWidth, h = bm.bmHeight;
+                wxImage img(w, h);
+                memcpy(img.GetData(), pixels, w * h * 4);
+
+                // Recolor to NVIDIA green.
+                for (int y = 0; y < h; ++y)
+                    for (int x = 0; x < w; ++x)
+                    {
+                        int idx = (y * w + x) * 3;
+                        pixels[idx]   = R;
+                        pixels[idx+1] = G;
+                        pixels[idx+2] = B;
+                    }
+
+                unsigned char* alpha = new unsigned char[w * h];
+                memset(alpha, 255, w * h);
+                img.SetAlpha(alpha);
+
+                SelectObject(hdcMem, hbmOld2);
+                DeleteObject(hbmDIB);
+                SelectObject(hdcMem, hbmOld);
+                DeleteDC(hdcMem);
+                ReleaseDC(nullptr, hdcScreen);
+                DestroyIcon(hIcon);
+                if (info.hbmColor)  DeleteObject(info.hbmColor);
+                if (info.hbmMask)   DeleteObject(info.hbmMask);
+
+                wxBitmap bmp(img);
+                wxIcon icon;
+                icon.CopyFromBitmap(bmp);
+                DeleteFileA(tmpPath);
+                return icon;
+            }
+            DeleteFileA(tmpPath);
+        }
+    }
+    return wxIcon();
 }
 #endif
 
@@ -181,7 +234,7 @@ public:
             LOGI("Frame created 0x%p", static_cast<void*>(frame));
 
 #ifdef PLATFORM_WINDOWS
-            frame->SetIcon(MakeNvidiaGreenIcon());
+            frame->SetIcon(MakeEmbeddedGreenIcon());
 #endif
 
             LOGI("Showing frame...");

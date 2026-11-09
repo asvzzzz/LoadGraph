@@ -358,6 +358,16 @@ function updateGpu(d) {
   });
 }
 
+// ── Resize handler — redraw all charts when viewport changes ──────────────
+function redrawAll() {
+    Object.keys(gpuCharts).forEach(function(k) {
+        if (gpuCharts[k] && gpuCharts[k].push) gpuCharts[k].draw();
+    });
+    [cpuChart, ramChart, tempChart, powerChart, fanChart, totalPowerChart]
+        .filter(function(c) { return c && c.draw; }).forEach(function(c) { c.draw(); });
+}
+window.addEventListener('resize', redrawAll);
+
 // ── Main loop ─────────────────────────────────────────────────────────────
 async function fetchMetrics() {
   try { var r = await fetch('/api/metrics'); var d = await r.json(); updateCpu(d); updateGpu(d); } catch(e) {}
