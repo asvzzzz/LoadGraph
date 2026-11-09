@@ -362,11 +362,11 @@ function updateGpu(d) {
     var fKey = 'gpu'+i+'FanChart';
     if (g.fan_rpm > 0) {
       fvEl.textContent = g.fan_rpm + ' RPM';
-      if (!gpuCharts[fKey]) gpuCharts[fKey] = makeChart(fKey, '#00bcd4', 3000); // cyan — GPU fan
+      if (!gpuCharts[fKey]) gpuCharts[fKey] = makeChart(fKey, '#3154E1', 3000); // deep blue — GPU fan
       gpuCharts[fKey].push(g.fan_rpm);
     } else if (g.fan_percent >= 0) {
       fvEl.textContent = g.fan_percent.toFixed(0) + '%';
-      if (!gpuCharts[fKey]) gpuCharts[fKey] = makeChart(fKey, '#00bcd4', 100); // cyan — GPU fan
+      if (!gpuCharts[fKey]) gpuCharts[fKey] = makeChart(fKey, '#3154E1', 100); // deep blue — GPU fan
       gpuCharts[fKey].push(g.fan_percent);
     } else { fvEl.textContent = 'N/A'; }
 
