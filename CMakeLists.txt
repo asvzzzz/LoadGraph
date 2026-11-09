@@ -205,7 +205,7 @@ if(WIN32)
         WIN32_EXECUTABLE ON
     )
 
-    # Icon is embedded as a C++ byte array (icon_data.h) — no .rc needed.
+    # Copy icon PNG to build dir — loaded at runtime by wxImage and recolored green.
     if(EXISTS "${CMAKE_SOURCE_DIR}/loadgraph.png")
         configure_file("${CMAKE_SOURCE_DIR}/loadgraph.png"
                        "${CMAKE_BINARY_DIR}/bin/loadgraph.png" COPYONLY)
