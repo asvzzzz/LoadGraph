@@ -2,7 +2,13 @@
 build/
 build_linux/
 cmake_install.cmake
-!.gitignore
+
+# CMake generated project files
+*.vcxproj
+*.vcxproj.filters
+*.sln
+CMakeCache.txt
+CMakeFiles/
 
 # Logs
 *.log
