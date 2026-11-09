@@ -16,54 +16,64 @@
 //   CPU section : Row1=CPU Load | RAM Usage, Row2=Power(full), Row3=Temp(±Fan)
 //   GPU per card: Title, Row1=Load|Temp, Row2=VRAM|Fan, Row3=Power(full)
 // All value labels are inline: "Label 42" instead of label left / value right.
-static const char* kHtmlPage = R"(<!DOCTYPE html>
+static const char* kHtmlPageHead = R"(<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <title>LoadGraph</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
-  html, body { background: #1a1a2e; color: #e0e0e0; font-family: Consolas, monospace;
-               padding: 16px; margin: 0; overflow-x: hidden; }
+  html, body { height: 100%; background: #1a1a2e; color: #e0e0e0;
+               font-family: Consolas, monospace; overflow: hidden; }
+  body { display: flex; flex-direction: column; padding: 12px; gap: 8px; }
 
-  h1  { color: #76B900; margin: 0 0 8px; font-size: 18px; }
+  h1 { color: #76B900; font-size: 18px; flex: 0 0 auto; }
   .cpu-name { color: #00bcd4; }
 
-  /* Each section. */
-  .section { background: #16213e; border-radius: 8px; padding: 10px 12px;
-             margin-bottom: 8px; }
+  /* Контент занимает всё свободное место, ничего не выталкивает за окно. */
+  .content { flex: 1 1 0; min-height: 0; display: flex;
+             flex-direction: column; gap: 8px; overflow: hidden; }
 
-  /* Row of two charts side by side. */
-  .chart-row { display: flex; gap: 8px; }
-  .chart-cell { flex: 1 1 0; display: flex; flex-direction: column; min-width: 0; }
+  /* Секции делят высоту контента поровну. min-height:0 разрешает им сжиматься. */
+  .section, .gpu-section {
+    background: #16213e; border-radius: 8px; padding: 8px 10px;
+    flex: 1 1 0; min-height: 0;
+    display: flex; flex-direction: column; gap: 4px;
+  }
 
-  /* Single full-width chart row. */
-  .full-row { }
+  /* Контейнер GPU-карточек — тоже flex-элемент контента. */
+  #gpuSections { flex: 1 1 0; min-height: 0;
+                 display: flex; flex-direction: column; gap: 8px;
+                 overflow: hidden; }
+  #gpuSections:empty { display: none; }
 
-  /* Inline value label — fixed height, no growth. */
-  .val-row { display: block; height: 20px; line-height: 20px;
-             font-size: 12px; color: #aaa; white-space: nowrap; overflow: hidden;
-             text-overflow: ellipsis; }
+  /* Ряды внутри секции тоже тянутся по высоте. */
+  .chart-row { display: flex; gap: 8px; flex: 1 1 0; min-height: 0; }
+  .full-row  { flex: 1 1 0; min-height: 0;
+               display: flex; flex-direction: column; }
+  .chart-cell { flex: 1 1 0; min-width: 0; min-height: 0;
+                display: flex; flex-direction: column; }
+
+  /* Подпись — фиксированной высоты, чарт забирает остаток. */
+  .val-row { flex: 0 0 auto; height: 18px; line-height: 18px;
+             font-size: 12px; color: #aaa; white-space: nowrap;
+             overflow: hidden; text-overflow: ellipsis; }
   .val-val { color: #fff; font-weight: bold; font-size: 13px; }
 
-  /* Canvas — fixed height, redraws on resize via JS. */
+  /* Ключевое: вместо height:60px / flex-shrink:0 — растягиваемый чарт. */
   canvas.chart { background: #0f3460; border-radius: 4px; display: block;
-                 width: 100%; height: 56px; flex-shrink: 0; }
+                 width: 100%; flex: 1 1 0; min-height: 0; }
 
   .gpu-title { color: #76B900; font-size: 13px; font-weight: bold;
-               margin-bottom: 4px; white-space: nowrap; overflow: hidden;
+               flex: 0 0 auto; white-space: nowrap; overflow: hidden;
                text-overflow: ellipsis; }
   .green  { color: #76B900; }
   .cyan   { color: #00bcd4; }
   .yellow { color: #ffc107; }
   .red    { color: #f44336; }
-  .green  { color: #76B900; }
-  .cyan   { color: #00bcd4; }
-  .yellow { color: #ffc107; }
-  .red    { color: #f44336; }
 </style>
-</head>
-<body>
+</head>)";
+static const char* kHtmlPageBody = R"(<body>
 <h1>LoadGraph <span id="cpuName" class="cpu-name"></span></h1>
 <div class="content">
 
@@ -100,9 +110,9 @@ static const char* kHtmlPage = R"(<!DOCTYPE html>
 
 <div id="gpuSections"></div>
 
-<!-- Total Power — at the bottom, after all GPU cards -->
-<div class="section">
-  <div class="full-row" id="totalPowerRow" style="display:none">
+<!-- Total Power — section hides as a whole when no reading is available -->
+<div class="section" id="totalPowerSection" style="display:none">
+  <div class="full-row" id="totalPowerRow">
     <div class="val-row">Total Power <span class="val-val" id="totalPowerVal">N/A</span></div>
     <canvas id="totalPowerChart" class="chart"></canvas>
   </div>
@@ -114,28 +124,23 @@ static const char* kHtmlPage = R"(<!DOCTYPE html>
 const GPU_COLORS = ['#76B900','#00bcd4','#ffc107','#f44336','#e91e63'];
 const MAX_P = 60;
 
-// Rolling chart — looks up canvas by ID on each draw() so it works after DOM re-build.
+// Rolling chart. draw() is now exposed AND a ResizeObserver is attached per
+// canvas, so the drawing buffer tracks the CSS box on any layout change
+// (window resize, CPU-Power row appearing, GPU count changing, etc).
 function makeChart(id, color, yMax) {
     const defYmax = yMax || 100;
     const data = [];
     var curYmax = defYmax;
-    return {
-        get ymax() { return curYmax; },
-        set ymax(v) { curYmax = Math.max(curYmax, v); },
-        push(v) {
-            data.push(Math.max(0, v));
-            if (data.length > MAX_P) data.shift();
-            draw();
-        }
-    };
+    var observer = null;
+    var observedEl = null;
+
     function draw() {
         const c = document.getElementById(id);
         if (!c || !c.parentElement) return;
-        // HiDPI resolution — use clientSize (CSS display size), NOT offsetHeight
-        // which can grow due to flex feedback. Store last known size to avoid
-        // repeated layout reads on every tick.
-        var cw = c.clientWidth  * 2 || 400;
-        var ch = c.clientHeight * 2 || 80;
+        // clientWidth/clientHeight reflect the flex-allocated CSS size.
+        // Guard against zero-size during the first tick before layout.
+        const cw = c.clientWidth  * 2 || 400;
+        const ch = c.clientHeight * 2 || 80;
         if (c.width  !== cw) c.width  = cw;
         if (c.height !== ch) c.height = ch;
         const ctx = c.getContext('2d');
@@ -165,6 +170,29 @@ function makeChart(id, color, yMax) {
         }
         ctx.strokeStyle = color; ctx.lineWidth = 2; ctx.stroke();
     }
+
+    // The GPU-section DOM is rebuilt every second; re-observe only when
+    // the underlying <canvas> element is actually replaced.
+    function attach() {
+        const c = document.getElementById(id);
+        if (!c || c === observedEl) return;
+        if (observer) observer.disconnect();
+        observer = new ResizeObserver(function() { draw(); });
+        observer.observe(c);
+        observedEl = c;
+    }
+
+    return {
+        get ymax() { return curYmax; },
+        set ymax(v) { curYmax = Math.max(curYmax, v); },
+        push(v) {
+            data.push(Math.max(0, v));
+            if (data.length > MAX_P) data.shift();
+            attach();
+            draw();
+        },
+        draw: draw
+    };
 }
 
 // ── Charts ────────────────────────────────────────────────────────────────
@@ -192,7 +220,8 @@ function updateCpu(d) {
   var ramGb = d.ram_used_bytes / (1024*1024*1024);
   var totGb = d.ram_total_bytes   / (1024*1024*1024);
   document.getElementById('ramUsedVal').textContent = ramGb.toFixed(1) + ' GB';
-  if (ramChart) { ramChart.push(ramGb); ramChart.ymax = Math.max(totGb, ramChart.ymax || totGb); }
+  ramChart.push(ramGb);
+  ramChart.ymax = Math.max(totGb, ramChart.ymax || totGb);
 
   // CPU Power — row shown only when TDP > 0.
   var ppRow = document.getElementById('cpuPowerRow');
@@ -215,14 +244,14 @@ function updateCpu(d) {
       if (d.gpus[gi].power_watts > 0) totalW += d.gpus[gi].power_watts;
     }
   }
-  var tpRow = document.getElementById('totalPowerRow');
+  var tpSec = document.getElementById('totalPowerSection');
   if (totalW > 0) {
-    tpRow.style.display = '';
+    tpSec.style.display = '';
     if (!totalPowerChart) totalPowerChart = makeChart('totalPowerChart', '#ff5722', 500);
     document.getElementById('totalPowerVal').textContent = totalW.toFixed(1) + ' W';
     totalPowerChart.push(totalW);
   } else {
-    tpRow.style.display = 'none';
+    tpSec.style.display = 'none';
   }
 
   // CPU Temp.
@@ -328,14 +357,13 @@ function updateGpu(d) {
     } else { document.getElementById('gpu'+i+'VramVal').textContent = 'N/A'; }
 
     var fvEl = document.getElementById('gpu'+i+'FanVal');
+    var fKey = 'gpu'+i+'FanChart';
     if (g.fan_rpm > 0) {
       fvEl.textContent = g.fan_rpm + ' RPM';
-      var fKey = 'gpu'+i+'FanChart';
       if (!gpuCharts[fKey]) gpuCharts[fKey] = makeChart(fKey, '#9c27b0', 3000);
       gpuCharts[fKey].push(g.fan_rpm);
     } else if (g.fan_percent >= 0) {
       fvEl.textContent = g.fan_percent.toFixed(0) + '%';
-      var fKey = 'gpu'+i+'FanChart';
       if (!gpuCharts[fKey]) gpuCharts[fKey] = makeChart(fKey, '#9c27b0', 100);
       gpuCharts[fKey].push(g.fan_percent);
     } else { fvEl.textContent = 'N/A'; }
@@ -361,13 +389,14 @@ function updateGpu(d) {
   });
 }
 
-// ── Resize handler — redraw all charts when viewport changes ──────────────
+// ── Resize handler — draw() reads the new clientWidth/clientHeight ────────
 function redrawAll() {
     Object.keys(gpuCharts).forEach(function(k) {
-        if (gpuCharts[k] && gpuCharts[k].push) gpuCharts[k].draw();
+        if (gpuCharts[k] && typeof gpuCharts[k].draw === 'function') gpuCharts[k].draw();
     });
     [cpuChart, ramChart, tempChart, powerChart, fanChart, totalPowerChart]
-        .filter(function(c) { return c && c.draw; }).forEach(function(c) { c.draw(); });
+        .filter(function(c) { return c && typeof c.draw === 'function'; })
+        .forEach(function(c) { c.draw(); });
 }
 window.addEventListener('resize', redrawAll);
 
@@ -380,6 +409,7 @@ fetchMetrics();
 </script>
 </body>
 </html>)";
+
 
 static std::string BuildJson()
 {
@@ -463,7 +493,7 @@ static void HttpLoop(int port)
         }
         else if (strstr(req, "GET /") != nullptr)
         {
-            resp = std::string("HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n") + kHtmlPage;
+            resp = std::string("HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n") + std::string(kHtmlPageHead) + kHtmlPageBody;
         }
         else { resp = "HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\nNot Found"; }
         send(client, resp.c_str(), (int)resp.size(), 0);
