@@ -24,29 +24,6 @@ static const char* kHtmlPage = R"(<!DOCTYPE html>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   html, body { background: #1a1a2e; color: #e0e0e0; font-family: Consolas, monospace;
-               padding: 16px; margin: 0; }
-
-  h1  { color: #76B900; margin: 0 0 8px; font-size: 18px; }
-  .cpu-name { color: #00bcd4; }
-
-  /* Each section. */
-  .section { background: #16213e; border-radius: 8px; padding: 10px 12px;
-             margin-bottom: 8px; }
-
-  /* Row of two charts side by side. */
-  .chart-row { display: flex; gap: 8px; }
-  .chart-cell { flex: 1 1 0; display: flex; flex-direction: column; min-width: 0; }
-
-  /* Single full-width chart row. */
-  .full-row { }
-
-  /* Inline value label — fixed height, no growth. */
-  .val-row { display: block; height: 20px; line-height: 20px;
-             font-size: 12px; color: #aaa; white-space: nowrap; overflow: hidden;
-             text-overflow: ellipsis; }
-  .val-val { color: #fff; font-weight: bold; font-size: 13px; }
-
-  html, body { background: #1a1a2e; color: #e0e0e0; font-family: Consolas, monospace;
                padding: 16px; margin: 0; overflow-x: hidden; }
 
   h1  { color: #76B900; margin: 0 0 8px; font-size: 18px; }
@@ -69,9 +46,9 @@ static const char* kHtmlPage = R"(<!DOCTYPE html>
              text-overflow: ellipsis; }
   .val-val { color: #fff; font-weight: bold; font-size: 13px; }
 
-  /* Canvas height is fixed at 60px — never grows, never shrinks below 40. */
+  /* Canvas — fixed height, redraws on resize via JS. */
   canvas.chart { background: #0f3460; border-radius: 4px; display: block;
-                 width: 100%; height: 60px; flex-shrink: 0; }
+                 width: 100%; height: 56px; flex-shrink: 0; }
 
   .gpu-title { color: #76B900; font-size: 13px; font-weight: bold;
                margin-bottom: 4px; white-space: nowrap; overflow: hidden;

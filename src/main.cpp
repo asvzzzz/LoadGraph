@@ -68,8 +68,9 @@ LONG WINAPI TopLevelFilter(EXCEPTION_POINTERS* ep)
 // a white "LG" label in the center.
 // ----------------------------------------------------------------------------
 #ifdef PLATFORM_WINDOWS
-// Match the ID used in src/icon.rc: IDI_ICON ICON "loadgraph.ico"
-#define IDI_ICON 101
+// RC compiler auto-assigns ID 1 when no explicit number is given.
+// src/icon.rc has: IDI_ICON ICON "loadgraph.ico" → GROUP_ICON named IDI_ICON, ICON id=1
+#define IDI_ICON 1
 
 static wxIcon MakeEmbeddedGreenIcon()
 {
