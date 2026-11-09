@@ -223,18 +223,22 @@ function updateCpu(d) {
   ramChart.push(ramGb);
   ramChart.ymax = Math.max(totGb, ramChart.ymax || totGb);
 
-  // CPU Power — row shown whenever a positive reading is available.
+  // CPU Power — row shown whenever TDP is known (shows N/A until first reading).
   var ppRow = document.getElementById('cpuPowerRow');
-  if (d.cpu_power > 0) {
+  if (d.tdp_watts > 0) {
     ppRow.style.display = '';
     if (!powerChart) {
-      var ymax = (d.tdp_watts > 0) ? Math.max(250, d.tdp_watts * 1.1) : 300;
+      var ymax = Math.max(250, d.tdp_watts * 1.1);
       powerChart = makeChart('powerChart', C.cpuPower, ymax);
-    } else if (d.tdp_watts > 0) {
+    } else {
       powerChart.ymax = Math.max(250, d.tdp_watts * 1.1);
     }
-    document.getElementById('cpuPowerVal').textContent = d.cpu_power.toFixed(1) + ' W';
-    powerChart.push(d.cpu_power);
+    if (d.cpu_power > 0) {
+      document.getElementById('cpuPowerVal').textContent = d.cpu_power.toFixed(1) + ' W';
+      powerChart.push(d.cpu_power);
+    } else {
+      document.getElementById('cpuPowerVal').textContent = 'N/A';
+    }
   } else {
     ppRow.style.display = 'none';
   }
