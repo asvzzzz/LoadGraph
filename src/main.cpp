@@ -70,26 +70,31 @@ LONG WINAPI TopLevelFilter(EXCEPTION_POINTERS* ep)
 #ifdef PLATFORM_WINDOWS
 static wxIcon MakeNvidiaGreenIcon()
 {
-    // NVIDIA green (#76B900)
+    // NVIDIA green (#76B900) rounded square with white "LG".
+    // Solid brush only — transparent brush + Clear() leaves bitmap black
+    // on this wxWidgets build because Clear() respects the background brush.
     const int R = 118, G = 185, B = 0;
 
-    // Create a bitmap and draw into it via a memory DC.
     wxBitmap bmp(64, 64);
     wxMemoryDC dc(bmp);
-    dc.SetBackground(*wxTRANSPARENT_BRUSH);
+
+    // Fill entire bitmap with green (solid background brush).
+    wxBrush bgBrush(wxColour(R, G, B));
+    dc.SetBackground(bgBrush);
     dc.Clear();
 
-    wxPen   pen(wxColour(R, G, B), 0);
+    // Slightly inset rounded rect for visual depth.
+    wxPen   pen  (wxColour(R, G, B), 0);
     wxBrush brush(wxColour(R, G, B));
     dc.SetPen(pen);
     dc.SetBrush(brush);
-    dc.DrawRoundedRectangle(0, 0, 64, 64, 12);
+    dc.DrawRoundedRectangle(1, 1, 62, 62, 10);
 
-    // White "LG" label
+    // White "LG" label.
     dc.SetTextForeground(*wxWHITE);
     wxFont font(28, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_BOLD);
     dc.SetFont(font);
-    dc.DrawText("LG", 14, 16);
+    dc.DrawText("LG", 13, 15);
 
     wxIcon icon;
     icon.CopyFromBitmap(bmp);

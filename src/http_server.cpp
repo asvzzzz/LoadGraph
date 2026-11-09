@@ -46,9 +46,9 @@ static const char* kHtmlPage = R"(<!DOCTYPE html>
              text-overflow: ellipsis; }
   .val-val { color: #fff; font-weight: bold; font-size: 13px; }
 
-  /* Fixed-height charts — no vertical growth per tick, no scrollbar. */
+  /* Charts: fixed base height, grow proportionally via flex in their row. */
   canvas.chart { background: #0f3460; border-radius: 4px; display: block;
-                 width: 100%; height: 50px; flex-shrink: 0; }
+                 width: 100%; height: 60px; flex-shrink: 0; }
 
   .gpu-title { color: #76B900; font-size: 13px; font-weight: bold;
                margin-bottom: 4px; white-space: nowrap; overflow: hidden;
