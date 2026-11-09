@@ -47,6 +47,11 @@ bool MetricsInit();
 // Shutdown and free resources.
 void MetricsShutdown();
 
+// Sample CPU load NOW (calls CpuMonitor::SampleLoad internally).
+// Must be called periodically (e.g. from HTTP server thread) to keep
+// powerWatts estimate up-to-date — the background Collect() only updates temp.
+void MetricsSampleCpuLoad();
+
 // Fetch current CPU metrics. Thread-safe.
 CpuData  MetricsGetCpu();
 

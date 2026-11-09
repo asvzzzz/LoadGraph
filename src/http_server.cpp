@@ -12,7 +12,7 @@
 
 #ifdef PLATFORM_WINDOWS
 
-// HTML dashboard with canvas-based rolling charts (no progress bars).
+// HTML dashboard with canvas-based rolling charts.
 static const char* kHtmlPage = R"(<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -26,9 +26,8 @@ static const char* kHtmlPage = R"(<!DOCTYPE html>
   .section { background: #16213e; border-radius: 8px; padding: 12px; margin-bottom: 12px; }
   .row { display: flex; align-items: center; margin: 5px 0; gap: 10px; }
   .label { color: #888; font-size: 13px; width: 90px; flex-shrink: 0; }
-  .value { color: #fff; font-weight: bold; font-size: 14px; margin-right: 10px; min-width: 80px; text-align: right; }
-  canvas.chart { background: #0f3460; border-radius: 4px; display: block; width: 100%; height: 50px; }
-  .chart-row { display: flex; align-items: center; gap: 10px; margin: 3px 0; }
+  .value { color: #fff; font-weight: bold; font-size: 14px; min-width: 80px; text-align: right; }
+  canvas.chart { background: #0f3460; border-radius: 4px; display: block; width: 100%; height: 50px; margin: 4px 0; }
   .gpu-title { color: #76B900; font-size: 14px; margin: 8px 0 4px; }
   .footer { text-align: center; color: #555; font-size: 11px; margin-top: 16px; }
   .green { color: #76B900; }
@@ -46,12 +45,16 @@ static const char* kHtmlPage = R"(<!DOCTYPE html>
     <span class="value" id="cpuLoadVal">--%</span>
   </div>
   <canvas id="cpuChart" class="chart"></canvas>
-  <div class="row" style="margin-top:6px">
+  <div class="row">
     <span class="label">CPU Temp</span>
     <span class="value" id="cpuTempVal">N/A</span>
-    <span class="label" style="width:auto;margin-left:12px">Power</span>
+  </div>
+  <canvas id="tempChart" class="chart"></canvas>
+  <div class="row">
+    <span class="label">Power</span>
     <span class="value" id="cpuPowerVal">N/A</span>
   </div>
+  <canvas id="powerChart" class="chart"></canvas>
   <div class="row">
     <span class="label">Uptime</span>
     <span class="value" id="uptime">--</span>
@@ -60,14 +63,13 @@ static const char* kHtmlPage = R"(<!DOCTYPE html>
 
 <div class="section">
   <div class="row">
-    <span class="label">RAM Usage</span>
-    <span class="value" id="ramLoadVal">--%</span>
+    <span class="label">RAM Used</span>
+    <span class="value" id="ramUsedVal">-- GB</span>
   </div>
   <canvas id="ramChart" class="chart"></canvas>
-  <div class="row" style="margin-top:4px">
-    <span class="label">RAM Used</span>
-    <span class="value" id="ramUsed">N/A</span>
-    <span class="label" id="ramTotal"></span>
+  <div class="row">
+    <span class="label">RAM Total</span>
+    <span class="value" id="ramTotalVal">-- GB</span>
   </div>
 </div>
 
@@ -77,23 +79,29 @@ static const char* kHtmlPage = R"(<!DOCTYPE html>
 
 <script>
 const GPU_COLORS = ['#76B900','#00bcd4','#ffc107','#f44336','#e91e63'];
-const MAX_POINTS = 60;
+const MAX_P = 60;
 
-// --- Mini rolling chart (canvas) ---
-function makeChart(id, color) {
+// Rolling chart — stores raw values and scales to 0-100% for display.
+// yMax defines the max value for scaling (temp in C, power in W, load in %).
+function makeChart(id, color, yMax) {
     const c = document.getElementById(id);
-    c.width  = c.offsetWidth * 2 || 400;
+    if (!c) return null;
+    c.width  = (c.parentElement.offsetWidth || 400) * 2;
     c.height = 100;
     const ctx = c.getContext('2d');
     const data = [];
+    const ymax = yMax || 100;
     return {
-        push(v) { data.push(Math.max(0, Math.min(100, v))); if (data.length > MAX_POINTS) data.shift(); draw(); },
-        clear() { data.length = 0; draw(); }
+        push(v) {
+            data.push(Math.max(0, v));
+            if (data.length > MAX_P) data.shift();
+            draw();
+        },
+        el: c
     };
     function draw() {
         const W = c.width, H = c.height;
         ctx.clearRect(0, 0, W, H);
-        // Grid lines
         ctx.strokeStyle = 'rgba(255,255,255,0.07)';
         ctx.lineWidth = 1;
         for (let y = 0; y <= 4; y++) {
@@ -101,12 +109,11 @@ function makeChart(id, color) {
             ctx.beginPath(); ctx.moveTo(0, yy); ctx.lineTo(W, yy); ctx.stroke();
         }
         if (data.length < 2) return;
-        const step = W / (MAX_POINTS - 1);
-        // Fill gradient
+        const step = W / (MAX_P - 1);
         ctx.beginPath();
         ctx.moveTo(0, H);
         for (let i = 0; i < data.length; i++)
-            ctx.lineTo(i * step, H - (data[i] / 100) * H);
+            ctx.lineTo(i * step, H - (data[i] / ymax) * H);
         ctx.lineTo((data.length - 1) * step, H);
         ctx.closePath();
         const grad = ctx.createLinearGradient(0, 0, 0, H);
@@ -114,10 +121,9 @@ function makeChart(id, color) {
         grad.addColorStop(1, color + '22');
         ctx.fillStyle = grad;
         ctx.fill();
-        // Line
         ctx.beginPath();
         for (let i = 0; i < data.length; i++) {
-            const x = i * step, y = H - (data[i] / 100) * H;
+            const x = i * step, y = H - (data[i] / ymax) * H;
             i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
         }
         ctx.strokeStyle = color;
@@ -126,8 +132,12 @@ function makeChart(id, color) {
     }
 }
 
-let cpuChart = makeChart('cpuChart', '#76B900');
-let ramChart = makeChart('ramChart', '#00bcd4');
+let cpuChart   = makeChart('cpuChart',  '#76B900', 100);
+let tempChart  = makeChart('tempChart', '#00bcd4',  100);
+let powerChart = makeChart('powerChart','#ffc107',  250);
+let ramChart   = makeChart('ramChart',  '#e91e63',  64);
+
+const gpuCharts = {};
 
 function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;'); }
 function fmtBytes(b) {
@@ -145,66 +155,112 @@ function fmtUptime(ms) {
 }
 function tempColor(t) { return t > 80 ? 'red' : t > 65 ? 'yellow' : 'green'; }
 
-// Per-GPU charts
-const gpuCharts = {};
-
 async function fetchMetrics() {
   try { var r = await fetch('/api/metrics'); var d = await r.json(); updateDashboard(d); } catch(e) {}
 }
 
+function getOrCreateGpuSection(i, name, col) {
+  var div = document.getElementById('gpusec'+i);
+  if (div) return div;
+  div = document.createElement('div');
+  div.className = 'section';
+  div.id = 'gpusec'+i;
+  div.innerHTML = '<div class="gpu-title" style="color:'+col+'">GPU '+i+': '+esc(name)+'</div>';
+  document.getElementById('gpuSections').appendChild(div);
+  return div;
+}
+
 function updateDashboard(d) {
   document.getElementById('cpuName').textContent = d.cpu_name || '';
-  var cl = d.cpu_load.toFixed(1);
-  document.getElementById('cpuLoadVal').textContent = cl + '%';
-  cpuChart.push(d.cpu_load);
+  document.getElementById('cpuLoadVal').textContent = d.cpu_load.toFixed(1) + '%';
+  if (cpuChart) cpuChart.push(d.cpu_load);
 
   if (d.cpu_temp >= 0) {
     var tc = tempColor(d.cpu_temp);
     document.getElementById('cpuTempVal').innerHTML = '<span class="'+tc+'">'+d.cpu_temp.toFixed(0)+' C</span>';
+    if (tempChart) tempChart.push(d.cpu_temp);
   } else {
     document.getElementById('cpuTempVal').textContent = 'N/A';
   }
+
   if (d.cpu_power > 0) {
     document.getElementById('cpuPowerVal').textContent = d.cpu_power.toFixed(1) + ' W';
+    if (powerChart) powerChart.push(d.cpu_power);
   } else {
     document.getElementById('cpuPowerVal').textContent = 'N/A';
   }
+
   document.getElementById('uptime').textContent = fmtUptime(d.uptime_ms);
 
-  var rl = d.ram_load.toFixed(1);
-  document.getElementById('ramLoadVal').textContent = rl + '%';
-  ramChart.push(d.ram_load);
-  document.getElementById('ramUsed').textContent = fmtBytes(d.ram_used_bytes);
-  document.getElementById('ramTotal').textContent = '/ ' + fmtBytes(d.ram_total_bytes);
+  var ramGb = (d.ram_used_bytes / (1024*1024*1024));
+  var totGb = (d.ram_total_bytes / (1024*1024*1024));
+  document.getElementById('ramUsedVal').textContent = ramGb.toFixed(1) + ' GB';
+  document.getElementById('ramTotalVal').textContent = totGb.toFixed(1) + ' GB';
+  if (ramChart) { ramChart.push(ramGb); ramChart.ymax = Math.max(totGb, ramChart.ymax || totGb); }
 
+  // GPU sections — preserve DOM, update in place
   var gpuDiv = document.getElementById('gpuSections');
+  var existingIds = {};
+  gpuDiv.querySelectorAll('.section').forEach(function(el) {
+    var m = el.id.match(/^gpusec(\d+)$/);
+    if (m) existingIds[parseInt(m[1])] = el;
+  });
+
   if (!d.gpus || d.gpus.length === 0) { gpuDiv.innerHTML = ''; return; }
-  var html = '';
+
   for (var i = 0; i < d.gpus.length; i++) {
-    var g = d.gpus[i]; var col = GPU_COLORS[i % GPU_COLORS.length];
-    var cid = 'gpu' + i + 'chart';
-    if (!gpuCharts[cid]) gpuCharts[cid] = makeChart(cid, col);
-    html += '<div class="section">';
-    html += '<div class="gpu-title" style="color:'+col+'">GPU '+i+': '+esc(g.name)+'</div>';
+    var g = d.gpus[i];
+    var col = GPU_COLORS[i % GPU_COLORS.length];
+    var sec = existingIds[i] || getOrCreateGpuSection(i, g.name, col);
+
+    // Remove old chart canvases to rebuild
+    var oldCanvases = sec.querySelectorAll('canvas');
+    oldCanvases.forEach(function(c) { c.remove(); });
+    // Remove old metric rows
+    var oldRows = sec.querySelectorAll('.row');
+    oldRows.forEach(function(r) { r.remove(); });
+
+    var cid = 'gpu'+i+'chart';
+    if (!gpuCharts[cid]) gpuCharts[cid] = makeChart(cid, col, 100);
+
     if (g.load_percent >= 0) {
-      gpuCharts[cid].push(g.load_percent);
-      html += '<canvas id="'+cid+'" class="chart"></canvas>';
-      html += '<div class="row"><span class="label">Load</span><span class="value">'+g.load_percent.toFixed(1)+'%</span></div>';
+      var c1 = document.createElement('canvas');
+      c1.id = cid; c1.className = 'chart';
+      sec.appendChild(c1);
+      if (gpuCharts[cid]) gpuCharts[cid].push(g.load_percent);
+      var r1 = document.createElement('div');
+      r1.className = 'row';
+      r1.innerHTML = '<span class="label">Load</span><span class="value">'+g.load_percent.toFixed(1)+'%</span>';
+      sec.appendChild(r1);
     }
     if (g.temperature >= 0) {
       var tc2 = tempColor(g.temperature);
-      html += '<div class="row"><span class="label">Temp</span><span class="'+tc2+' value">'+g.temperature.toFixed(0)+' C</span></div>';
+      var r2 = document.createElement('div');
+      r2.className = 'row';
+      r2.innerHTML = '<span class="label">Temp</span><span class="'+tc2+' value">'+g.temperature.toFixed(0)+' C</span>';
+      sec.appendChild(r2);
     }
     if (g.vram_total_bytes > 0) {
       var vp = g.vram_used_bytes*100/g.vram_total_bytes;
-      html += '<div class="row"><span class="label">VRAM</span><span class="value">'+vp.toFixed(1)+'%</span></div>';
+      var r3 = document.createElement('div');
+      r3.className = 'row';
+      r3.innerHTML = '<span class="label">VRAM</span><span class="value">'+vp.toFixed(1)+'% ('+fmtBytes(g.vram_used_bytes)+'/'+fmtBytes(g.vram_total_bytes)+')</span>';
+      sec.appendChild(r3);
     }
     if (g.power_watts > 0) {
-      html += '<div class="row"><span class="label">Power</span><span class="value">'+g.power_watts.toFixed(1)+' W</span></div>';
+      var r4 = document.createElement('div');
+      r4.className = 'row';
+      r4.innerHTML = '<span class="label">Power</span><span class="value">'+g.power_watts.toFixed(1)+' W</span>';
+      sec.appendChild(r4);
     }
-    html += '</div>';
   }
-  gpuDiv.innerHTML = html;
+
+  // Remove stale sections
+  var allSecs = gpuDiv.querySelectorAll('.section');
+  allSecs.forEach(function(el) {
+    var m = el.id.match(/^gpusec(\d+)$/);
+    if (m && parseInt(m[1]) >= d.gpus.length) el.remove();
+  });
 }
 
 setInterval(fetchMetrics, 1000);
@@ -215,6 +271,10 @@ fetchMetrics();
 
 static std::string BuildJson()
 {
+    // Sample CPU load NOW so powerWatts estimate is fresh (SampleLoad also
+    // reads the PDH counter and estimates power from TDP + core count).
+    MetricsSampleCpuLoad();
+
     const CpuData  cpu  = MetricsGetCpu();
     const RamData  ram  = MetricsGetRam();
     const auto&    gpus = MetricsGetGpus();
@@ -282,36 +342,7 @@ static void HttpLoop(int port)
         std::string resp;
         if (strstr(req, "GET /api/metrics") != nullptr)
         {
-            CpuData cpu = MetricsGetCpu();
-            RamData ram = MetricsGetRam();
-            auto g2 = MetricsGetGpus();
-            // Build JSON with current snapshot
-            char buf[8192]; int off = 0;
-            std::string es;
-            for (wchar_t c : cpu.cpuName)
-            { if (c == L'\\' || c == L'"') es += '\\'; else if (c < 128) es += (char)c; }
-            off = snprintf(buf, sizeof(buf),
-                "{\"cpu_load\":%.1f,\"cpu_temp\":%.1f,\"cpu_power\":%.1f,"
-                 "\"ram_load\":%.1f,\"ram_used_bytes\":%llu,\"ram_total_bytes\":%llu,"
-                 "\"uptime_ms\":%llu,\"cpu_name\":\"%s\",\"gpus\":[",
-                cpu.loadPercent, cpu.temperature, cpu.powerWatts,
-                ram.loadPercent,
-                (unsigned long long)(ram.totalBytes > ram.freeBytes ? ram.totalBytes - ram.freeBytes : 0),
-                (unsigned long long)ram.totalBytes,
-                (unsigned long long)cpu.uptimeMs, es.c_str());
-            for (size_t i = 0; i < g2.size(); ++i)
-            {
-                if (i > 0) off += snprintf(buf+off, sizeof(buf)-off, ",");
-                off += snprintf(buf+off, sizeof(buf)-off,
-                    "{\"name\":\"%s\",\"load_percent\":%.1f,\"temperature\":%.1f,"
-                     "\"vram_used_bytes\":%llu,\"vram_total_bytes\":%llu,"
-                     "\"power_watts\":%.1f}",
-                    g2[i].name.c_str(), g2[i].loadPercent, g2[i].temperature,
-                    (unsigned long long)g2[i].vramUsedBytes,
-                    (unsigned long long)g2[i].vramTotalBytes, g2[i].powerWatts);
-            }
-            off += snprintf(buf+off, sizeof(buf)-off, "]}");
-            resp = std::string("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n") + std::string(buf, (size_t)off);
+            resp = std::string("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n") + BuildJson();
         }
         else if (strstr(req, "GET /") != nullptr)
         {
