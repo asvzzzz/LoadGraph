@@ -28,7 +28,7 @@ static const char* kHtmlPageHead = R"(<!DOCTYPE html>
   body { display: flex; flex-direction: column; padding: 12px; gap: 8px; }
 
   h1 { color: #76B900; font-size: 18px; flex: 0 0 auto; }
-  .cpu-name { color: #00bcd4; }
+  .cpu-name { color: #76B900; }
 
   /* Контент занимает всё свободное место, ничего не выталкивает за окно. */
   .content { flex: 1 1 0; min-height: 0; display: flex;
@@ -121,7 +121,7 @@ static const char* kHtmlPageBody = R"(<body>
 </div>
 
 <script>
-const GPU_COLORS = ['#76B900','#00bcd4','#ffc107','#f44336','#e91e63'];
+const GPU_COLOR  = '#9c27b0';   // all GPUs share one purple color
 const MAX_P = 60;
 
 // Rolling chart. draw() is now exposed AND a ResizeObserver is attached per
@@ -196,8 +196,8 @@ function makeChart(id, color, yMax) {
 }
 
 // ── Charts ────────────────────────────────────────────────────────────────
-let cpuChart      = makeChart('cpuChart',       '#76B900', 100);
-let ramChart      = makeChart('ramChart',       '#e91e63', 128);
+let cpuChart      = makeChart('cpuChart',       '#00bcd4', 100);
+let ramChart      = makeChart('ramChart',       '#00bcd4', 128);
 let tempChart     = makeChart('tempChart',      '#00bcd4', 100);
 let powerChart    = null;
 let fanChart      = null;
@@ -282,7 +282,7 @@ function getOrCreateGpuSec(i, name, col) {
   div = document.createElement('div');
   div.className = 'gpu-section';
   div.id = 'gpusec'+i;
-  div.innerHTML = '<div class="gpu-title" style="color:'+col+'">GPU '+i+': '+esc(name)+'</div>';
+  div.innerHTML = '<div class="gpu-title">GPU '+i+': '+esc(name)+'</div>';
   document.getElementById('gpuSections').appendChild(div);
   return div;
 }
@@ -304,8 +304,7 @@ function updateGpu(d) {
 
   for (var i = 0; i < d.gpus.length; i++) {
     var g   = d.gpus[i];
-    var col = GPU_COLORS[i % GPU_COLORS.length];
-    var sec = existing[i] || getOrCreateGpuSec(i, g.name, col);
+    var sec  = existing[i] || getOrCreateGpuSec(i, g.name);
 
     // Keep title, rebuild chart rows.
     var title = sec.querySelector('.gpu-title');
@@ -334,7 +333,7 @@ function updateGpu(d) {
     addSideBySide('Load','gpu'+i+'LoadVal','gpu'+i+'LoadChart',
                   'Temp', 'gpu'+i+'TempVal','gpu'+i+'TempChart');
     var lcKey = 'gpu'+i+'LoadChart';
-    if (!gpuCharts[lcKey]) gpuCharts[lcKey] = makeChart(lcKey, col, 100);
+    if (!gpuCharts[lcKey]) gpuCharts[lcKey] = makeChart(lcKey, GPU_COLOR, 100);
     document.getElementById('gpu'+i+'LoadVal').textContent = g.load_percent.toFixed(1)+'%';
     gpuCharts[lcKey].push(g.load_percent);
 
@@ -342,7 +341,7 @@ function updateGpu(d) {
     if (g.temperature >= 0) {
       tvEl.innerHTML = '<span class="'+tempColor(g.temperature)+'">'+g.temperature.toFixed(0)+' C</span>';
       var tcKey = 'gpu'+i+'TempChart';
-      if (!gpuCharts[tcKey]) gpuCharts[tcKey] = makeChart(tcKey, col, 100);
+      if (!gpuCharts[tcKey]) gpuCharts[tcKey] = makeChart(tcKey, GPU_COLOR, 100);
       gpuCharts[tcKey].push(g.temperature);
     } else { tvEl.textContent = 'N/A'; }
 
@@ -354,7 +353,7 @@ function updateGpu(d) {
       var vGb = g.vram_used_bytes / (1024*1024*1024);
       var vtGb = g.vram_total_bytes / (1024*1024*1024);
       document.getElementById('gpu'+i+'VramVal').textContent = vGb.toFixed(1)+' GB';
-      if (!gpuCharts[vKey]) gpuCharts[vKey] = makeChart(vKey, col, 64);
+      if (!gpuCharts[vKey]) gpuCharts[vKey] = makeChart(vKey, GPU_COLOR, 64);
       gpuCharts[vKey].push(vGb);
       gpuCharts[vKey].ymax = Math.max(vtGb, gpuCharts[vKey].ymax || vtGb);
     } else { document.getElementById('gpu'+i+'VramVal').textContent = 'N/A'; }
@@ -363,11 +362,11 @@ function updateGpu(d) {
     var fKey = 'gpu'+i+'FanChart';
     if (g.fan_rpm > 0) {
       fvEl.textContent = g.fan_rpm + ' RPM';
-      if (!gpuCharts[fKey]) gpuCharts[fKey] = makeChart(fKey, '#9c27b0', 3000);
+      if (!gpuCharts[fKey]) gpuCharts[fKey] = makeChart(fKey, GPU_COLOR, 3000);
       gpuCharts[fKey].push(g.fan_rpm);
     } else if (g.fan_percent >= 0) {
       fvEl.textContent = g.fan_percent.toFixed(0) + '%';
-      if (!gpuCharts[fKey]) gpuCharts[fKey] = makeChart(fKey, '#9c27b0', 100);
+      if (!gpuCharts[fKey]) gpuCharts[fKey] = makeChart(fKey, GPU_COLOR, 100);
       gpuCharts[fKey].push(g.fan_percent);
     } else { fvEl.textContent = 'N/A'; }
 
@@ -377,7 +376,7 @@ function updateGpu(d) {
       if (limit <= 0) limit = 400;
       addFullRow('Power','gpu'+i+'PowVal','gpu'+i+'PowChart');
       var pKey = 'gpu'+i+'PowChart';
-      if (!gpuCharts[pKey]) gpuCharts[pKey] = makeChart(pKey, col, Math.max(250, limit*1.1));
+      if (!gpuCharts[pKey]) gpuCharts[pKey] = makeChart(pKey, GPU_COLOR, Math.max(250, limit*1.1));
       document.getElementById('gpu'+i+'PowVal').textContent = g.power_watts.toFixed(1)+' W';
       gpuCharts[pKey].push(g.power_watts);
     } else {
