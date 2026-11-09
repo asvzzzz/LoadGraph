@@ -71,31 +71,80 @@ LONG WINAPI TopLevelFilter(EXCEPTION_POINTERS* ep)
 static wxIcon MakeNvidiaGreenIcon()
 {
     // NVIDIA green (#76B900) rounded square with white "LG".
-    // Solid brush only — transparent brush + Clear() leaves bitmap black
-    // on this wxWidgets build because Clear() respects the background brush.
+    // Use wxImage (32-bit RGBA) directly — wxBitmap without alpha produces
+    // a black icon on this wxWidgets build because CopyFromBitmap can't
+    // create a proper mask from a device-dependent bitmap.
     const int R = 118, G = 185, B = 0;
 
-    wxBitmap bmp(64, 64);
-    wxMemoryDC dc(bmp);
+    wxImage img(64, 64);
+    unsigned char* pixels = img.GetData();
+    memset(pixels, 0, 64 * 64 * 3);
 
-    // Fill entire bitmap with green (solid background brush).
-    wxBrush bgBrush(wxColour(R, G, B));
-    dc.SetBackground(bgBrush);
-    dc.Clear();
+    // Fill with green.
+    for (int y = 0; y < 64; ++y)
+        for (int x = 0; x < 64; ++x)
+        {
+            int idx = (y * 64 + x) * 3;
+            pixels[idx]   = R;
+            pixels[idx+1] = G;
+            pixels[idx+2] = B;
+        }
 
-    // Slightly inset rounded rect for visual depth.
-    wxPen   pen  (wxColour(R, G, B), 0);
-    wxBrush brush(wxColour(R, G, B));
-    dc.SetPen(pen);
-    dc.SetBrush(brush);
-    dc.DrawRoundedRectangle(1, 1, 62, 62, 10);
+    // Rounded-rect mask — transparent corners.
+    unsigned char* alpha = new unsigned char[64 * 64];
+    const int cx = 32, cy = 32, rx = 28, ry = 28, cr = 10;
+    for (int y = 0; y < 64; ++y)
+        for (int x = 0; x < 64; ++x)
+        {
+            float dx = (float)(x - cx) / (float)rx;
+            float dy = (float)(y - cy) / (float)ry;
+            bool inEllipse = (dx*dx + dy*dy) <= 1.0f;
+            bool inCorner = false;
+            if (!inEllipse)
+            {
+                float ex = fabsf(dx) - 1.0f;
+                float ey = fabsf(dy) - 1.0f;
+                float cd = (float)cr / (float)rx;
+                inCorner = (ex*ex + ey*ey) <= (cd*cd);
+            }
+            alpha[y * 64 + x] = (inEllipse || inCorner) ? 255 : 0;
+        }
+    img.SetAlpha(alpha);
 
-    // White "LG" label.
-    dc.SetTextForeground(*wxWHITE);
-    wxFont font(28, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_BOLD);
-    dc.SetFont(font);
-    dc.DrawText("LG", 13, 15);
+    // Draw "LG" text — white, opaque.
+    for (int y = 0; y < 64; ++y)
+        for (int x = 0; x < 64; ++x)
+        {
+            int pi = y * 64 + x;
+            // Simple pixel-font "LG" at center.
+            bool lit = false;
+            // 'L' at (16, 18), 5 wide x 7 tall
+            if (x >= 16 && x < 21 && y >= 18 && y < 25)
+            {
+                int lx = x - 16, ly = y - 18;
+                lit = (lx == 0) || (ly == 6);
+            }
+            // 'G' at (23, 18), 5 wide x 7 tall
+            if (x >= 23 && x < 28 && y >= 18 && y < 25)
+            {
+                int gx = x - 23, gy = y - 18;
+                lit = (gy == 0 && gx >= 1 && gx <= 3) ||
+                      (gy >= 1 && gy <= 2 && gx >= 0 && gx <= 4) ||
+                      (gy == 3 && (gx == 0 || gx == 4)) ||
+                      (gy == 4 && gx >= 2 && gx <= 4) ||
+                      (gy == 5 && gx >= 1 && gx <= 3);
+            }
+            if (lit)
+            {
+                int pi2 = y * 64 + x;
+                pixels[pi2*3]   = 255;
+                pixels[pi2*3+1] = 255;
+                pixels[pi2*3+2] = 255;
+                alpha[pi2] = 255;
+            }
+        }
 
+    wxBitmap bmp(img);
     wxIcon icon;
     icon.CopyFromBitmap(bmp);
     return icon;

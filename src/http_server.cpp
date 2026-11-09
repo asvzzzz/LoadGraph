@@ -57,9 +57,9 @@ static const char* kHtmlPage = R"(<!DOCTYPE html>
              text-overflow: ellipsis; }
   .val-val { color: #fff; font-weight: bold; font-size: 13px; }
 
-  /* Canvas fills remaining cell height — proportional resize. */
+  /* Canvas fills remaining cell height — proportional resize, capped. */
   canvas.chart { background: #0f3460; border-radius: 4px; display: block;
-                 width: 100%; flex: 1 1 auto; min-height: 0; }
+                 width: 100%; flex: 1 1 auto; min-height: 0; max-height: 120px; }
 
   .gpu-title { color: #76B900; font-size: 13px; font-weight: bold;
                margin-bottom: 2px; flex-shrink: 0; white-space: nowrap;
@@ -135,11 +135,13 @@ function makeChart(id, color, yMax) {
     function draw() {
         const c = document.getElementById(id);
         if (!c || !c.parentElement) return;
-        // HiDPI + read actual rendered size so resize propagates.
-        var pw = c.parentElement.offsetWidth  || 400;
-        var ph = c.parentElement.offsetHeight || 80;
-        c.width  = pw * 2;
-        c.height = ph * 2;
+        // HiDPI resolution — use clientSize (CSS display size), NOT offsetHeight
+        // which can grow due to flex feedback. Store last known size to avoid
+        // repeated layout reads on every tick.
+        var cw = c.clientWidth  * 2 || 400;
+        var ch = c.clientHeight * 2 || 80;
+        if (c.width  !== cw) c.width  = cw;
+        if (c.height !== ch) c.height = ch;
         const ctx = c.getContext('2d');
         const W = c.width, H = c.height, ymax = curYmax;
         ctx.clearRect(0, 0, W, H);
