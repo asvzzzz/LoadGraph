@@ -70,7 +70,7 @@ static const char* kHtmlPageHead = R"(<!DOCTYPE html>
 
 
 </style>
-<script>window.__CFG={port:PORT,color:{cpuLoad:'CPU_LOAD',cpuTemp:'CPU_TEMP',cpuPower:'CPU_POWER',ram:'RAM',gpuLoad:'GPU_LOAD',gpuTemp:'GPU_TEMP',gpuVram:'GPU_VRAM',gpuFan:'GPU_FAN',gpuPower:'GPU_POWER',totalPower:'TOTAL_POWER'}};</script>
+<script>window.__CFG={color:{cpuLoad:'%CPU_LOAD%',cpuTemp:'%CPU_TEMP%',cpuPower:'%CPU_POWER%',ram:'%RAM%',gpuLoad:'%GPU_LOAD%',gpuTemp:'%GPU_TEMP%',gpuVram:'%GPU_VRAM%',gpuFan:'%GPU_FAN%',gpuPower:'%GPU_POWER%',totalPower:'%TOTAL_POWER%'}};</script>
 </head>)";
 static const char* kHtmlPageBody = R"(<body>
 <h1>LoadGraph <span id="cpuName" class="cpu-name"></span></h1>
@@ -510,38 +510,45 @@ static std::string BuildJson()
     return std::string(buf, static_cast<size_t>(off));
 }
 
-// Build the __CFG script block with actual colors and port from config.
-static std::string MakeCfgScript(int port, const AppConfig& cfg)
-{
-    std::string s = "window.__CFG={port:";
-    s += std::to_string(port);
-    s += ",color:{cpuLoad:'";  s += cfg.cpu_load_color;   s += "',"
-                              " cpuTemp:'";  s += cfg.cpu_temp_color;   s += "',"
-                              " cpuPower:'"; s += cfg.cpu_power_color;  s += "',"
-                              " ram:'";     s += cfg.ram_color;        s += "',"
-                              " gpuLoad:'"; s += cfg.gpu_load_color;   s += "',"
-                              " gpuTemp:'"; s += cfg.gpu_temp_color;   s += "',"
-                              " gpuVram:'"; s += cfg.gpu_vram_color;   s += "',"
-                              " gpuFan:'";  s += cfg.gpu_fan_color;    s += "',"
-                              " gpuPower:'";s += cfg.gpu_power_color;  s += "',"
-                              " totalPower:'";s += cfg.total_power_color; s += "'}};";
-    return s;
-}
-
-// Replace PORT token in head with the __CFG script block.
+// Replace color placeholders and inject __CFG with port into the HTML head.
 static std::string RenderHtml(const char* head, const char* body, int port, const AppConfig& cfg)
 {
-    std::string cfgScript = MakeCfgScript(port, cfg);
+    // Build replacement map — keep strings alive for duration of function.
+    struct Rep { const char* from; std::string to; };
+    Rep reps[] = {
+        { "%CPU_LOAD%",   "#" + cfg.cpu_load_color },
+        { "%CPU_TEMP%",   "#" + cfg.cpu_temp_color },
+        { "%CPU_POWER%",  "#" + cfg.cpu_power_color },
+        { "%RAM%",        "#" + cfg.ram_color },
+        { "%GPU_LOAD%",   "#" + cfg.gpu_load_color },
+        { "%GPU_TEMP%",   "#" + cfg.gpu_temp_color },
+        { "%GPU_VRAM%",   "#" + cfg.gpu_vram_color },
+        { "%GPU_FAN%",    "#" + cfg.gpu_fan_color },
+        { "%GPU_POWER%",  "#" + cfg.gpu_power_color },
+        { "%TOTAL_POWER%", "#" + cfg.total_power_color },
+    };
+
     std::string result;
-    result.reserve(strlen(head) + strlen(body) + cfgScript.size());
+    result.reserve(strlen(head) + strlen(body));
     const char* p = head;
     while (*p)
     {
-        if (strncmp(p, "PORT", 4) == 0)
-        { result += cfgScript; p += 4; }
-        else
-        { result += *p; ++p; }
+        bool matched = false;
+        for (int i = 0; i < 10; i++)
+        {
+            size_t len = strlen(reps[i].from);
+            if (strncmp(p, reps[i].from, len) == 0)
+            { result += reps[i].to; p += (int)len; matched = true; break; }
+        }
+        if (!matched) { result += *p; ++p; }
     }
+    // Inject port into __CFG (colors already substituted via placeholders).
+    std::string portScript = "<script>window.__CFG.port=" + std::to_string(port) + ";</script>";
+    const char* headEnd = strstr(result.c_str(), "</head>");
+    if (headEnd)
+    { result.insert(static_cast<size_t>(headEnd - result.c_str()), portScript); }
+    else
+    { result += portScript; }
     result += body;
     return result;
 }

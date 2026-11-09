@@ -175,10 +175,11 @@ public:
             }
         }
 
-        AppConfig appCfg = LoadAppConfig();
-
         wxString logPath = wxGetCwd() + "/loadgraph.log";
         Logger::Init(logPath);
+
+        AppConfig appCfg = LoadAppConfig();
+
         LOGI("Starting...");
         LOGI("wxWidgets %s", wxVERSION_STRING);
 

@@ -1,1 +1,16 @@
-{  "http_port": 9115,  "http_enabled": false,  "colors": {    "cpu_load":     "76B900",    "cpu_temp":     "00bcd4",    "cpu_power":    "ffc107",    "ram":          "AEB4E1",    "gpu_load":     "e91e63",    "gpu_temp":     "00bcd4",    "gpu_vram":     "AEB4E1",    "gpu_fan":      "3154E1",    "gpu_power":    "ffc107",    "total_power":  "ff5722"  }}
+{
+  "http_port": 9115,
+  "http_enabled": true,
+  "colors": {
+    "cpu_load": "76B900",
+    "cpu_temp": "00bcd4",
+    "cpu_power": "ffc107",
+    "ram": "AEB4E1",
+    "gpu_load": "e91e63",
+    "gpu_temp": "00bcd4",
+    "gpu_vram": "AEB4E1",
+    "gpu_fan": "3154E1",
+    "gpu_power": "ffc107",
+    "total_power": "ff5722"
+  }
+}

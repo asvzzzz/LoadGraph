@@ -2,11 +2,10 @@
 #include "app_config.h"
 #include "logger.h"
 
+#include <filesystem>
+#include <fstream>
 #ifdef PLATFORM_WINDOWS
 #include <windows.h>
-#include <io.h>
-#include <fcntl.h>
-#include <sys/stat.h>
 #endif
 
 // ---------------------------------------------------------------------------
@@ -106,49 +105,39 @@ namespace
         return buf;
     }
 
-#ifdef PLATFORM_WINDOWS
     // Get current working directory path as std::string.
     static std::string GetCwdPath()
     {
-        char buf[4096] = {};
-        if (_getcwd(buf, sizeof(buf)) == nullptr) return ".";
-        return std::string(buf);
-    }
-
-    // Check if a file exists.
-    static bool FileExists(const std::string& path)
-    {
-        struct stat st;
-        return stat(path.c_str(), &st) == 0;
+        try { return std::filesystem::current_path().string(); }
+        catch (...) { return "."; }
     }
 
     // Read entire file into string. Returns false on failure.
     static bool ReadFile(const std::string& path, std::string& out)
     {
-        FILE* f = fopen(path.c_str(), "r");
+        std::error_code ec;
+        auto sz = std::filesystem::file_size(path, ec);
+        if (ec || sz == 0 || sz > 1024 * 1024) return false;
+        std::ifstream f(path, std::ios::binary);
         if (!f) return false;
-        fseek(f, 0, SEEK_END);
-        long sz = ftell(f);
-        rewind(f);
-        if (sz < 0 || sz > 1024 * 1024) { fclose(f); return false; } // sanity
         out.resize(static_cast<size_t>(sz));
-        size_t n = fread(&out[0], 1, static_cast<size_t>(sz), f);
-        fclose(f);
-        return n == static_cast<size_t>(sz);
+        f.read(&out[0], static_cast<std::streamsize>(sz));
+        return static_cast<size_t>(f.gcount()) == sz;
     }
 
     // Write string to file atomically (write to tmp then rename).
     static bool WriteFile(const std::string& path, const std::string& content)
     {
-        std::string tmp = path + ".tmp";
-        FILE* f = fopen(tmp.c_str(), "w");
+        std::error_code ec;
+        const std::string tmp = path + ".tmp";
+        std::ofstream f(tmp, std::ios::binary);
         if (!f) return false;
-        if (fprintf(f, "%s", content.c_str()) < (int)content.size())
-        { fclose(f); remove(tmp.c_str()); return false; }
-        fclose(f);
-        return rename(tmp.c_str(), path.c_str()) == 0;
+        f.write(content.data(), static_cast<std::streamsize>(content.size()));
+        if (!f.good()) { std::filesystem::remove(tmp, ec); return false; }
+        f.close();
+        std::filesystem::rename(tmp, path, ec);
+        return !ec;
     }
-#endif // PLATFORM_WINDOWS
 } // namespace
 
 // ---------------------------------------------------------------------------
@@ -160,10 +149,10 @@ AppConfig LoadAppConfig()
     AppConfig cfg;
 
 #ifdef PLATFORM_WINDOWS
-    std::string cwd   = GetCwdPath();
-    std::string path  = cwd + "/loadgraph.json";
+    const std::string path = GetCwdPath() + "/" + "loadgraph.json";
 
-    if (!FileExists(path))
+    std::error_code ec;
+    if (!std::filesystem::exists(path, ec))
     {
         // Create default config file.
         SaveAppConfig(cfg);
@@ -177,6 +166,7 @@ AppConfig LoadAppConfig()
         LOGE("Failed to read loadgraph.json, using defaults");
         return cfg;
     }
+
 
     // Parse top-level object.
     const char* p = data.c_str();
