@@ -8,12 +8,13 @@
 #include <map>
 #include "metrics_api.h"
 #include "graph_panel.h"
+#include "app_config.h"
 
 // Main application window. Resizable, contains CPU / RAM / GPU metric panels.
 class MainFrame : public wxFrame
 {
 public:
-    explicit MainFrame(const wxString& title);
+    explicit MainFrame(const wxString& title, const AppConfig& cfg);
     ~MainFrame() override;
 
     // Create the window layout (called on Windows after Show).
@@ -119,6 +120,9 @@ private:
 
     // UI created flag (Linux: deferred to first timer tick).
     bool    m_uiCreated = false;
+
+    // App config with chart colors.
+    AppConfig m_cfg;
 
     // Section bounding boxes for frame drawing (m_content coordinates).
     struct SectionBox { wxString title; wxRect rect; };

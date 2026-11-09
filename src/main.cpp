@@ -208,7 +208,7 @@ public:
             LOGI("Images OK.");
 
             LOGI("Creating frame...");
-            MainFrame* frame = new MainFrame(L"LoadGraph");
+            MainFrame* frame = new MainFrame(L"LoadGraph", appCfg);
             if (!frame) return false;
             LOGI("Frame created 0x%p", static_cast<void*>(frame));
 

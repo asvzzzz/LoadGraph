@@ -69,6 +69,13 @@ void GraphPanel::SetPurple(bool on)
     m_purple = on;
 }
 
+// Apply a custom color, overriding purple/blue defaults.
+void GraphPanel::SetColor(const wxColour& color)
+{
+    m_color = color;
+    m_hasColor = true;
+}
+
 // Select Y-axis tick spacing mode.
 void GraphPanel::SetYMode(GraphYMode mode)
 {
@@ -133,10 +140,12 @@ void GraphPanel::OnPaint(wxPaintEvent& /*evt*/)
 
     // Active alarm: last value above the threshold -> red palette.
     const bool alarm = (m_alarmThreshold >= 0.0) && (lastValue > m_alarmThreshold);
-    // Purple for GPU, blue for CPU / RAM; red when alarmed.
+    // Purple for GPU, blue for CPU / RAM; red when alarmed; custom color if set.
     wxColour lineColor;
     if (alarm)
         lineColor = wxColour(220, 60, 50);
+    else if (m_hasColor)
+        lineColor = m_color;
     else if (m_purple)
         lineColor = wxColour(168, 85, 247);   // purple
     else

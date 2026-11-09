@@ -50,6 +50,9 @@ public:
     // graphs keep the default blue; GPU graphs switch to purple here.
     void SetPurple(bool on);
 
+    // Use a custom color for the line and fill. Overrides purple/blue logic.
+    void SetColor(const wxColour& color);
+
     // Set Y-axis tick spacing mode. Controls how axis labels are computed so
     // that they always land on round numbers regardless of panel height.
     void SetYMode(GraphYMode mode);
@@ -84,6 +87,10 @@ private:
 
     // When true, use purple (GPU style) instead of blue (CPU/RAM style).
     bool    m_purple = false;
+
+    // Custom color override (empty = use purple/blue default).
+    wxColour m_color;
+    bool     m_hasColor = false;
 
     // Y-axis tick spacing mode. Controls how the axis labels are computed.
     GraphYMode m_yMode = GraphYMode::Auto;
