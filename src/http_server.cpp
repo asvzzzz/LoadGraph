@@ -29,9 +29,6 @@ static const char* kHtmlPage = R"(<!DOCTYPE html>
   h1  { color: #76B900; margin: 0 0 8px; font-size: 18px; }
   .cpu-name { color: #00bcd4; }
 
-  /* Scrollable content wrapper. */
-  .content { padding-bottom: 16px; }
-
   /* Each section. */
   .section { background: #16213e; border-radius: 8px; padding: 10px 12px;
              margin-bottom: 8px; }
@@ -49,10 +46,9 @@ static const char* kHtmlPage = R"(<!DOCTYPE html>
              text-overflow: ellipsis; }
   .val-val { color: #fff; font-weight: bold; font-size: 13px; }
 
-  /* Canvas height scales with viewport (5% of vh), min 40px, max 80px. */
+  /* Canvas fills available vertical space in its flex container. */
   canvas.chart { background: #0f3460; border-radius: 4px; display: block;
-                 width: 100%; height: calc(100vh * 0.05);
-                 min-height: 40px; max-height: 80px; flex-shrink: 0; }
+                 width: 100%; height: 100%; flex: 1 1 0; min-height: 30px; }
 
   .gpu-title { color: #76B900; font-size: 13px; font-weight: bold;
                margin-bottom: 4px; white-space: nowrap; overflow: hidden;
@@ -85,12 +81,7 @@ static const char* kHtmlPage = R"(<!DOCTYPE html>
     <div class="val-row">CPU Power <span class="val-val" id="cpuPowerVal">N/A</span></div>
     <canvas id="powerChart" class="chart"></canvas>
   </div>
-  <!-- Row 3: Total Power (full width) -->
-  <div class="full-row" id="totalPowerRow" style="display:none">
-    <div class="val-row">Total Power <span class="val-val" id="totalPowerVal">N/A</span></div>
-    <canvas id="totalPowerChart" class="chart"></canvas>
-  </div>
-  <!-- Row 4: CPU Temp | Fan -->
+  <!-- Row 3: CPU Temp | Fan -->
   <div class="chart-row">
     <div class="chart-cell">
       <div class="val-row">CPU Temp <span class="val-val" id="cpuTempVal">N/A</span></div>
@@ -104,6 +95,14 @@ static const char* kHtmlPage = R"(<!DOCTYPE html>
 </div>
 
 <div id="gpuSections"></div>
+
+<!-- Total Power — at the bottom, after all GPU cards -->
+<div class="section">
+  <div class="full-row" id="totalPowerRow" style="display:none">
+    <div class="val-row">Total Power <span class="val-val" id="totalPowerVal">N/A</span></div>
+    <canvas id="totalPowerChart" class="chart"></canvas>
+  </div>
+</div>
 
 </div>
 
