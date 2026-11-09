@@ -260,7 +260,7 @@ function updateCpu(d) {
   var tpSec = document.getElementById('totalPowerSection');
   if (totalW > 0) {
     tpSec.style.display = '';
-    if (!totalPowerChart) totalPowerChart = makeChart('totalPowerChart', C.totalPower, 500);
+    if (!totalPowerChart) totalPowerChart = makeChart('totalPowerChart', C.totalPower, 1000);
     document.getElementById('totalPowerVal').textContent = totalW.toFixed(1) + ' W';
     totalPowerChart.push(totalW);
   } else {
