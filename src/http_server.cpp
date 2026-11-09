@@ -197,7 +197,7 @@ function makeChart(id, color, yMax) {
 
 // ── Charts ────────────────────────────────────────────────────────────────
 let cpuChart      = makeChart('cpuChart',       '#76B900', 100); // green — CPU load
-let ramChart      = makeChart('ramChart',       '#ff9800', 128); // orange — matches GPU VRAM
+let ramChart      = makeChart('ramChart',       '#AEB4E1', 128); // periwinkle — RAM usage
 let tempChart     = makeChart('tempChart',      '#00bcd4', 100);
 let powerChart    = null;
 let fanChart      = null;
@@ -353,7 +353,7 @@ function updateGpu(d) {
       var vGb = g.vram_used_bytes / (1024*1024*1024);
       var vtGb = g.vram_total_bytes / (1024*1024*1024);
       document.getElementById('gpu'+i+'VramVal').textContent = vGb.toFixed(1)+' GB';
-      if (!gpuCharts[vKey]) gpuCharts[vKey] = makeChart(vKey, '#ff9800', 64); // orange — distinct from RAM pink
+      if (!gpuCharts[vKey]) gpuCharts[vKey] = makeChart(vKey, '#AEB4E1', 64); // periwinkle — GPU VRAM
       gpuCharts[vKey].push(vGb);
       gpuCharts[vKey].ymax = Math.max(vtGb, gpuCharts[vKey].ymax || vtGb);
     } else { document.getElementById('gpu'+i+'VramVal').textContent = 'N/A'; }
