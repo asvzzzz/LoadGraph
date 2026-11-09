@@ -156,6 +156,8 @@ if(WIN32)
         src/metrics_api.cpp
         src/http_server.h
         src/http_server.cpp
+        src/app_config.h
+        src/app_config.cpp
     )
 elseif(UNIX AND NOT APPLE)
     # Linux

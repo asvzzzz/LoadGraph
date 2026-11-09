@@ -4,6 +4,7 @@
 #include "main_frame.h"
 #include "metrics_api.h"
 #include "http_server.h"
+#include "app_config.h"
 #include <cstdio>
 #include <cstdlib>
 
@@ -163,28 +164,18 @@ public:
 #endif
 
         // Parse command-line arguments before logging.
-        int httpPort = 0;
         for (int i = 1; i < argc; ++i)
         {
-            wxString arg = argv[i];
-            if (arg == L"-port" && i + 1 < argc)
-            {
-                long p = 0;
-                if (argv[i + 1].ToLong(&p) && p > 0 && p <= 65535)
-                    httpPort = (int)p;
-                else
-                    fprintf(stderr, "Invalid port: %s\n", argv[i + 1]);
-                ++i;
-            }
-            else if (arg == L"-h" || arg == L"--help")
+            if (wxStrcmp(argv[i], L"-h") == 0 || wxStrcmp(argv[i], L"--help") == 0)
             {
                 printf("LoadGraph - system monitoring dashboard\n"
-                       "Usage: LoadGraph [-port N] [-h]\n"
-                       "  -port N   Start HTTP server on port N, serve web dashboard\n"
+                       "Usage: LoadGraph [-h]\n"
                        "  -h        Show this help\n");
                 return false;
             }
         }
+
+        AppConfig appCfg = LoadAppConfig();
 
         wxString logPath = wxGetCwd() + "/loadgraph.log";
         Logger::Init(logPath);
@@ -205,9 +196,9 @@ public:
         }
 #endif
 
-        // Start HTTP server in a background thread if -port was specified.
-        if (httpPort > 0)
-            StartHttpServer(httpPort);
+        // Start HTTP server if enabled in config.
+        if (appCfg.http_enabled)
+            StartHttpServer(appCfg);
 
         try
         {

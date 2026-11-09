@@ -1,6 +1,7 @@
 #include "platform.h"
 #include "http_server.h"
 #include "metrics_api.h"
+#include "app_config.h"
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <thread>
@@ -27,8 +28,11 @@ static const char* kHtmlPageHead = R"(<!DOCTYPE html>
                font-family: Consolas, monospace; overflow: hidden; }
   body { display: flex; flex-direction: column; padding: 12px; gap: 8px; }
 
-  h1 { color: #76B900; font-size: 18px; flex: 0 0 auto; }
-  .cpu-name { color: #00bcd4; }
+  h1 { color: var(--c-cpu-title, #76B900); font-size: 18px; flex: 0 0 auto; }
+  .cpu-name { color: var(--c-cpu-name, #00bcd4); }
+  .gpu-title { color: var(--c-cpu-title, #76B900); font-size: 13px; font-weight: bold;
+               flex: 0 0 auto; white-space: nowrap; overflow: hidden;
+               text-overflow: ellipsis; }
 
   /* Контент занимает всё свободное место, ничего не выталкивает за окно. */
   .content { flex: 1 1 0; min-height: 0; display: flex;
@@ -64,14 +68,9 @@ static const char* kHtmlPageHead = R"(<!DOCTYPE html>
   canvas.chart { background: #0f3460; border-radius: 4px; display: block;
                  width: 100%; flex: 1 1 0; min-height: 0; }
 
-  .gpu-title { color: #76B900; font-size: 13px; font-weight: bold;
-               flex: 0 0 auto; white-space: nowrap; overflow: hidden;
-               text-overflow: ellipsis; }
-  .green  { color: #76B900; }
-  .cyan   { color: #00bcd4; }
-  .yellow { color: #ffc107; }
-  .red    { color: #f44336; }
+
 </style>
+<script>window.__CFG={port:PORT,color:{cpuLoad:'CPU_LOAD',cpuTemp:'CPU_TEMP',cpuPower:'CPU_POWER',ram:'RAM',gpuLoad:'GPU_LOAD',gpuTemp:'GPU_TEMP',gpuVram:'GPU_VRAM',gpuFan:'GPU_FAN',gpuPower:'GPU_POWER',totalPower:'TOTAL_POWER'}};</script>
 </head>)";
 static const char* kHtmlPageBody = R"(<body>
 <h1>LoadGraph <span id="cpuName" class="cpu-name"></span></h1>
@@ -121,7 +120,8 @@ static const char* kHtmlPageBody = R"(<body>
 </div>
 
 <script>
-const GPU_COLOR     = '#9c27b0'; // default for GPU charts without a dedicated color
+const C = window.__CFG.color;
+const PORT = window.__CFG.port;
 const MAX_P = 60;
 
 // Rolling chart. draw() is now exposed AND a ResizeObserver is attached per
@@ -196,9 +196,9 @@ function makeChart(id, color, yMax) {
 }
 
 // ── Charts ────────────────────────────────────────────────────────────────
-let cpuChart      = makeChart('cpuChart',       '#76B900', 100); // green — CPU load
-let ramChart      = makeChart('ramChart',       '#AEB4E1', 128); // periwinkle — RAM usage
-let tempChart     = makeChart('tempChart',      '#00bcd4', 100);
+let cpuChart      = makeChart('cpuChart',       C.cpuLoad,   100);
+let ramChart      = makeChart('ramChart',       C.ram,       128);
+let tempChart     = makeChart('tempChart',      C.cpuTemp,   100);
 let powerChart    = null;
 let fanChart      = null;
 let totalPowerChart = null;
@@ -229,7 +229,7 @@ function updateCpu(d) {
     ppRow.style.display = '';
     if (!powerChart) {
       var ymax = (d.tdp_watts > 0) ? Math.max(250, d.tdp_watts * 1.1) : 300;
-      powerChart = makeChart('powerChart', '#ffc107', ymax);
+      powerChart = makeChart('powerChart', C.cpuPower, ymax);
     } else if (d.tdp_watts > 0) {
       powerChart.ymax = Math.max(250, d.tdp_watts * 1.1);
     }
@@ -250,7 +250,7 @@ function updateCpu(d) {
   var tpSec = document.getElementById('totalPowerSection');
   if (totalW > 0) {
     tpSec.style.display = '';
-    if (!totalPowerChart) totalPowerChart = makeChart('totalPowerChart', '#ff5722', 500);
+    if (!totalPowerChart) totalPowerChart = makeChart('totalPowerChart', C.totalPower, 500);
     document.getElementById('totalPowerVal').textContent = totalW.toFixed(1) + ' W';
     totalPowerChart.push(totalW);
   } else {
@@ -333,7 +333,7 @@ function updateGpu(d) {
     addSideBySide('Load','gpu'+i+'LoadVal','gpu'+i+'LoadChart',
                   'Temp', 'gpu'+i+'TempVal','gpu'+i+'TempChart');
     var lcKey = 'gpu'+i+'LoadChart';
-    if (!gpuCharts[lcKey]) gpuCharts[lcKey] = makeChart(lcKey, '#e91e63', 100); // pink — GPU load
+    if (!gpuCharts[lcKey]) gpuCharts[lcKey] = makeChart(lcKey, C.gpuLoad, 100);
     document.getElementById('gpu'+i+'LoadVal').textContent = g.load_percent.toFixed(1)+'%';
     gpuCharts[lcKey].push(g.load_percent);
 
@@ -341,7 +341,7 @@ function updateGpu(d) {
     if (g.temperature >= 0) {
       tvEl.innerHTML = '<span class="'+tempColor(g.temperature)+'">'+g.temperature.toFixed(0)+' C</span>';
       var tcKey = 'gpu'+i+'TempChart';
-      if (!gpuCharts[tcKey]) gpuCharts[tcKey] = makeChart(tcKey, '#00bcd4', 100); // cyan — matches CPU Temp
+      if (!gpuCharts[tcKey]) gpuCharts[tcKey] = makeChart(tcKey, C.gpuTemp, 100);
       gpuCharts[tcKey].push(g.temperature);
     } else { tvEl.textContent = 'N/A'; }
 
@@ -353,7 +353,7 @@ function updateGpu(d) {
       var vGb = g.vram_used_bytes / (1024*1024*1024);
       var vtGb = g.vram_total_bytes / (1024*1024*1024);
       document.getElementById('gpu'+i+'VramVal').textContent = vGb.toFixed(1)+' GB';
-      if (!gpuCharts[vKey]) gpuCharts[vKey] = makeChart(vKey, '#AEB4E1', 64); // periwinkle — GPU VRAM
+      if (!gpuCharts[vKey]) gpuCharts[vKey] = makeChart(vKey, C.gpuVram, 64);
       gpuCharts[vKey].push(vGb);
       gpuCharts[vKey].ymax = Math.max(vtGb, gpuCharts[vKey].ymax || vtGb);
     } else { document.getElementById('gpu'+i+'VramVal').textContent = 'N/A'; }
@@ -362,11 +362,11 @@ function updateGpu(d) {
     var fKey = 'gpu'+i+'FanChart';
     if (g.fan_rpm > 0) {
       fvEl.textContent = g.fan_rpm + ' RPM';
-      if (!gpuCharts[fKey]) gpuCharts[fKey] = makeChart(fKey, '#3154E1', 3000); // deep blue — GPU fan
+      if (!gpuCharts[fKey]) gpuCharts[fKey] = makeChart(fKey, C.gpuFan, 3000);
       gpuCharts[fKey].push(g.fan_rpm);
     } else if (g.fan_percent >= 0) {
       fvEl.textContent = g.fan_percent.toFixed(0) + '%';
-      if (!gpuCharts[fKey]) gpuCharts[fKey] = makeChart(fKey, '#3154E1', 100); // deep blue — GPU fan
+      if (!gpuCharts[fKey]) gpuCharts[fKey] = makeChart(fKey, C.gpuFan, 100);
       gpuCharts[fKey].push(g.fan_percent);
     } else { fvEl.textContent = 'N/A'; }
 
@@ -376,7 +376,7 @@ function updateGpu(d) {
       if (limit <= 0) limit = 400;
       addFullRow('Power','gpu'+i+'PowVal','gpu'+i+'PowChart');
       var pKey = 'gpu'+i+'PowChart';
-      if (!gpuCharts[pKey]) gpuCharts[pKey] = makeChart(pKey, '#ffc107', Math.max(250, limit*1.1)); // yellow — matches CPU Power
+      if (!gpuCharts[pKey]) gpuCharts[pKey] = makeChart(pKey, C.gpuPower, Math.max(250, limit*1.1));
       document.getElementById('gpu'+i+'PowVal').textContent = g.power_watts.toFixed(1)+' W';
       gpuCharts[pKey].push(g.power_watts);
     } else {
@@ -510,7 +510,43 @@ static std::string BuildJson()
     return std::string(buf, static_cast<size_t>(off));
 }
 
-static void HttpLoop(int port)
+// Build the __CFG script block with actual colors and port from config.
+static std::string MakeCfgScript(int port, const AppConfig& cfg)
+{
+    std::string s = "window.__CFG={port:";
+    s += std::to_string(port);
+    s += ",color:{cpuLoad:'";  s += cfg.cpu_load_color;   s += "',"
+                              " cpuTemp:'";  s += cfg.cpu_temp_color;   s += "',"
+                              " cpuPower:'"; s += cfg.cpu_power_color;  s += "',"
+                              " ram:'";     s += cfg.ram_color;        s += "',"
+                              " gpuLoad:'"; s += cfg.gpu_load_color;   s += "',"
+                              " gpuTemp:'"; s += cfg.gpu_temp_color;   s += "',"
+                              " gpuVram:'"; s += cfg.gpu_vram_color;   s += "',"
+                              " gpuFan:'";  s += cfg.gpu_fan_color;    s += "',"
+                              " gpuPower:'";s += cfg.gpu_power_color;  s += "',"
+                              " totalPower:'";s += cfg.total_power_color; s += "'}};";
+    return s;
+}
+
+// Replace PORT token in head with the __CFG script block.
+static std::string RenderHtml(const char* head, const char* body, int port, const AppConfig& cfg)
+{
+    std::string cfgScript = MakeCfgScript(port, cfg);
+    std::string result;
+    result.reserve(strlen(head) + strlen(body) + cfgScript.size());
+    const char* p = head;
+    while (*p)
+    {
+        if (strncmp(p, "PORT", 4) == 0)
+        { result += cfgScript; p += 4; }
+        else
+        { result += *p; ++p; }
+    }
+    result += body;
+    return result;
+}
+
+static void HttpLoop(int port, const AppConfig& cfg)
 {
     WSADATA wsa{};
     if (WSAStartup(MAKEWORD(2,2), &wsa) != 0) { fprintf(stderr, "HTTP: WSAStartup failed\n"); return; }
@@ -583,5 +619,6 @@ void StartHttpServer(const AppConfig& cfg)
     std::thread([cfg] { HttpLoop(cfg.http_port, cfg); }).detach();
 }
 #else
-static void StartHttpServer(int) {}
+struct AppConfig {};
+static void StartHttpServer(const AppConfig&) {}
 #endif // PLATFORM_WINDOWS
