@@ -544,23 +544,44 @@ static void HttpLoop(int port)
         char* nl = strchr(firstLine, '\n'); if (nl) *nl = '\0';
         printf("HTTP: %s -> %s\n", ipStr, firstLine);
         fflush(stdout);
-        std::string resp;
+        std::string body;
         if (strstr(req, "GET /api/metrics") != nullptr)
         {
-            resp = std::string("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n") + BuildJson();
+            body = BuildJson();
         }
         else if (strstr(req, "GET /") != nullptr)
         {
-            resp = std::string("HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n") + std::string(kHtmlPageHead) + kHtmlPageBody;
+            body = RenderHtml(kHtmlPageHead, kHtmlPageBody, port, cfg);
         }
-        else { resp = "HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\nNot Found"; }
-        send(client, resp.c_str(), (int)resp.size(), 0);
+        else
+        {
+            body = "Not Found";
+            send(client, "HTTP/1.1 404 Not Found\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\nNot Found", 58, 0);
+            closesocket(client);
+            continue;
+        }
+        // Build headers with Content-Length for HTTP/1.1 compliance.
+        char hdr[512] = {};
+        int hlen = snprintf(hdr, sizeof(hdr),
+            "HTTP/1.1 200 OK\r\n"
+            "Content-Type: %s\r\n"
+            "Access-Control-Allow-Origin: *\r\n"
+            "Connection: close\r\n"
+            "Content-Length: %u\r\n"
+            "\r\n",
+            strstr(req, "GET /api/metrics") != nullptr ? "application/json" : "text/html; charset=utf-8",
+            (unsigned int)body.size());
+        send(client, hdr, hlen, 0);
+        send(client, body.c_str(), (int)body.size(), 0);
         closesocket(client);
     }
     closesocket(srv); WSACleanup();
 }
 
-void StartHttpServer(int port) { std::thread(HttpLoop, port).detach(); }
+void StartHttpServer(const AppConfig& cfg)
+{
+    std::thread([cfg] { HttpLoop(cfg.http_port, cfg); }).detach();
+}
 #else
 static void StartHttpServer(int) {}
 #endif // PLATFORM_WINDOWS
