@@ -12,9 +12,10 @@
 
 #ifdef PLATFORM_WINDOWS
 
-// HTML dashboard — layout matches the GUI exactly:
+// HTML dashboard — layout matches the GUI exactly.
 //   CPU section : Row1=CPU Load | RAM Usage, Row2=Power(full), Row3=Temp(±Fan)
 //   GPU per card: Title, Row1=Load|Temp, Row2=VRAM|Fan, Row3=Power(full)
+// All value labels are inline: "Label 42" instead of label left / value right.
 static const char* kHtmlPage = R"(<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -28,28 +29,31 @@ static const char* kHtmlPage = R"(<!DOCTYPE html>
   h1  { color: #76B900; margin-bottom: 8px; font-size: 18px; }
   .cpu-name { color: #00bcd4; }
 
-  /* Each section — fixed height rows, no vertical growth per tick. */
+  /* Sections stack vertically, no flex growth — charts use calc-based heights. */
   .section { background: #16213e; border-radius: 8px; padding: 10px 12px;
              margin-bottom: 8px; display: flex; flex-direction: column; gap: 6px; }
 
-  /* Row of two charts — each takes half the width, fixed height. */
+  /* Row of two charts side by side. */
   .chart-row { display: flex; gap: 8px; }
   .chart-cell { flex: 1 1 0; display: flex; flex-direction: column; min-width: 0; }
 
   /* Single full-width chart row. */
   .full-row { }
 
-  /* Value label above each canvas — fixed height, no growth. */
-  .val-row { display: flex; align-items: center; gap: 8px; height: 22px; flex-shrink: 0; }
-  .label  { color: #888; font-size: 12px; width: 80px; flex-shrink: 0; }
-  .value  { color: #fff; font-weight: bold; font-size: 13px; flex: 1; text-align: right; }
+  /* Inline value label: "CPU Temp <span>42 C</span>" — no right-alignment. */
+  .val-row { display: block; height: 20px; line-height: 20px;
+             font-size: 12px; color: #aaa; white-space: nowrap; overflow: hidden;
+             text-overflow: ellipsis; }
+  .val-val { color: #fff; font-weight: bold; font-size: 13px; }
 
-  /* Fixed-height canvas — never grows beyond CHART_H. */
+  /* Chart height = 5.5% of viewport — scales proportionally on vertical resize,
+     but never grows beyond that because the parent has no flex grow. */
   canvas.chart { background: #0f3460; border-radius: 4px; display: block;
-                 width: 100%; height: 50px; flex-shrink: 0; }
+                 width: 100%; height: calc(100vh * 0.055); flex-shrink: 0; }
 
   .gpu-title { color: #76B900; font-size: 13px; font-weight: bold;
-               margin-bottom: 4px; flex-shrink: 0; }
+               margin-bottom: 4px; white-space: nowrap; overflow: hidden;
+               text-overflow: ellipsis; }
   .footer    { text-align: center; color: #555; font-size: 11px; margin-top: 8px; }
 
   .green  { color: #76B900; }
@@ -59,34 +63,39 @@ static const char* kHtmlPage = R"(<!DOCTYPE html>
 </style>
 </head>
 <body>
-<h1>NVIDIA LoadGraph <span id="cpuName" class="cpu-name"></span></h1>
+<h1>LoadGraph <span id="cpuName" class="cpu-name"></span></h1>
 
-<!-- CPU section — 3 chart rows matching GUI layout -->
-<div class="section" id="cpuSection">
+<!-- CPU section — rows mirror GUI layout -->
+<div class="section">
   <!-- Row 1: CPU Load | RAM Usage -->
   <div class="chart-row">
     <div class="chart-cell">
-      <div class="val-row"><span class="label">CPU Load</span><span class="value" id="cpuLoadVal">--%</span></div>
+      <div class="val-row">CPU Load <span class="val-val" id="cpuLoadVal">--%</span></div>
       <canvas id="cpuChart" class="chart"></canvas>
     </div>
     <div class="chart-cell">
-      <div class="val-row"><span class="label">RAM Usage</span><span class="value" id="ramUsedVal">-- GB</span></div>
+      <div class="val-row">RAM Usage <span class="val-val" id="ramUsedVal">-- GB</span></div>
       <canvas id="ramChart" class="chart"></canvas>
     </div>
   </div>
-  <!-- Row 2: CPU Power (full width) -->
+  <!-- Row 2: CPU Power (full width, shown only when TDP > 0) -->
   <div class="full-row" id="cpuPowerRow" style="display:none">
-    <div class="val-row"><span class="label">CPU Power</span><span class="value" id="cpuPowerVal">N/A</span></div>
+    <div class="val-row">CPU Power <span class="val-val" id="cpuPowerVal">N/A</span></div>
     <canvas id="powerChart" class="chart"></canvas>
   </div>
-  <!-- Row 3: CPU Temp | Fan -->
-  <div class="chart-row" id="cpuTempRow">
+  <!-- Row 3: Total Power (full width) -->
+  <div class="full-row" id="totalPowerRow" style="display:none">
+    <div class="val-row">Total Power <span class="val-val" id="totalPowerVal">N/A</span></div>
+    <canvas id="totalPowerChart" class="chart"></canvas>
+  </div>
+  <!-- Row 4: CPU Temp | Fan -->
+  <div class="chart-row">
     <div class="chart-cell">
-      <div class="val-row"><span class="label">CPU Temp</span><span class="value" id="cpuTempVal">N/A</span></div>
+      <div class="val-row">CPU Temp <span class="val-val" id="cpuTempVal">N/A</span></div>
       <canvas id="tempChart" class="chart"></canvas>
     </div>
     <div class="chart-cell" id="fanCell" style="display:none">
-      <div class="val-row"><span class="label">CPU Fan</span><span class="value" id="fanVal">N/A</span></div>
+      <div class="val-row">CPU Fan <span class="val-val" id="fanVal">N/A</span></div>
       <canvas id="fanChart" class="chart"></canvas>
     </div>
   </div>
@@ -94,14 +103,11 @@ static const char* kHtmlPage = R"(<!DOCTYPE html>
 
 <div id="gpuSections"></div>
 
-<div class="footer">Auto-refresh every 1s | LoadGraph</div>
-
 <script>
 const GPU_COLORS = ['#76B900','#00bcd4','#ffc107','#f44336','#e91e63'];
 const MAX_P = 60;
 
 // Rolling chart — looks up canvas by ID on each draw() so it works after DOM re-build.
-// curYmax is mutable via .ymax setter so RAM/VRAM can grow dynamically.
 function makeChart(id, color, yMax) {
     const defYmax = yMax || 100;
     const data = [];
@@ -153,30 +159,18 @@ function makeChart(id, color, yMax) {
 }
 
 // ── Charts ────────────────────────────────────────────────────────────────
-let cpuChart   = makeChart('cpuChart', '#76B900', 100);
-let ramChart   = makeChart('ramChart', '#e91e63', 128); // grows dynamically
-let tempChart  = makeChart('tempChart','#00bcd4', 100);
-let powerChart = null;       // created only when TDP > 0
-let fanChart   = null;       // created only when CPU fan exists
+let cpuChart      = makeChart('cpuChart',       '#76B900', 100);
+let ramChart      = makeChart('ramChart',       '#e91e63', 128);
+let tempChart     = makeChart('tempChart',      '#00bcd4', 100);
+let powerChart    = null;
+let fanChart      = null;
+let totalPowerChart = null;
 
-const gpuCharts = {};        // key → chart object
+const gpuCharts  = {};
 
 // ── Helpers ───────────────────────────────────────────────────────────────
 function esc(s)  { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;'); }
 function gb(b)   { return (b / (1024*1024*1024)).toFixed(1); }
-function fmtBytes(b) {
-  if (!b||b<1024) return '0 B';
-  if (b<1048576)  return (b/1024).toFixed(0)+' KB';
-  if (b<1073741824) return gb(b)+' GB';
-  return (b/1099511627776).toFixed(1)+' TB';
-}
-function fmtUptime(ms) {
-  var s=Math.floor(ms/1000), d=Math.floor(s/86400); s%=86400;
-  var h=Math.floor(s/3600); s%=3600; var m=Math.floor(s/60); s%=60;
-  if (d>0) return d+'d '+h+'h '+m+'m';
-  if (h>0) return h+'h '+m+'m '+s+'s';
-  return m+'m '+s+'s';
-}
 function tempColor(t) { return t > 80 ? 'red' : t > 65 ? 'yellow' : 'green'; }
 
 // ── CPU section update ────────────────────────────────────────────────────
@@ -191,7 +185,7 @@ function updateCpu(d) {
   document.getElementById('ramUsedVal').textContent = ramGb.toFixed(1) + ' GB';
   if (ramChart) { ramChart.push(ramGb); ramChart.ymax = Math.max(totGb, ramChart.ymax || totGb); }
 
-  // CPU Power — row shown only when TDP > 0 (matches GUI).
+  // CPU Power — row shown only when TDP > 0.
   var ppRow = document.getElementById('cpuPowerRow');
   if (d.cpu_power > 0) {
     if (!powerChart && d.tdp_watts > 0) {
@@ -202,6 +196,24 @@ function updateCpu(d) {
     if (powerChart) powerChart.push(d.cpu_power);
   } else {
     ppRow.style.display = 'none';
+  }
+
+  // Total Power — CPU + all GPUs with valid power readings.
+  var totalW = -1;
+  if (d.cpu_power > 0) totalW += d.cpu_power;
+  if (d.gpus && d.gpus.length > 0) {
+    for (var gi = 0; gi < d.gpus.length; gi++) {
+      if (d.gpus[gi].power_watts > 0) totalW += d.gpus[gi].power_watts;
+    }
+  }
+  var tpRow = document.getElementById('totalPowerRow');
+  if (totalW > 0) {
+    tpRow.style.display = '';
+    if (!totalPowerChart) totalPowerChart = makeChart('totalPowerChart', '#ff5722', 500);
+    document.getElementById('totalPowerVal').textContent = totalW.toFixed(1) + ' W';
+    totalPowerChart.push(totalW);
+  } else {
+    tpRow.style.display = 'none';
   }
 
   // CPU Temp.
@@ -229,14 +241,12 @@ function getOrCreateGpuSec(i, name, col) {
   div = document.createElement('div');
   div.className = 'section';
   div.id = 'gpusec'+i;
-  // Title stays static inside the section.
   div.innerHTML = '<div class="gpu-title" style="color:'+col+'">GPU '+i+': '+esc(name)+'</div>';
   document.getElementById('gpuSections').appendChild(div);
   return div;
 }
 
 function clearChartsFrom(sec) {
-  // Remove old canvases but keep the title.
   var rows = sec.querySelectorAll('.chart-row, .full-row');
   rows.forEach(function(r) { r.remove(); });
 }
@@ -261,23 +271,21 @@ function updateGpu(d) {
     clearChartsFrom(sec);
     sec.appendChild(title);
 
-    function addChartRow(labelId, valId, canvasId, color, yMax) {
-      var row = document.createElement('div');
-      row.className = 'full-row';
-      row.innerHTML = '<div class="val-row"><span class="label">'+labelId+'</span><span class="value" id="'+valId+'">--</span></div>';
-      var c = document.createElement('canvas');
-      c.id = canvasId; c.className = 'chart';
-      row.appendChild(c); sec.appendChild(row);
-      return { valEl: document.getElementById(valId), chartId: canvasId, color: color, yMax: yMax };
-    }
-    function addSideBySide(leftLabel, leftValId, leftCanvas, rightLabel, rightValId, rightCanvas) {
+    function addSideBySide(lLabel, lValId, lCanvas, rLabel, rValId, rCanvas) {
       var row = document.createElement('div');
       row.className = 'chart-row';
       row.innerHTML =
-        '<div class="chart-cell"><div class="val-row"><span class="label">'+leftLabel+'</span><span class="value" id="'+leftValId+'">--</span></div>' +
-         '<canvas id="'+leftCanvas+'" class="chart"></canvas></div>' +
-        '<div class="chart-cell"><div class="val-row"><span class="label">'+rightLabel+'</span><span class="value" id="'+rightValId+'">--</span></div>' +
-         '<canvas id="'+rightCanvas+'" class="chart"></canvas></div>';
+        '<div class="chart-cell"><div class="val-row">'+esc(lLabel)+' <span class="val-val" id="'+lValId+'">--</span></div>' +
+         '<canvas id="'+lCanvas+'" class="chart"></canvas></div>' +
+        '<div class="chart-cell"><div class="val-row">'+esc(rLabel)+' <span class="val-val" id="'+rValId+'">--</span></div>' +
+         '<canvas id="'+rCanvas+'" class="chart"></canvas></div>';
+      sec.appendChild(row);
+    }
+    function addFullRow(fLabel, fValId, fCanvas) {
+      var row = document.createElement('div');
+      row.className = 'full-row';
+      row.innerHTML = '<div class="val-row">'+esc(fLabel)+' <span class="val-val" id="'+fValId+'">--</span></div>' +
+                      '<canvas id="'+fCanvas+'" class="chart"></canvas>';
       sec.appendChild(row);
     }
 
@@ -324,22 +332,17 @@ function updateGpu(d) {
     } else { fvEl.textContent = 'N/A'; }
 
     // Row 3: Power (full width).
-    var ppRow = document.createElement('div');
-    ppRow.className = 'full-row';
     if (g.power_watts > 0 || g.power_limit_watts > 0) {
       var limit = g.power_limit_watts;
-      if (limit <= 0) limit = 400; // fallback
-      ppRow.innerHTML = '<div class="val-row"><span class="label">Power</span><span class="value" id="gpu'+i+'PowVal">-- W</span></div>';
-      var pc = document.createElement('canvas');
-      pc.id = 'gpu'+i+'PowChart'; pc.className = 'chart'; ppRow.appendChild(pc);
-      sec.appendChild(ppRow);
+      if (limit <= 0) limit = 400;
+      addFullRow('Power','gpu'+i+'PowVal','gpu'+i+'PowChart');
       var pKey = 'gpu'+i+'PowChart';
       if (!gpuCharts[pKey]) gpuCharts[pKey] = makeChart(pKey, col, Math.max(250, limit*1.1));
       document.getElementById('gpu'+i+'PowVal').textContent = g.power_watts.toFixed(1)+' W';
       gpuCharts[pKey].push(g.power_watts);
     } else {
-      ppRow.innerHTML = '<div class="val-row"><span class="label">Power</span><span class="value" id="gpu'+i+'PowVal">N/A</span></div>';
-      sec.appendChild(ppRow);
+      addFullRow('Power','gpu'+i+'PowVal','gpu'+i+'PowChart');
+      document.getElementById('gpu'+i+'PowVal').textContent = 'N/A';
     }
   }
 

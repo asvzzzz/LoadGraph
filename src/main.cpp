@@ -71,24 +71,27 @@ LONG WINAPI TopLevelFilter(EXCEPTION_POINTERS* ep)
 static wxIcon MakeNvidiaGreenIcon()
 {
     // NVIDIA green (#76B900) rounded square with white "LG".
+    // Direct pixel access + explicit alpha channel — avoids SetRed/SetBlue
+    // which are not available in this wxWidgets build.
     const int R = 118, G = 185, B = 0;
 
-    // Solid background — transparent bitmaps crash SetIcon on this wxWidgets build.
-    wxBitmap bmp(64, 64);
-    wxMemoryDC dc(bmp);
-    wxBrush brush(wxColour(R, G, B));
-    dc.SetBackground(brush);
-    dc.Clear();
+    wxImage img(64, 64);
+    unsigned char* pixels = img.GetData();
+    memset(pixels, 0, 64 * 64 * 3);
+    for (int y = 0; y < 64; ++y)
+        for (int x = 0; x < 64; ++x)
+        {
+            int idx = (y * 64 + x) * 3;
+            pixels[idx]   = R;
+            pixels[idx+1] = G;
+            pixels[idx+2] = B;
+        }
+    // Full alpha — opaque, no transparency issues with SetIcon.
+    unsigned char* alpha = new unsigned char[64 * 64];
+    memset(alpha, 255, 64 * 64);
+    img.SetAlpha(alpha);
 
-    // White "LG" label centered
-    dc.SetTextForeground(*wxWHITE);
-    wxFont font(26, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_BOLD);
-    dc.SetFont(font);
-    wxSize sz = dc.GetTextExtent("LG");
-    int x = (64 - sz.x) / 2;
-    int y = (64 - sz.y) / 2;
-    dc.DrawText("LG", x, y);
-
+    wxBitmap bmp(img);
     wxIcon icon;
     icon.CopyFromBitmap(bmp);
     return icon;
