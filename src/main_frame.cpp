@@ -318,24 +318,7 @@ void MainFrame::BuildCpuSection(wxBoxSizer* container, wxWindow* parent)
 
 	const CpuData cpuInit = MetricsGetCpu();
 
-	// Row 2: CPU Power (only when a TDP or a real power sensor is known).
-	if (cpuInit.tdpWatts > 0.0)
-	{
-		m_cpuPowerGraph = new GraphPanel(parent, "CPU Power", "W");
-		const double maxP = std::max(250.0, cpuInit.tdpWatts * 1.1);
-		m_cpuPowerGraph->SetYRange(0.0, maxP);
-		m_cpuPowerGraph->SetYMode(GraphYMode::Watts);
-		m_cpuPowerGraph->SetColor(HexColor(m_cfg.cpu_power_color));
-		m_cpuPowerGraph->SetBgColor(HexColor(m_cfg.chart_bg_color));
-
-		// No trailing spacer here: RealizeUI adds the 5 px gap between the
-		// CPU section and the next one, so their border lines coincide.
-		container->Add(m_cpuPowerGraph, 1, wxEXPAND | wxLEFT | wxRIGHT, 5);
-
-		m_viewToggles["CPU Power"] = m_cpuPowerGraph;
-	}
-
-	// Row 3: CPU Temp (+ CPU Fan when a fan sensor exists).
+	// Row 2: CPU Temp (+ CPU Fan when a fan sensor exists).
 	if (cpuInit.temperature >= 0.0 || cpuInit.fanRpm > 0)
 	{
 		wxBoxSizer* row2 = new wxBoxSizer(wxHORIZONTAL);
@@ -363,6 +346,23 @@ void MainFrame::BuildCpuSection(wxBoxSizer* container, wxWindow* parent)
 		{
 			m_viewToggles["CPU Fan"] = m_cpuFanGraph;
 		}
+	}
+
+	// Row 3: CPU Power (only when a TDP or a real power sensor is known).
+	if (cpuInit.tdpWatts > 0.0)
+	{
+		m_cpuPowerGraph = new GraphPanel(parent, "CPU Power", "W");
+		const double maxP = std::max(250.0, cpuInit.tdpWatts * 1.1);
+		m_cpuPowerGraph->SetYRange(0.0, maxP);
+		m_cpuPowerGraph->SetYMode(GraphYMode::Watts);
+		m_cpuPowerGraph->SetColor(HexColor(m_cfg.cpu_power_color));
+		m_cpuPowerGraph->SetBgColor(HexColor(m_cfg.chart_bg_color));
+
+		// No trailing spacer here: RealizeUI adds the 5 px gap between the
+		// CPU section and the next one, so their border lines coincide.
+		container->Add(m_cpuPowerGraph, 1, wxEXPAND | wxLEFT | wxRIGHT, 5);
+
+		m_viewToggles["CPU Power"] = m_cpuPowerGraph;
 	}
 }
 

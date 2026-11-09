@@ -68,12 +68,18 @@ static const char* kHtmlPageHead = R"(<!DOCTYPE html>
   canvas.chart { background: #0f3460; border-radius: 4px; display: block;
                  width: 100%; flex: 1 1 0; min-height: 0; }
 
+   /* Мигающее предупреждение о потере связи. */
+   #connWarn { display:none; text-align:center; padding:6px 0;
+               font-size:13px; color:#ff5722; font-weight:bold;
+               animation: blinkWarn 1s step-start infinite; }
+   @keyframes blinkWarn { 0%,100% { opacity:1; } 50% { opacity:0; } }
 
 </style>
 <script>window.__CFG={color:{cpuLoad:'%CPU_LOAD%',cpuTemp:'%CPU_TEMP%',cpuPower:'%CPU_POWER%',ram:'%RAM%',gpuLoad:'%GPU_LOAD%',gpuTemp:'%GPU_TEMP%',gpuVram:'%GPU_VRAM%',gpuFan:'%GPU_FAN%',gpuPower:'%GPU_POWER%',totalPower:'%TOTAL_POWER%'}};</script>
 </head>)";
 static const char* kHtmlPageBody = R"(<body>
 <h1>LoadGraph <span id="cpuName" class="cpu-name"></span></h1>
+<div id="connWarn">&#9888; Connection lost — retrying...</div>
 <div class="content">
 
 <!-- CPU section — rows mirror GUI layout -->
@@ -89,12 +95,7 @@ static const char* kHtmlPageBody = R"(<body>
       <canvas id="ramChart" class="chart"></canvas>
     </div>
   </div>
-  <!-- Row 2: CPU Power (full width, shown only when TDP > 0) -->
-  <div class="full-row" id="cpuPowerRow" style="display:none">
-    <div class="val-row">CPU Power <span class="val-val" id="cpuPowerVal">N/A</span></div>
-    <canvas id="powerChart" class="chart"></canvas>
-  </div>
-  <!-- Row 3: CPU Temp | Fan -->
+  <!-- Row 2: CPU Temp | Fan -->
   <div class="chart-row">
     <div class="chart-cell">
       <div class="val-row">CPU Temp <span class="val-val" id="cpuTempVal">N/A</span></div>
@@ -104,6 +105,11 @@ static const char* kHtmlPageBody = R"(<body>
       <div class="val-row">CPU Fan <span class="val-val" id="fanVal">N/A</span></div>
       <canvas id="fanChart" class="chart"></canvas>
     </div>
+  </div>
+  <!-- Row 3: CPU Power (full width, shown only when TDP > 0) -->
+  <div class="full-row" id="cpuPowerRow" style="display:none">
+    <div class="val-row">CPU Power <span class="val-val" id="cpuPowerVal">N/A</span></div>
+    <canvas id="powerChart" class="chart"></canvas>
   </div>
 </div>
 
@@ -454,9 +460,24 @@ function redrawAll() {
 }
 window.addEventListener('resize', redrawAll);
 
+// ── Connection loss warning ───────────────────────────────────────────────
+var connWarn = document.getElementById('connWarn');
+var connLost = false;
+function setConnLost(v) {
+  connLost = v;
+  connWarn.style.display = v ? '' : 'none';
+}
+
 // ── Main loop ─────────────────────────────────────────────────────────────
 async function fetchMetrics() {
-  try { var r = await fetch('/api/metrics'); var d = await r.json(); updateCpu(d); updateGpu(d); updateFlex(); } catch(e) {}
+  try {
+    var r = await fetch('/api/metrics');
+    var d = await r.json();
+    setConnLost(false);
+    updateCpu(d); updateGpu(d); updateFlex();
+  } catch(e) {
+    setConnLost(true);
+  }
 }
 updateFlex();
 setInterval(fetchMetrics, 1000);
