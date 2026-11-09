@@ -24,12 +24,15 @@ static const char* kHtmlPage = R"(<!DOCTYPE html>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   html, body { background: #1a1a2e; color: #e0e0e0; font-family: Consolas, monospace;
-               padding: 16px; }
+               padding: 16px; margin: 0; }
 
   h1  { color: #76B900; margin: 0 0 8px; font-size: 18px; }
   .cpu-name { color: #00bcd4; }
 
-  /* Each section — fixed layout, no flex growth. */
+  /* Scrollable content wrapper. */
+  .content { padding-bottom: 16px; }
+
+  /* Each section. */
   .section { background: #16213e; border-radius: 8px; padding: 10px 12px;
              margin-bottom: 8px; }
 
@@ -46,9 +49,10 @@ static const char* kHtmlPage = R"(<!DOCTYPE html>
              text-overflow: ellipsis; }
   .val-val { color: #fff; font-weight: bold; font-size: 13px; }
 
-  /* Fixed-height canvas — never grows beyond this. */
+  /* Canvas height scales with viewport (5% of vh), min 40px, max 80px. */
   canvas.chart { background: #0f3460; border-radius: 4px; display: block;
-                 width: 100%; height: 50px; flex-shrink: 0; }
+                 width: 100%; height: calc(100vh * 0.05);
+                 min-height: 40px; max-height: 80px; flex-shrink: 0; }
 
   .gpu-title { color: #76B900; font-size: 13px; font-weight: bold;
                margin-bottom: 4px; white-space: nowrap; overflow: hidden;
