@@ -78,7 +78,7 @@ static const char* kHtmlPageBody = R"(<body>
 <div class="content">
 
 <!-- CPU section — rows mirror GUI layout -->
-<div class="section">
+<div class="section" id="cpuSection">
   <!-- Row 1: CPU Load | RAM Usage -->
   <div class="chart-row">
     <div class="chart-cell">
@@ -223,15 +223,18 @@ function updateCpu(d) {
   ramChart.push(ramGb);
   ramChart.ymax = Math.max(totGb, ramChart.ymax || totGb);
 
-  // CPU Power — row shown only when TDP > 0.
+  // CPU Power — row shown whenever a positive reading is available.
   var ppRow = document.getElementById('cpuPowerRow');
   if (d.cpu_power > 0) {
-    if (!powerChart && d.tdp_watts > 0) {
-      powerChart = makeChart('powerChart', '#ffc107', Math.max(250, (d.tdp_watts||150)*1.1));
-      ppRow.style.display = '';
+    ppRow.style.display = '';
+    if (!powerChart) {
+      var ymax = (d.tdp_watts > 0) ? Math.max(250, d.tdp_watts * 1.1) : 300;
+      powerChart = makeChart('powerChart', '#ffc107', ymax);
+    } else if (d.tdp_watts > 0) {
+      powerChart.ymax = Math.max(250, d.tdp_watts * 1.1);
     }
     document.getElementById('cpuPowerVal').textContent = d.cpu_power.toFixed(1) + ' W';
-    if (powerChart) powerChart.push(d.cpu_power);
+    powerChart.push(d.cpu_power);
   } else {
     ppRow.style.display = 'none';
   }
@@ -389,6 +392,48 @@ function updateGpu(d) {
   });
 }
 
+// ── Flex distribution: equal chart heights across the whole page ──────────
+// Each .section / .gpu-section lives in a flex column. We set its flex-grow
+// to the number of visible chart rows it contains, so every row (CPU, GPU,
+// Total) gets the same slice of the window height, no matter how many GPUs
+// are present. Sections with more rows therefore get proportionally more
+// height, which is exactly what we want.
+
+function countVisibleRows(el) {
+    void el.offsetHeight;   // force layout so offsetParent is accurate
+    var n = 0;
+    el.querySelectorAll(':scope > .chart-row, :scope > .full-row').forEach(function(r) {
+        if (r.offsetParent !== null) n++;
+    });
+    return n;
+}
+
+function setFlex(el, grow) {
+    if (grow <= 0) return;
+    el.style.flexGrow   = String(grow);
+    el.style.flexShrink = '1';
+    el.style.flexBasis  = '0';
+}
+
+function updateFlex() {
+    var cpuSec = document.getElementById('cpuSection');
+    if (cpuSec) setFlex(cpuSec, countVisibleRows(cpuSec));
+
+    var gpuDiv = document.getElementById('gpuSections');
+    var gpuTotal = 0;
+    gpuDiv.querySelectorAll(':scope > .gpu-section').forEach(function(gs) {
+        var n = countVisibleRows(gs);
+        setFlex(gs, n);
+        gpuTotal += n;
+    });
+    if (gpuTotal > 0) setFlex(gpuDiv, gpuTotal);
+
+    var totalSec = document.getElementById('totalPowerSection');
+    if (totalSec && totalSec.style.display !== 'none') {
+        setFlex(totalSec, countVisibleRows(totalSec));
+    }
+}
+
 // ── Resize handler — draw() reads the new clientWidth/clientHeight ────────
 function redrawAll() {
     Object.keys(gpuCharts).forEach(function(k) {
@@ -402,8 +447,9 @@ window.addEventListener('resize', redrawAll);
 
 // ── Main loop ─────────────────────────────────────────────────────────────
 async function fetchMetrics() {
-  try { var r = await fetch('/api/metrics'); var d = await r.json(); updateCpu(d); updateGpu(d); } catch(e) {}
+  try { var r = await fetch('/api/metrics'); var d = await r.json(); updateCpu(d); updateGpu(d); updateFlex(); } catch(e) {}
 }
+updateFlex();
 setInterval(fetchMetrics, 1000);
 fetchMetrics();
 </script>
