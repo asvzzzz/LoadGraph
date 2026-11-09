@@ -74,6 +74,7 @@ RamData MetricsGetRam()
     d.totalBytes   = m.totalBytes;
     d.freeBytes    = m.freeBytes;
     d.loadPercent  = m.loadPercent;
+    d.powerWatts   = m.powerWatts;
     return d;
 }
 
