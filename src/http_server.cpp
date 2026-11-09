@@ -357,7 +357,7 @@ function updateGpu(d) {
       var vGb = g.vram_used_bytes / (1024*1024*1024);
       var vtGb = g.vram_total_bytes / (1024*1024*1024);
       document.getElementById('gpu'+i+'VramVal').textContent = vGb.toFixed(1)+' GB';
-      if (!gpuCharts[vKey]) gpuCharts[vKey] = makeChart(vKey, C.gpuVram, 64);
+      if (!gpuCharts[vKey]) gpuCharts[vKey] = makeChart(vKey, C.gpuVram, vtGb);
       gpuCharts[vKey].push(vGb);
       gpuCharts[vKey].ymax = Math.max(vtGb, gpuCharts[vKey].ymax || vtGb);
     } else { document.getElementById('gpu'+i+'VramVal').textContent = 'N/A'; }
