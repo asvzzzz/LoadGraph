@@ -46,10 +46,9 @@ static const char* kHtmlPage = R"(<!DOCTYPE html>
              text-overflow: ellipsis; }
   .val-val { color: #fff; font-weight: bold; font-size: 13px; }
 
-  /* Chart height = 5.5% of viewport — scales proportionally on vertical resize,
-     but never grows beyond that because the parent has no flex grow. */
+  /* Fixed-height charts — no vertical growth per tick, no scrollbar. */
   canvas.chart { background: #0f3460; border-radius: 4px; display: block;
-                 width: 100%; height: calc(100vh * 0.055); flex-shrink: 0; }
+                 width: 100%; height: 50px; flex-shrink: 0; }
 
   .gpu-title { color: #76B900; font-size: 13px; font-weight: bold;
                margin-bottom: 4px; white-space: nowrap; overflow: hidden;
