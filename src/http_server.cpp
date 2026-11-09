@@ -24,46 +24,35 @@ static const char* kHtmlPage = R"(<!DOCTYPE html>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   html, body { background: #1a1a2e; color: #e0e0e0; font-family: Consolas, monospace;
-               height: 100vh; overflow: hidden; }
+               padding: 16px; }
 
-  h1  { color: #76B900; margin: 0 0 8px; font-size: 18px; padding: 0 16px; flex-shrink: 0; }
+  h1  { color: #76B900; margin: 0 0 8px; font-size: 18px; }
   .cpu-name { color: #00bcd4; }
 
-  /* Main scrollable content area — fills remaining viewport height. */
-  .content { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0;
-             padding: 0 16px 16px; overflow-y: auto; }
-
-  /* Sections stack vertically. Each section grows proportionally via flex. */
+  /* Each section — fixed layout, no flex growth. */
   .section { background: #16213e; border-radius: 8px; padding: 10px 12px;
-             margin-bottom: 8px; display: flex; flex-direction: column; gap: 4px;
-             /* CPU section gets proportional share of available height. */
-             flex: 2 2 auto; min-height: 0; }
+             margin-bottom: 8px; }
 
-  /* GPU sections also grow proportionally. */
-  .gpu-section { background: #16213e; border-radius: 8px; padding: 8px 12px;
-                 margin-bottom: 8px; display: flex; flex-direction: column; gap: 4px;
-                 flex: 1 1 auto; min-height: 0; }
+  /* Row of two charts side by side. */
+  .chart-row { display: flex; gap: 8px; }
+  .chart-cell { flex: 1 1 0; display: flex; flex-direction: column; min-width: 0; }
 
-  /* Row of two charts side by side — each cell grows to fill row height. */
-  .chart-row { display: flex; gap: 8px; flex: 1 1 auto; min-height: 0; }
-  .chart-cell { flex: 1 1 0; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
-
-  /* Single full-width chart row — grows to fill available height. */
-  .full-row { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+  /* Single full-width chart row. */
+  .full-row { }
 
   /* Inline value label — fixed height, no growth. */
-  .val-row { display: block; height: 20px; line-height: 20px; flex-shrink: 0;
+  .val-row { display: block; height: 20px; line-height: 20px;
              font-size: 12px; color: #aaa; white-space: nowrap; overflow: hidden;
              text-overflow: ellipsis; }
   .val-val { color: #fff; font-weight: bold; font-size: 13px; }
 
-  /* Canvas fills remaining cell height — proportional resize, capped. */
+  /* Fixed-height canvas — never grows beyond this. */
   canvas.chart { background: #0f3460; border-radius: 4px; display: block;
-                 width: 100%; flex: 1 1 auto; min-height: 0; max-height: 120px; }
+                 width: 100%; height: 50px; flex-shrink: 0; }
 
   .gpu-title { color: #76B900; font-size: 13px; font-weight: bold;
-               margin-bottom: 2px; flex-shrink: 0; white-space: nowrap;
-               overflow: hidden; text-overflow: ellipsis; }
+               margin-bottom: 4px; white-space: nowrap; overflow: hidden;
+               text-overflow: ellipsis; }
   .green  { color: #76B900; }
   .cyan   { color: #00bcd4; }
   .yellow { color: #ffc107; }
