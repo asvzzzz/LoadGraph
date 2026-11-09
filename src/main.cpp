@@ -68,39 +68,24 @@ LONG WINAPI TopLevelFilter(EXCEPTION_POINTERS* ep)
 // a white "LG" label in the center.
 // ----------------------------------------------------------------------------
 #ifdef PLATFORM_WINDOWS
+// Match the ID used in src/icon.rc: IDI_ICON ICON "loadgraph.ico"
+#define IDI_ICON 101
+
 static wxIcon MakeEmbeddedGreenIcon()
 {
     // Load the embedded Windows icon resource (IDI_ICON) compiled into the
     // binary via src/icon.rc. Recolor non-transparent pixels to NVIDIA green.
     const int R = 118, G = 185, B = 0;
 
-    // Load icon from embedded resource by name ("IDI_ICON") — avoids needing
-    // the IDI_ICON constant which the RC compiler does not expose to C++.
-    HICON hIcon = (HICON)LoadImage(
-        GetModuleHandle(NULL), TEXT("IDI_ICON"), IMAGE_ICON,
-        0, 0, LR_DEFAULTSIZE | LR_LOADFROMFILE);
-    // Fallback: try loading as a raw resource.
-    if (!hIcon)
-    {
-        HRSRC hRes = FindResource(GetModuleHandle(NULL), TEXT("IDI_ICON"), RT_GROUP_ICON);
-        if (hRes)
-        {
-            HGLOBAL hGlob = LoadResource(GetModuleHandle(NULL), hRes);
-            if (hGlob)
-            {
-                hIcon = CreateIconFromResource(
-                    (BYTE*)LockResource(hGlob),
-                    SizeofResource(GetModuleHandle(NULL), hRes),
-                    TRUE, 0x30000);
-            }
-        }
-    }
+    // Use MAKEINTRESOURCE so Windows looks up the icon by ID in the module's
+    // resource table — this is the correct way to load a compiled .rc icon.
+    HICON hIcon = LoadIcon(GetModuleHandle(NULL), MAKEINTRESOURCE(IDI_ICON));
     if (!hIcon) return wxIcon();
 
     ICONINFO info{};
     if (!GetIconInfo(hIcon, &info)) { DestroyIcon(hIcon); return wxIcon(); }
 
-    // Create a DC and copy the icon bitmap into a DIB section for pixel access.
+    // Copy icon bitmap into a 32-bit DIB section for pixel manipulation.
     HDC hdcScreen = GetDC(nullptr);
     HDC hdcMem = CreateCompatibleDC(hdcScreen);
     HBITMAP hbmSrc = info.hbmColor ? info.hbmColor : info.hbmMask;
@@ -112,7 +97,7 @@ static wxIcon MakeEmbeddedGreenIcon()
     BITMAPINFOHEADER bih{};
     bih.biSize          = sizeof(BITMAPINFOHEADER);
     bih.biWidth         = bm.bmWidth;
-    bih.biHeight        = -bm.bmHeight;
+    bih.biHeight        = -bm.bmHeight;   // top-down DIB
     bih.biPlanes        = 1;
     bih.biBitCount      = 32;
     bih.biCompression   = BI_RGB;
@@ -122,13 +107,13 @@ static wxIcon MakeEmbeddedGreenIcon()
     HBITMAP hbmOld2 = (HBITMAP)SelectObject(hdcMem, hbmDIB);
     BitBlt(hdcMem, 0, 0, bm.bmWidth, bm.bmHeight, hdcMem, 0, 0, SRCCOPY);
 
-    // Copy pixels BEFORE deleting DIB.
+    // Copy pixels BEFORE cleaning up GDI objects.
     unsigned char* pixels = static_cast<unsigned char*>(pBits);
     const int w = bm.bmWidth, h = bm.bmHeight;
     wxImage img(w, h);
     memcpy(img.GetData(), pBits, w * h * 4);
 
-    // Recolor non-transparent pixels to NVIDIA green.
+    // Recolor non-transparent pixels to NVIDIA green (#76B900).
     for (int y = 0; y < h; ++y)
         for (int x = 0; x < w; ++x)
         {
@@ -141,7 +126,7 @@ static wxIcon MakeEmbeddedGreenIcon()
             }
         }
 
-    // Build alpha from the copied pixels.
+    // Build alpha channel from the copied pixels.
     unsigned char* alpha = new unsigned char[w * h];
     for (int i = 0; i < w * h; ++i)
         alpha[i] = pixels[i * 4 + 3];

@@ -46,7 +46,13 @@ static const char* kHtmlPage = R"(<!DOCTYPE html>
              text-overflow: ellipsis; }
   .val-val { color: #fff; font-weight: bold; font-size: 13px; }
 
-  /* Each section — no extra padding that would cause overflow. */
+  html, body { background: #1a1a2e; color: #e0e0e0; font-family: Consolas, monospace;
+               padding: 16px; margin: 0; overflow-x: hidden; }
+
+  h1  { color: #76B900; margin: 0 0 8px; font-size: 18px; }
+  .cpu-name { color: #00bcd4; }
+
+  /* Each section. */
   .section { background: #16213e; border-radius: 8px; padding: 10px 12px;
              margin-bottom: 8px; }
 
@@ -63,18 +69,17 @@ static const char* kHtmlPage = R"(<!DOCTYPE html>
              text-overflow: ellipsis; }
   .val-val { color: #fff; font-weight: bold; font-size: 13px; }
 
-  /* Canvas height scales with viewport (5% of vh), min 40px, max 80px. */
+  /* Canvas height is fixed at 60px — never grows, never shrinks below 40. */
   canvas.chart { background: #0f3460; border-radius: 4px; display: block;
-                 width: 100%; height: calc(100vh * 0.05);
-                 min-height: 40px; max-height: 80px; flex-shrink: 0; }
+                 width: 100%; height: 60px; flex-shrink: 0; }
 
   .gpu-title { color: #76B900; font-size: 13px; font-weight: bold;
                margin-bottom: 4px; white-space: nowrap; overflow: hidden;
                text-overflow: ellipsis; }
-
-  .gpu-title { color: #76B900; font-size: 13px; font-weight: bold;
-               margin-bottom: 4px; white-space: nowrap; overflow: hidden;
-               text-overflow: ellipsis; }
+  .green  { color: #76B900; }
+  .cyan   { color: #00bcd4; }
+  .yellow { color: #ffc107; }
+  .red    { color: #f44336; }
   .green  { color: #76B900; }
   .cyan   { color: #00bcd4; }
   .yellow { color: #ffc107; }
