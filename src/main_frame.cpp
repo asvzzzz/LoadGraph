@@ -629,6 +629,9 @@ void MainFrame::OnTimer(wxTimerEvent&)
 {
 	if (!m_uiCreated) return;
 
+	// Sample CPU load NOW so powerWatts estimate is fresh (also reads PDH).
+	MetricsSampleCpuLoad();
+
 	const CpuData  cpu  = MetricsGetCpu();
 	const RamData  ram  = MetricsGetRam();
 	const std::vector<GpuData> gpus = MetricsGetGpus();
