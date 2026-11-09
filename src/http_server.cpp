@@ -196,8 +196,8 @@ function makeChart(id, color, yMax) {
 }
 
 // ── Charts ────────────────────────────────────────────────────────────────
-let cpuChart      = makeChart('cpuChart',       '#00bcd4', 100);
-let ramChart      = makeChart('ramChart',       '#00bcd4', 128);
+let cpuChart      = makeChart('cpuChart',       '#76B900', 100); // green — CPU load
+let ramChart      = makeChart('ramChart',       '#ff9800', 128); // orange — matches GPU VRAM
 let tempChart     = makeChart('tempChart',      '#00bcd4', 100);
 let powerChart    = null;
 let fanChart      = null;
@@ -333,7 +333,7 @@ function updateGpu(d) {
     addSideBySide('Load','gpu'+i+'LoadVal','gpu'+i+'LoadChart',
                   'Temp', 'gpu'+i+'TempVal','gpu'+i+'TempChart');
     var lcKey = 'gpu'+i+'LoadChart';
-    if (!gpuCharts[lcKey]) gpuCharts[lcKey] = makeChart(lcKey, '#76B900', 100); // green — matches CPU Load
+    if (!gpuCharts[lcKey]) gpuCharts[lcKey] = makeChart(lcKey, '#e91e63', 100); // pink — GPU load
     document.getElementById('gpu'+i+'LoadVal').textContent = g.load_percent.toFixed(1)+'%';
     gpuCharts[lcKey].push(g.load_percent);
 
@@ -362,11 +362,11 @@ function updateGpu(d) {
     var fKey = 'gpu'+i+'FanChart';
     if (g.fan_rpm > 0) {
       fvEl.textContent = g.fan_rpm + ' RPM';
-      if (!gpuCharts[fKey]) gpuCharts[fKey] = makeChart(fKey, '#9c27b0', 3000); // purple — unchanged
+      if (!gpuCharts[fKey]) gpuCharts[fKey] = makeChart(fKey, '#00bcd4', 3000); // cyan — GPU fan
       gpuCharts[fKey].push(g.fan_rpm);
     } else if (g.fan_percent >= 0) {
       fvEl.textContent = g.fan_percent.toFixed(0) + '%';
-      if (!gpuCharts[fKey]) gpuCharts[fKey] = makeChart(fKey, '#9c27b0', 100); // purple — unchanged
+      if (!gpuCharts[fKey]) gpuCharts[fKey] = makeChart(fKey, '#00bcd4', 100); // cyan — GPU fan
       gpuCharts[fKey].push(g.fan_percent);
     } else { fvEl.textContent = 'N/A'; }
 
