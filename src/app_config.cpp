@@ -149,21 +149,21 @@ AppConfig LoadAppConfig()
     AppConfig cfg;
 
 #ifdef PLATFORM_WINDOWS
-    const std::string path = GetCwdPath() + "/" + "loadgraph.json";
+    const std::string path = GetCwdPath() + "/" + "loadgraph.cfg";
 
     std::error_code ec;
     if (!std::filesystem::exists(path, ec))
     {
         // Create default config file.
         SaveAppConfig(cfg);
-        LOGI("Created default loadgraph.json");
+        LOGI("Created default loadgraph.cfg");
         return cfg;
     }
 
     std::string data;
     if (!ReadFile(path, data))
     {
-        LOGE("Failed to read loadgraph.json, using defaults");
+        LOGE("Failed to read loadgraph.cfg, using defaults");
         return cfg;
     }
 
@@ -171,7 +171,7 @@ AppConfig LoadAppConfig()
     // Parse top-level object.
     const char* p = data.c_str();
     SkipSpaces(p);
-    if (*p != '{') { LOGE("loadgraph.json: expected {"); return cfg; }
+    if (*p != '{') { LOGE("loadgraph.cfg: expected {"); return cfg; }
     ++p;
 
     while (*p && *p != '}')
@@ -340,7 +340,7 @@ void SaveAppConfig(const AppConfig& cfg)
 {
 #ifdef PLATFORM_WINDOWS
     std::string cwd  = GetCwdPath();
-    std::string path = cwd + "/loadgraph.json";
+    std::string path = cwd + "/loadgraph.cfg";
 
     std::string out;
     out += "{\n";
@@ -366,8 +366,8 @@ void SaveAppConfig(const AppConfig& cfg)
     out += "}\n";
 
     if (!WriteFile(path, out))
-        LOGE("Failed to write loadgraph.json");
+        LOGE("Failed to write loadgraph.cfg");
     else
-        LOGI("Saved loadgraph.json");
+        LOGI("Saved loadgraph.cfg");
 #endif // PLATFORM_WINDOWS
 }

@@ -4,6 +4,7 @@
 #include "power_table.h"
 #include "logger.h"
 #include "metrics_api.h"
+#include "storage_monitor.h"
 #include "app_config.h"
 #include <wx/display.h>
 #include <wx/dcbuffer.h>
@@ -688,6 +689,8 @@ void MainFrame::OnTimer(wxTimerEvent&)
 
 	// GPU graphs + total power accumulator.
 	double totalWatts = (cpu.powerWatts > 0.0) ? cpu.powerWatts : 0.0;
+	if (ram.powerWatts > 0.0) totalWatts += ram.powerWatts;
+
 	const size_t n = std::min(gpus.size(), m_gpuPanels.size());
 	for (size_t i = 0; i < n; ++i)
 	{
@@ -706,6 +709,13 @@ void MainFrame::OnTimer(wxTimerEvent&)
 		if (d.powerGraph && gpu.powerWatts >= 0.0) d.powerGraph->AddPoint(gpu.powerWatts);
 
 		if (gpu.powerWatts > 0.0) totalWatts += gpu.powerWatts;
+	}
+
+	// Add storage power.
+	auto storage = MetricsGetStorage();
+	for (const auto& s : storage)
+	{
+		if (s.powerWatts > 0.0) totalWatts += s.powerWatts;
 	}
 
 	if (m_cpuPowerGraph && cpu.powerWatts > 0.0)

@@ -243,12 +243,18 @@ function updateCpu(d) {
     ppRow.style.display = 'none';
   }
 
-  // Total Power — CPU + all GPUs with valid power readings.
-  var totalW = -1;
+  // Total Power — CPU + RAM + all GPUs + Storage with valid power readings.
+  var totalW = 0;
   if (d.cpu_power > 0) totalW += d.cpu_power;
+  if (d.ram_power > 0) totalW += d.ram_power;
   if (d.gpus && d.gpus.length > 0) {
     for (var gi = 0; gi < d.gpus.length; gi++) {
       if (d.gpus[gi].power_watts > 0) totalW += d.gpus[gi].power_watts;
+    }
+  }
+  if (d.storage && d.storage.length > 0) {
+    for (var si = 0; si < d.storage.length; si++) {
+      if (d.storage[si].power_watts > 0) totalW += d.storage[si].power_watts;
     }
   }
   var tpSec = document.getElementById('totalPowerSection');
@@ -482,7 +488,8 @@ static std::string BuildJson()
     off = snprintf(buf, sizeof(buf),
         "{\"cpu_load\":%.1f,\"cpu_temp\":%.1f,\"cpu_power\":%.1f,"
          "\"fan_rpm\":%d,\"tdp_watts\":%.1f,"
-         "\"ram_load\":%.1f,\"ram_used_bytes\":%llu,\"ram_total_bytes\":%llu,"
+         "\"ram_load\":%.1f,\"ram_power\":%.1f,"
+         "\"ram_used_bytes\":%llu,\"ram_total_bytes\":%llu,"
          "\"uptime_ms\":%llu,\"cpu_name\":\"%s\",\"gpus\":[",
         cpu.loadPercent,
         cpu.temperature,
@@ -490,6 +497,7 @@ static std::string BuildJson()
         cpu.fanRpm,
         cpu.tdpWatts,
         ram.loadPercent,
+        ram.powerWatts,
         (unsigned long long)(ram.totalBytes > ram.freeBytes
                              ? ram.totalBytes - ram.freeBytes : 0),
         (unsigned long long)ram.totalBytes,
@@ -510,6 +518,26 @@ static std::string BuildJson()
             (unsigned long long)g.vramTotalBytes, g.fanRpm, g.fanPercent,
             g.powerWatts, g.powerLimitWatts);
     }
+
+    // Add storage devices.
+    auto storage = MetricsGetStorage();
+    for (size_t i = 0; i < storage.size(); ++i)
+    {
+        if (i > 0) off += snprintf(buf + off, sizeof(buf) - off, ",");
+        const StorageData& sd = storage[i];
+        std::string escapedName;
+        for (char c : sd.name)
+        {
+            if (c == '"') escapedName += "\\\"";
+            else if (c == '\\') escapedName += "\\\\";
+            else escapedName += c;
+        }
+        const char* storageFmt = "{\"name\":\"%s\",\"interface\":\"%s\",\"total_bytes\":%llu,\"power_watts\":%.1f}";
+        off += snprintf(buf + off, sizeof(buf) - off, storageFmt,
+            escapedName.c_str(), sd.iface.c_str(),
+            (unsigned long long)sd.totalBytes, sd.powerWatts);
+    }
+
     off += snprintf(buf + off, sizeof(buf) - off, "]}");
     return std::string(buf, static_cast<size_t>(off));
 }

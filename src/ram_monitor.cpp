@@ -23,6 +23,16 @@ void RamMonitor::Collect()
     // due to a crash in fastprox.dll. Value remains at default (-1).
     fresh.speedMhz = -1;
 
+    // Estimate RAM power: ~4W per DIMM slot (DDR4) or ~5W (DDR5).
+    // Approximate number of modules from total capacity (common sizes: 4, 8, 16 GB).
+    if (fresh.totalBytes > 0)
+    {
+        int dimms = static_cast<int>(fresh.totalBytes / (8ULL * 1024 * 1024 * 1024));
+        if (dimms < 1) dimms = 1;
+        else if (dimms > 8) dimms = 8;
+        fresh.powerWatts = static_cast<double>(dimms) * 4.0;
+    }
+
     // Publish atomically: GetMetrics() reads m_metrics from the GUI thread.
     std::lock_guard<std::mutex> lock(m_mutex);
     m_metrics = fresh;

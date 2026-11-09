@@ -12,6 +12,14 @@
 #include <string>
 #include <vector>
 
+// Storage device metrics (power estimated from interface type).
+struct StorageData {
+    std::string name;
+    std::string iface;        // Interface type: "SATA", "NVMe", "USB"
+    uint64_t    totalBytes   = 0;
+    double      powerWatts   = -1.0;
+};
+
 struct CpuData {
     double  loadPercent  = 0.0;
     double  temperature  = -1.0;
@@ -26,6 +34,7 @@ struct RamData {
     uint64_t totalBytes  = 0;
     uint64_t freeBytes   = 0;
     double   loadPercent = 0.0;
+    double   powerWatts  = -1.0;  // estimated RAM power consumption
 };
 
 struct GpuData {
@@ -63,5 +72,8 @@ std::vector<GpuData> MetricsGetGpus();
 
 // Returns true if NVML/NVAPI is available.
 bool MetricsGpuAvailable();
+
+// Fetch current storage metrics. Thread-safe. Returns empty vector if none.
+std::vector<StorageData> MetricsGetStorage();
 
 #endif // METRICS_API_H

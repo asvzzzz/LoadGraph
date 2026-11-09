@@ -3,7 +3,7 @@
 
 #include <string>
 
-// Minimal JSON-like config loader for loadgraph.json.
+// Minimal JSON-like config loader for loadgraph.cfg.
 // Stores chart colors, HTTP server port and enabled flag.
 // File is created with defaults if missing.
 
@@ -30,10 +30,10 @@ struct AppConfig
     bool    http_enabled = false;
 };
 
-// Load config from <cwd>/loadgraph.json. Creates file with defaults if missing.
+// Load config from <cwd>/loadgraph.cfg. Creates file with defaults if missing.
 AppConfig LoadAppConfig();
 
-// Serialize current AppConfig back to loadgraph.json (call after user edits).
+// Serialize current AppConfig back to loadgraph.cfg (call after user edits).
 void SaveAppConfig(const AppConfig& cfg);
 
 #endif // APP_CONFIG_H

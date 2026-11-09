@@ -2,6 +2,7 @@
 #include "cpu_monitor.h"
 #include "ram_monitor.h"
 #include "gpu_monitor.h"
+#include "storage_monitor.h"
 #include <chrono>
 #include <thread>
 
@@ -10,9 +11,10 @@
 #endif
 
 // Static singleton monitors - shared between GUI and HTTP server.
-static CpuMonitor*  s_cpu  = nullptr;
-static RamMonitor*  s_ram  = nullptr;
-static GpuMonitor*  s_gpu  = nullptr;
+static CpuMonitor*      s_cpu       = nullptr;
+static RamMonitor*      s_ram       = nullptr;
+static GpuMonitor*      s_gpu       = nullptr;
+static StorageMonitor*  s_storage   = nullptr;
 
 bool MetricsInit()
 {
@@ -29,6 +31,9 @@ bool MetricsInit()
     s_ram->Start();
     if (s_gpu->IsAvailable()) s_gpu->Start();
 
+    s_storage = CreateStorageMonitor();
+    if (s_storage) s_storage->Start();
+
     return true;
 }
 
@@ -40,9 +45,10 @@ void MetricsSampleCpuLoad()
 
 void MetricsShutdown()
 {
-    if (s_cpu)  { s_cpu->Stop();  delete s_cpu;  s_cpu = nullptr; }
-    if (s_ram)  { s_ram->Stop();  delete s_ram;  s_ram = nullptr; }
-    if (s_gpu)  { s_gpu->Stop();  delete s_gpu;  s_gpu = nullptr; }
+    if (s_cpu)   { s_cpu->Stop();   delete s_cpu;   s_cpu = nullptr; }
+    if (s_ram)   { s_ram->Stop();   delete s_ram;   s_ram = nullptr; }
+    if (s_gpu)   { s_gpu->Stop();   delete s_gpu;   s_gpu = nullptr; }
+    if (s_storage) { s_storage->Stop(); delete s_storage; s_storage = nullptr; }
 }
 
 CpuData MetricsGetCpu()
@@ -96,4 +102,11 @@ std::vector<GpuData> MetricsGetGpus()
 bool MetricsGpuAvailable()
 {
     return s_gpu && s_gpu->IsAvailable();
+}
+
+std::vector<StorageData> MetricsGetStorage()
+{
+    std::vector<StorageData> out;
+    if (!s_storage) return out;
+    return s_storage->GetMetrics();
 }

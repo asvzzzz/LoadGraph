@@ -158,6 +158,8 @@ if(WIN32)
         src/http_server.cpp
         src/app_config.h
         src/app_config.cpp
+        src/storage_monitor.h
+        src/storage_monitor.cpp
     )
 elseif(UNIX AND NOT APPLE)
     # Linux

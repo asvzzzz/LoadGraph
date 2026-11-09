@@ -17,6 +17,7 @@ struct RamMetrics
     uint64_t freeBytes    = 0;
     double   loadPercent  = 0.0;
     int      speedMhz     = -1;
+    double   powerWatts   = -1.0;  // estimated RAM power consumption
 };
 
 class RamMonitor : public MetricsCollector
