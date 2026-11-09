@@ -46,9 +46,31 @@ static const char* kHtmlPage = R"(<!DOCTYPE html>
              text-overflow: ellipsis; }
   .val-val { color: #fff; font-weight: bold; font-size: 13px; }
 
-  /* Canvas fills available vertical space in its flex container. */
+  /* Each section — no extra padding that would cause overflow. */
+  .section { background: #16213e; border-radius: 8px; padding: 10px 12px;
+             margin-bottom: 8px; }
+
+  /* Row of two charts side by side. */
+  .chart-row { display: flex; gap: 8px; }
+  .chart-cell { flex: 1 1 0; display: flex; flex-direction: column; min-width: 0; }
+
+  /* Single full-width chart row. */
+  .full-row { }
+
+  /* Inline value label — fixed height, no growth. */
+  .val-row { display: block; height: 20px; line-height: 20px;
+             font-size: 12px; color: #aaa; white-space: nowrap; overflow: hidden;
+             text-overflow: ellipsis; }
+  .val-val { color: #fff; font-weight: bold; font-size: 13px; }
+
+  /* Canvas height scales with viewport (5% of vh), min 40px, max 80px. */
   canvas.chart { background: #0f3460; border-radius: 4px; display: block;
-                 width: 100%; height: 100%; flex: 1 1 0; min-height: 30px; }
+                 width: 100%; height: calc(100vh * 0.05);
+                 min-height: 40px; max-height: 80px; flex-shrink: 0; }
+
+  .gpu-title { color: #76B900; font-size: 13px; font-weight: bold;
+               margin-bottom: 4px; white-space: nowrap; overflow: hidden;
+               text-overflow: ellipsis; }
 
   .gpu-title { color: #76B900; font-size: 13px; font-weight: bold;
                margin-bottom: 4px; white-space: nowrap; overflow: hidden;

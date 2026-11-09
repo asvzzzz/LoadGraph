@@ -70,36 +70,91 @@ LONG WINAPI TopLevelFilter(EXCEPTION_POINTERS* ep)
 #ifdef PLATFORM_WINDOWS
 static wxIcon MakeEmbeddedGreenIcon()
 {
-    // Load loadgraph.png, recolor non-transparent pixels to NVIDIA green
-    // (#76B900), preserve alpha. Tries multiple paths for robustness.
+    // Load the embedded Windows icon resource (IDI_ICON) compiled into the
+    // binary via src/icon.rc. Recolor non-transparent pixels to NVIDIA green.
     const int R = 118, G = 185, B = 0;
 
-    wxImage img;
-    wxString candidates[] = {
-        "loadgraph.png",
-        wxGetCwd() + "/loadgraph.png",
-    };
-    for (const auto& path : candidates)
+    // Load icon from embedded resource by name ("IDI_ICON") — avoids needing
+    // the IDI_ICON constant which the RC compiler does not expose to C++.
+    HICON hIcon = (HICON)LoadImage(
+        GetModuleHandle(NULL), TEXT("IDI_ICON"), IMAGE_ICON,
+        0, 0, LR_DEFAULTSIZE | LR_LOADFROMFILE);
+    // Fallback: try loading as a raw resource.
+    if (!hIcon)
     {
-        img = wxImage(path, wxBITMAP_TYPE_PNG);
-        if (img.IsOk()) break;
+        HRSRC hRes = FindResource(GetModuleHandle(NULL), TEXT("IDI_ICON"), RT_GROUP_ICON);
+        if (hRes)
+        {
+            HGLOBAL hGlob = LoadResource(GetModuleHandle(NULL), hRes);
+            if (hGlob)
+            {
+                hIcon = CreateIconFromResource(
+                    (BYTE*)LockResource(hGlob),
+                    SizeofResource(GetModuleHandle(NULL), hRes),
+                    TRUE, 0x30000);
+            }
+        }
     }
-    if (!img.IsOk()) return wxIcon();
+    if (!hIcon) return wxIcon();
 
-    unsigned char* pixels = img.GetData();
-    unsigned char* alpha  = img.GetAlpha();
-    const int w = img.GetWidth(), h = img.GetHeight();
+    ICONINFO info{};
+    if (!GetIconInfo(hIcon, &info)) { DestroyIcon(hIcon); return wxIcon(); }
+
+    // Create a DC and copy the icon bitmap into a DIB section for pixel access.
+    HDC hdcScreen = GetDC(nullptr);
+    HDC hdcMem = CreateCompatibleDC(hdcScreen);
+    HBITMAP hbmSrc = info.hbmColor ? info.hbmColor : info.hbmMask;
+    HBITMAP hbmOld = (HBITMAP)SelectObject(hdcMem, hbmSrc);
+
+    BITMAP bm{};
+    GetObject(hbmSrc, sizeof(bm), &bm);
+
+    BITMAPINFOHEADER bih{};
+    bih.biSize          = sizeof(BITMAPINFOHEADER);
+    bih.biWidth         = bm.bmWidth;
+    bih.biHeight        = -bm.bmHeight;
+    bih.biPlanes        = 1;
+    bih.biBitCount      = 32;
+    bih.biCompression   = BI_RGB;
+
+    void* pBits = nullptr;
+    HBITMAP hbmDIB = CreateDIBSection(hdcMem, (BITMAPINFO*)&bih, DIB_RGB_COLORS, &pBits, nullptr, 0);
+    HBITMAP hbmOld2 = (HBITMAP)SelectObject(hdcMem, hbmDIB);
+    BitBlt(hdcMem, 0, 0, bm.bmWidth, bm.bmHeight, hdcMem, 0, 0, SRCCOPY);
+
+    // Copy pixels BEFORE deleting DIB.
+    unsigned char* pixels = static_cast<unsigned char*>(pBits);
+    const int w = bm.bmWidth, h = bm.bmHeight;
+    wxImage img(w, h);
+    memcpy(img.GetData(), pBits, w * h * 4);
+
+    // Recolor non-transparent pixels to NVIDIA green.
     for (int y = 0; y < h; ++y)
         for (int x = 0; x < w; ++x)
         {
-            int idx = (y * w + x) * 3;
-            if (alpha && alpha[y * w + x] > 0)
+            int idx = (y * w + x) * 4;
+            if (pixels[idx + 3] > 0)
             {
-                pixels[idx]   = R;
-                pixels[idx+1] = G;
-                pixels[idx+2] = B;
+                pixels[idx]     = B;
+                pixels[idx + 1] = G;
+                pixels[idx + 2] = R;
             }
         }
+
+    // Build alpha from the copied pixels.
+    unsigned char* alpha = new unsigned char[w * h];
+    for (int i = 0; i < w * h; ++i)
+        alpha[i] = pixels[i * 4 + 3];
+    img.SetAlpha(alpha);
+
+    SelectObject(hdcMem, hbmOld2);
+    DeleteObject(hbmDIB);
+    SelectObject(hdcMem, hbmOld);
+    DeleteDC(hdcMem);
+    ReleaseDC(nullptr, hdcScreen);
+    DestroyIcon(hIcon);
+    if (info.hbmColor)  DeleteObject(info.hbmColor);
+    if (info.hbmMask)   DeleteObject(info.hbmMask);
 
     wxBitmap bmp(img);
     wxIcon icon;

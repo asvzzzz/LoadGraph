@@ -128,7 +128,6 @@ endif()
 # ----------------------------------------------------------------------------
 set(SOURCES
     src/main.cpp
-    src/icon_data.h
     src/logger.h
     src/logger.cpp
     src/platform.h
@@ -205,11 +204,20 @@ if(WIN32)
         WIN32_EXECUTABLE ON
     )
 
-    # Copy icon PNG to build dir — loaded at runtime by wxImage and recolored green.
-    if(EXISTS "${CMAKE_SOURCE_DIR}/loadgraph.png")
-        configure_file("${CMAKE_SOURCE_DIR}/loadgraph.png"
-                       "${CMAKE_BINARY_DIR}/bin/loadgraph.png" COPYONLY)
+    # Embed icon as a compiled Windows resource (no external file at runtime).
+    # Compile .rc → .res at configure time so IDI_ICON is available during compilation.
+    set(RC_FILE "${CMAKE_SOURCE_DIR}/src/icon.rc")
+    set(RES_FILE "${CMAKE_BINARY_DIR}/icon.res")
+    execute_process(COMMAND
+        "C:/Program Files (x86)/Windows Kits/10/bin/10.0.22621.0/x64/rc.exe"
+        /fo "${RES_FILE}" "${RC_FILE}"
+        RESULT_VARIABLE RC_RESULT
+    )
+    if(NOT RC_RESULT EQUAL 0)
+        message(FATAL_ERROR "RC compiler failed to compile icon.rc")
     endif()
+    set_source_files_properties("${RES_FILE}" PROPERTIES LINKABLE ON)
+    target_sources(${PROJECT_NAME} PRIVATE "${RES_FILE}")
 
     # Suppress C4996 (unsafe CRT) from our own code; wxWidgets headers emit it
     # regardless, and we use safe equivalents where it matters (snprintf/strncpy).
