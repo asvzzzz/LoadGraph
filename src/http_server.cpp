@@ -28,7 +28,7 @@ static const char* kHtmlPageHead = R"(<!DOCTYPE html>
   body { display: flex; flex-direction: column; padding: 12px; gap: 8px; }
 
   h1 { color: #76B900; font-size: 18px; flex: 0 0 auto; }
-  .cpu-name { color: #76B900; }
+  .cpu-name { color: #00bcd4; }
 
   /* Контент занимает всё свободное место, ничего не выталкивает за окно. */
   .content { flex: 1 1 0; min-height: 0; display: flex;
@@ -121,7 +121,7 @@ static const char* kHtmlPageBody = R"(<body>
 </div>
 
 <script>
-const GPU_COLOR  = '#9c27b0';   // all GPUs share one purple color
+const GPU_COLOR     = '#9c27b0'; // default for GPU charts without a dedicated color
 const MAX_P = 60;
 
 // Rolling chart. draw() is now exposed AND a ResizeObserver is attached per
@@ -333,7 +333,7 @@ function updateGpu(d) {
     addSideBySide('Load','gpu'+i+'LoadVal','gpu'+i+'LoadChart',
                   'Temp', 'gpu'+i+'TempVal','gpu'+i+'TempChart');
     var lcKey = 'gpu'+i+'LoadChart';
-    if (!gpuCharts[lcKey]) gpuCharts[lcKey] = makeChart(lcKey, GPU_COLOR, 100);
+    if (!gpuCharts[lcKey]) gpuCharts[lcKey] = makeChart(lcKey, '#76B900', 100); // green — matches CPU Load
     document.getElementById('gpu'+i+'LoadVal').textContent = g.load_percent.toFixed(1)+'%';
     gpuCharts[lcKey].push(g.load_percent);
 
@@ -341,7 +341,7 @@ function updateGpu(d) {
     if (g.temperature >= 0) {
       tvEl.innerHTML = '<span class="'+tempColor(g.temperature)+'">'+g.temperature.toFixed(0)+' C</span>';
       var tcKey = 'gpu'+i+'TempChart';
-      if (!gpuCharts[tcKey]) gpuCharts[tcKey] = makeChart(tcKey, GPU_COLOR, 100);
+      if (!gpuCharts[tcKey]) gpuCharts[tcKey] = makeChart(tcKey, '#00bcd4', 100); // cyan — matches CPU Temp
       gpuCharts[tcKey].push(g.temperature);
     } else { tvEl.textContent = 'N/A'; }
 
@@ -353,7 +353,7 @@ function updateGpu(d) {
       var vGb = g.vram_used_bytes / (1024*1024*1024);
       var vtGb = g.vram_total_bytes / (1024*1024*1024);
       document.getElementById('gpu'+i+'VramVal').textContent = vGb.toFixed(1)+' GB';
-      if (!gpuCharts[vKey]) gpuCharts[vKey] = makeChart(vKey, GPU_COLOR, 64);
+      if (!gpuCharts[vKey]) gpuCharts[vKey] = makeChart(vKey, '#ff9800', 64); // orange — distinct from RAM pink
       gpuCharts[vKey].push(vGb);
       gpuCharts[vKey].ymax = Math.max(vtGb, gpuCharts[vKey].ymax || vtGb);
     } else { document.getElementById('gpu'+i+'VramVal').textContent = 'N/A'; }
@@ -362,11 +362,11 @@ function updateGpu(d) {
     var fKey = 'gpu'+i+'FanChart';
     if (g.fan_rpm > 0) {
       fvEl.textContent = g.fan_rpm + ' RPM';
-      if (!gpuCharts[fKey]) gpuCharts[fKey] = makeChart(fKey, GPU_COLOR, 3000);
+      if (!gpuCharts[fKey]) gpuCharts[fKey] = makeChart(fKey, '#9c27b0', 3000); // purple — unchanged
       gpuCharts[fKey].push(g.fan_rpm);
     } else if (g.fan_percent >= 0) {
       fvEl.textContent = g.fan_percent.toFixed(0) + '%';
-      if (!gpuCharts[fKey]) gpuCharts[fKey] = makeChart(fKey, GPU_COLOR, 100);
+      if (!gpuCharts[fKey]) gpuCharts[fKey] = makeChart(fKey, '#9c27b0', 100); // purple — unchanged
       gpuCharts[fKey].push(g.fan_percent);
     } else { fvEl.textContent = 'N/A'; }
 
@@ -376,7 +376,7 @@ function updateGpu(d) {
       if (limit <= 0) limit = 400;
       addFullRow('Power','gpu'+i+'PowVal','gpu'+i+'PowChart');
       var pKey = 'gpu'+i+'PowChart';
-      if (!gpuCharts[pKey]) gpuCharts[pKey] = makeChart(pKey, GPU_COLOR, Math.max(250, limit*1.1));
+      if (!gpuCharts[pKey]) gpuCharts[pKey] = makeChart(pKey, '#ffc107', Math.max(250, limit*1.1)); // yellow — matches CPU Power
       document.getElementById('gpu'+i+'PowVal').textContent = g.power_watts.toFixed(1)+' W';
       gpuCharts[pKey].push(g.power_watts);
     } else {
