@@ -28,24 +28,25 @@ static const char* kHtmlPage = R"(<!DOCTYPE html>
   h1  { color: #76B900; margin-bottom: 8px; font-size: 18px; }
   .cpu-name { color: #00bcd4; }
 
-  /* Each section fills available height proportionally. */
+  /* Each section — fixed height rows, no vertical growth per tick. */
   .section { background: #16213e; border-radius: 8px; padding: 10px 12px;
              margin-bottom: 8px; display: flex; flex-direction: column; gap: 6px; }
 
-  /* Row of two charts — each takes half the width. */
-  .chart-row { display: flex; gap: 8px; flex: 1 1 auto; min-height: 0; }
+  /* Row of two charts — each takes half the width, fixed height. */
+  .chart-row { display: flex; gap: 8px; }
   .chart-cell { flex: 1 1 0; display: flex; flex-direction: column; min-width: 0; }
 
   /* Single full-width chart row. */
-  .full-row { flex: 1 1 auto; min-height: 0; }
+  .full-row { }
 
-  /* Value label above each canvas. */
-  .val-row { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+  /* Value label above each canvas — fixed height, no growth. */
+  .val-row { display: flex; align-items: center; gap: 8px; height: 22px; flex-shrink: 0; }
   .label  { color: #888; font-size: 12px; width: 80px; flex-shrink: 0; }
   .value  { color: #fff; font-weight: bold; font-size: 13px; flex: 1; text-align: right; }
 
+  /* Fixed-height canvas — never grows beyond CHART_H. */
   canvas.chart { background: #0f3460; border-radius: 4px; display: block;
-                 width: 100%; flex: 1 1 auto; min-height: 0; }
+                 width: 100%; height: 50px; flex-shrink: 0; }
 
   .gpu-title { color: #76B900; font-size: 13px; font-weight: bold;
                margin-bottom: 4px; flex-shrink: 0; }

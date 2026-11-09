@@ -586,7 +586,8 @@ int main(int argc, char* argv[])
         StartHttpServer(httpPort);
 
     auto lastRender = std::chrono::steady_clock::now();
-    while (!(GetAsyncKeyState((int)'Q') & 0x8000))
+    // Accept 'q', 'Q', or Ctrl+Q — GetAsyncKeyState returns high-bit for both cases.
+    while (!(((GetAsyncKeyState('Q') | GetAsyncKeyState('q')) & 0x8000)))
     {
         CpuMetrics cpu{};
         cpu.loadPercent = SampleCpu();
