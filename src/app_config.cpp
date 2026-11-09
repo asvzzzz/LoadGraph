@@ -258,6 +258,45 @@ AppConfig LoadAppConfig()
             }
             if (*p == '}') ++p;
         }
+        else if (key == "backgrounds")
+        {
+            if (*p != '{') break;
+            ++p;
+            while (*p && *p != '}')
+            {
+                SkipSpaces(p);
+                if (*p == ',') { ++p; continue; }
+                if (*p == '}') break;
+
+                std::string ck;
+                if (!ReadJsonString(p, ck)) break;
+
+                SkipSpaces(p);
+                if (*p != ':') break;
+                ++p;
+                SkipSpaces(p);
+
+                std::string cv;
+                if (!ReadJsonString(p, cv)) break;
+
+                if (cv.size() == 6)
+                {
+                    bool ok = true;
+                    for (char c : cv)
+                    {
+                        if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')))
+                        { ok = false; break; }
+                    }
+                    if (!ok) continue;
+                }
+                else { continue; }
+
+                if      (ck == "page")       cfg.page_bg_color      = cv;
+                else if (ck == "section")    cfg.section_bg_color   = cv;
+                else if (ck == "chart")      cfg.chart_bg_color     = cv;
+            }
+            if (*p == '}') ++p;
+        }
         else
         {
             // Skip unknown value.
@@ -318,6 +357,11 @@ void SaveAppConfig(const AppConfig& cfg)
     out += "    \"gpu_fan\":      " + EmitJsonString(cfg.gpu_fan_color)       + ",\n";
     out += "    \"gpu_power\":    " + EmitJsonString(cfg.gpu_power_color)     + ",\n";
     out += "    \"total_power\":  " + EmitJsonString(cfg.total_power_color)   + "\n";
+    out += "  },\n";
+    out += "  \"backgrounds\": {\n";
+    out += "    \"page\":       " + EmitJsonString(cfg.page_bg_color)       + ",\n";
+    out += "    \"section\":    " + EmitJsonString(cfg.section_bg_color)    + ",\n";
+    out += "    \"chart\":      " + EmitJsonString(cfg.chart_bg_color)      + "\n";
     out += "  }\n";
     out += "}\n";
 

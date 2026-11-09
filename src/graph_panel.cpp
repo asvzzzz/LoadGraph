@@ -76,6 +76,13 @@ void GraphPanel::SetColor(const wxColour& color)
     m_hasColor = true;
 }
 
+// Set the panel background color.
+void GraphPanel::SetBgColor(const wxColour& color)
+{
+    m_bgColor = color;
+    m_hasBg = true;
+}
+
 // Select Y-axis tick spacing mode.
 void GraphPanel::SetYMode(GraphYMode mode)
 {
@@ -105,7 +112,7 @@ wxColour GraphPanel::Blend(const wxColour& fg, const wxColour& bg, double alpha)
 void GraphPanel::OnPaint(wxPaintEvent& /*evt*/)
 {
     wxAutoBufferedPaintDC dc(this);
-    const wxColour cardBg = Theme::Card();
+    const wxColour cardBg = m_hasBg ? m_bgColor : Theme::Card();
 
     // Explicitly fill the entire panel background to eliminate resize artifacts.
     dc.SetBackground(wxBrush(cardBg));

@@ -294,10 +294,12 @@ void MainFrame::BuildCpuSection(wxBoxSizer* container, wxWindow* parent)
 	m_cpuLoadGraph->SetYRange(0.0, 100.0);
 	m_cpuLoadGraph->SetYMode(GraphYMode::Percent);
 	m_cpuLoadGraph->SetColor(HexColor(m_cfg.cpu_load_color));
+	m_cpuLoadGraph->SetBgColor(HexColor(m_cfg.chart_bg_color));
 
 	m_ramUsageGraph = new GraphPanel(parent, "RAM Usage", "GB");
 	m_ramUsageGraph->SetYMode(GraphYMode::Gigabytes);
 	m_ramUsageGraph->SetColor(HexColor(m_cfg.ram_color));
+	m_ramUsageGraph->SetBgColor(HexColor(m_cfg.chart_bg_color));
 	// Fixed 0..total RAM range: avoids a drifting auto-scale.
 	const RamData ramInit = MetricsGetRam();
 	if (ramInit.totalBytes > 0)
@@ -323,6 +325,7 @@ void MainFrame::BuildCpuSection(wxBoxSizer* container, wxWindow* parent)
 		m_cpuPowerGraph->SetYRange(0.0, RoundUpWattsTo50(maxP));
 		m_cpuPowerGraph->SetYMode(GraphYMode::Watts);
 		m_cpuPowerGraph->SetColor(HexColor(m_cfg.cpu_power_color));
+		m_cpuPowerGraph->SetBgColor(HexColor(m_cfg.chart_bg_color));
 
 		// No trailing spacer here: RealizeUI adds the 5 px gap between the
 		// CPU section and the next one, so their border lines coincide.
@@ -341,6 +344,7 @@ void MainFrame::BuildCpuSection(wxBoxSizer* container, wxWindow* parent)
 		m_cpuTempGraph->SetYMode(GraphYMode::Celsius);
 		m_cpuTempGraph->SetAlarmThreshold(kAlarmTempC);
 		m_cpuTempGraph->SetColor(HexColor(m_cfg.cpu_temp_color));
+		m_cpuTempGraph->SetBgColor(HexColor(m_cfg.chart_bg_color));
 		row2->Add(m_cpuTempGraph, (cpuInit.fanRpm > 0) ? 1 : 2,
 		          wxEXPAND | wxLEFT | wxRIGHT, 5);
 
@@ -418,6 +422,7 @@ void MainFrame::BuildGpuSection(wxBoxSizer* container, wxWindow* parent)
 			// Fixed 0..100% range: auto scaling showed -1..2 at idle.
 			data.loadGraph->SetYRange(0.0, 100.0);
 			data.loadGraph->SetColor(HexColor(m_cfg.gpu_load_color));
+			data.loadGraph->SetBgColor(HexColor(m_cfg.chart_bg_color));
 			row1->Add(data.loadGraph, 1, wxEXPAND | wxLEFT | wxRIGHT, 5);
 			addPanel("gpu_load", data.loadGraph);
 		}
@@ -429,6 +434,7 @@ void MainFrame::BuildGpuSection(wxBoxSizer* container, wxWindow* parent)
 			data.tempGraph->SetYRange(0.0, 100.0);
 			data.tempGraph->SetAlarmThreshold(kAlarmTempC);
 			data.tempGraph->SetColor(HexColor(m_cfg.gpu_temp_color));
+			data.tempGraph->SetBgColor(HexColor(m_cfg.chart_bg_color));
 			row1->Add(data.tempGraph, 1, wxEXPAND | wxLEFT | wxRIGHT, 5);
 			addPanel("gpu_temp", data.tempGraph);
 		}
@@ -447,6 +453,7 @@ void MainFrame::BuildGpuSection(wxBoxSizer* container, wxWindow* parent)
 			// Fixed 0..total VRAM range (auto scaling showed -1..2 at idle).
 			data.vramGraph->SetYRange(0.0, std::ceil(BytesToGbs(gpu.vramTotalBytes)));
 			data.vramGraph->SetColor(HexColor(m_cfg.gpu_vram_color));
+			data.vramGraph->SetBgColor(HexColor(m_cfg.chart_bg_color));
 			row2->Add(data.vramGraph, (gpu.fanPercent >= 0.0 || gpu.fanRpm >= 0) ? 1 : 2,
 			          wxEXPAND | wxLEFT | wxRIGHT, 5);
 			addPanel("gpu_vram", data.vramGraph);
@@ -458,6 +465,7 @@ void MainFrame::BuildGpuSection(wxBoxSizer* container, wxWindow* parent)
 			// Fixed range: 0..100% (or 0..3000 RPM for the RPM fallback).
 			data.fanGraph->SetYRange(0.0, inPercent ? 100.0 : 3000.0);
 			data.fanGraph->SetColor(HexColor(m_cfg.gpu_fan_color));
+			data.fanGraph->SetBgColor(HexColor(m_cfg.chart_bg_color));
 			row2->Add(data.fanGraph, (gpu.vramTotalBytes > 0) ? 1 : 2,
 			          wxEXPAND | wxLEFT | wxRIGHT, 5);
 			addPanel("gpu_fan", data.fanGraph);
@@ -474,6 +482,7 @@ void MainFrame::BuildGpuSection(wxBoxSizer* container, wxWindow* parent)
 			data.powerGraph = new GraphPanel(parent, "Power", "W");
 			data.powerGraph->SetYMode(GraphYMode::Watts);
 			data.powerGraph->SetColor(HexColor(m_cfg.gpu_power_color));
+			data.powerGraph->SetBgColor(HexColor(m_cfg.chart_bg_color));
 
 			double limit = gpu.powerLimitWatts;
 			if (limit <= 0.0) limit = static_cast<double>(PowerTable::GetGpuTdp(gpu.name));
@@ -506,6 +515,7 @@ void MainFrame::BuildTotalPowerRow(wxBoxSizer* container, wxWindow* parent)
 	m_totalPowerGraph->SetYMode(GraphYMode::Watts);
 	m_totalPowerGraph->SetTickCount(5);
 	m_totalPowerGraph->SetColor(HexColor(m_cfg.total_power_color));
+	m_totalPowerGraph->SetBgColor(HexColor(m_cfg.chart_bg_color));
 	container->Add(m_totalPowerGraph, 1, wxEXPAND | wxLEFT | wxRIGHT, 5);
 
 	m_viewToggles["Total Power"] = m_totalPowerGraph;
@@ -888,13 +898,13 @@ void MainFrame::OnContentPaint(wxPaintEvent&)
 
 void MainFrame::ApplyTheme()
 {
-	const wxColour bg   = Theme::Bg();
-	const wxColour card = Theme::Card();
-	const wxColour text = Theme::Text();
-	const wxColour sub  = Theme::SubText();
+	const wxColour bg      = HexColor(m_cfg.page_bg_color);
+	const wxColour section = HexColor(m_cfg.section_bg_color);
+	const wxColour text    = Theme::Text();
+	const wxColour sub     = Theme::SubText();
 
 	SetBackgroundColour(bg);
-	if (m_header)  m_header->SetBackgroundColour(card);
+	if (m_header)  m_header->SetBackgroundColour(section);
 	if (m_content) m_content->SetBackgroundColour(bg);
 
 	for (wxStaticText* t : m_primaryTexts)

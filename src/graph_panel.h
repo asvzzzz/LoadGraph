@@ -53,6 +53,9 @@ public:
     // Use a custom color for the line and fill. Overrides purple/blue logic.
     void SetColor(const wxColour& color);
 
+    // Set the panel background color (replaces theme-based card bg).
+    void SetBgColor(const wxColour& color);
+
     // Set Y-axis tick spacing mode. Controls how axis labels are computed so
     // that they always land on round numbers regardless of panel height.
     void SetYMode(GraphYMode mode);
@@ -91,6 +94,10 @@ private:
     // Custom color override (empty = use purple/blue default).
     wxColour m_color;
     bool     m_hasColor = false;
+
+    // Custom background color override (false = use theme card bg).
+    wxColour m_bgColor;
+    bool     m_hasBg = false;
 
     // Y-axis tick spacing mode. Controls how the axis labels are computed.
     GraphYMode m_yMode = GraphYMode::Auto;

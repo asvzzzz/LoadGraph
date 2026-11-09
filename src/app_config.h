@@ -21,6 +21,11 @@ struct AppConfig
     std::string gpu_power_color  = "ffc107";
     std::string total_power_color = "ff5722";
 
+    // Background colors (hex without #).
+    std::string page_bg_color    = "1a1a2e";
+    std::string section_bg_color = "16213e";
+    std::string chart_bg_color   = "0f3460";
+
     int     http_port   = 9115;
     bool    http_enabled = false;
 };

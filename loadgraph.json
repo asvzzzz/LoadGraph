@@ -12,5 +12,10 @@
     "gpu_fan": "3154E1",
     "gpu_power": "ffc107",
     "total_power": "ff5722"
+  },
+  "backgrounds": {
+    "page": "1a1a2e",
+    "section": "16213e",
+    "chart": "0f3460"
   }
 }
