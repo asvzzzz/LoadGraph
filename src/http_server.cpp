@@ -23,38 +23,47 @@ static const char* kHtmlPage = R"(<!DOCTYPE html>
 <title>LoadGraph</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
-  body { background: #1a1a2e; color: #e0e0e0; font-family: Consolas, monospace;
-         padding: 16px; height: 100vh; overflow-y: auto; }
+  html, body { background: #1a1a2e; color: #e0e0e0; font-family: Consolas, monospace;
+               height: 100vh; overflow: hidden; }
 
-  h1  { color: #76B900; margin-bottom: 8px; font-size: 18px; }
+  h1  { color: #76B900; margin: 0 0 8px; font-size: 18px; padding: 0 16px; flex-shrink: 0; }
   .cpu-name { color: #00bcd4; }
 
-  /* Sections stack vertically, no flex growth — charts use calc-based heights. */
+  /* Main scrollable content area — fills remaining viewport height. */
+  .content { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0;
+             padding: 0 16px 16px; overflow-y: auto; }
+
+  /* Sections stack vertically. Each section grows proportionally via flex. */
   .section { background: #16213e; border-radius: 8px; padding: 10px 12px;
-             margin-bottom: 8px; display: flex; flex-direction: column; gap: 6px; }
+             margin-bottom: 8px; display: flex; flex-direction: column; gap: 4px;
+             /* CPU section gets proportional share of available height. */
+             flex: 2 2 auto; min-height: 0; }
 
-  /* Row of two charts side by side. */
-  .chart-row { display: flex; gap: 8px; }
-  .chart-cell { flex: 1 1 0; display: flex; flex-direction: column; min-width: 0; }
+  /* GPU sections also grow proportionally. */
+  .gpu-section { background: #16213e; border-radius: 8px; padding: 8px 12px;
+                 margin-bottom: 8px; display: flex; flex-direction: column; gap: 4px;
+                 flex: 1 1 auto; min-height: 0; }
 
-  /* Single full-width chart row. */
-  .full-row { }
+  /* Row of two charts side by side — each cell grows to fill row height. */
+  .chart-row { display: flex; gap: 8px; flex: 1 1 auto; min-height: 0; }
+  .chart-cell { flex: 1 1 0; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 
-  /* Inline value label: "CPU Temp <span>42 C</span>" — no right-alignment. */
-  .val-row { display: block; height: 20px; line-height: 20px;
+  /* Single full-width chart row — grows to fill available height. */
+  .full-row { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+
+  /* Inline value label — fixed height, no growth. */
+  .val-row { display: block; height: 20px; line-height: 20px; flex-shrink: 0;
              font-size: 12px; color: #aaa; white-space: nowrap; overflow: hidden;
              text-overflow: ellipsis; }
   .val-val { color: #fff; font-weight: bold; font-size: 13px; }
 
-  /* Charts: fixed base height, grow proportionally via flex in their row. */
+  /* Canvas fills remaining cell height — proportional resize. */
   canvas.chart { background: #0f3460; border-radius: 4px; display: block;
-                 width: 100%; height: 60px; flex-shrink: 0; }
+                 width: 100%; flex: 1 1 auto; min-height: 0; }
 
   .gpu-title { color: #76B900; font-size: 13px; font-weight: bold;
-               margin-bottom: 4px; white-space: nowrap; overflow: hidden;
-               text-overflow: ellipsis; }
-  .footer    { text-align: center; color: #555; font-size: 11px; margin-top: 8px; }
-
+               margin-bottom: 2px; flex-shrink: 0; white-space: nowrap;
+               overflow: hidden; text-overflow: ellipsis; }
   .green  { color: #76B900; }
   .cyan   { color: #00bcd4; }
   .yellow { color: #ffc107; }
@@ -63,6 +72,7 @@ static const char* kHtmlPage = R"(<!DOCTYPE html>
 </head>
 <body>
 <h1>LoadGraph <span id="cpuName" class="cpu-name"></span></h1>
+<div class="content">
 
 <!-- CPU section — rows mirror GUI layout -->
 <div class="section">
@@ -101,6 +111,8 @@ static const char* kHtmlPage = R"(<!DOCTYPE html>
 </div>
 
 <div id="gpuSections"></div>
+
+</div>
 
 <script>
 const GPU_COLORS = ['#76B900','#00bcd4','#ffc107','#f44336','#e91e63'];
@@ -238,7 +250,7 @@ function getOrCreateGpuSec(i, name, col) {
   var div = document.getElementById('gpusec'+i);
   if (div) return div;
   div = document.createElement('div');
-  div.className = 'section';
+  div.className = 'gpu-section';
   div.id = 'gpusec'+i;
   div.innerHTML = '<div class="gpu-title" style="color:'+col+'">GPU '+i+': '+esc(name)+'</div>';
   document.getElementById('gpuSections').appendChild(div);
@@ -253,7 +265,7 @@ function clearChartsFrom(sec) {
 function updateGpu(d) {
   var gpuDiv = document.getElementById('gpuSections');
   var existing = {};
-  gpuDiv.querySelectorAll('.section').forEach(function(el) {
+  gpuDiv.querySelectorAll('.gpu-section').forEach(function(el) {
     var m = el.id.match(/^gpusec(\d+)$/);
     if (m) existing[parseInt(m[1])] = el;
   });
