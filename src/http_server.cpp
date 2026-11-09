@@ -528,9 +528,22 @@ static void HttpLoop(int port)
         fd_set rf; FD_ZERO(&rf); FD_SET(srv, &rf);
         timeval tv{}; tv.tv_sec=1; tv.tv_usec=0;
         if (select(0, &rf, nullptr, nullptr, &tv) <= 0 || !FD_ISSET(srv, &rf)) continue;
-        SOCKET client = accept(srv, nullptr, nullptr);
+        sockaddr_in clientAddr{};
+        int clientLen = sizeof(clientAddr);
+        SOCKET client = accept(srv, (sockaddr*)&clientAddr, &clientLen);
         if (client == INVALID_SOCKET) continue;
-        char req[2048] = {}; recv(client, req, sizeof(req)-1, 0);
+        char ipStr[64] = {};
+        inet_ntop(AF_INET, &clientAddr.sin_addr, ipStr, sizeof(ipStr));
+        char req[2048] = {};
+        int n = recv(client, req, sizeof(req)-1, 0);
+        if (n <= 0) { closesocket(client); continue; }
+        req[n] = '\0';
+        // Log: client IP + first line of request.
+        char firstLine[256] = {};
+        strncpy(firstLine, req, sizeof(firstLine)-1);
+        char* nl = strchr(firstLine, '\n'); if (nl) *nl = '\0';
+        printf("HTTP: %s -> %s\n", ipStr, firstLine);
+        fflush(stdout);
         std::string resp;
         if (strstr(req, "GET /api/metrics") != nullptr)
         {
