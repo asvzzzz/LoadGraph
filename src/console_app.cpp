@@ -55,6 +55,8 @@ static FnNvmlDeviceGetPowerUsage     g_fnGetPower       = nullptr;
 struct CpuMetrics
 {
     double   loadPercent  = 0.0;
+    double   powerWatts   = -1.0;
+    double   tdpWatts     = -1.0;
     uint64_t uptimeMs     = 0;
     std::string cpuName;
 };
@@ -283,6 +285,60 @@ static const char* TempColor(double t)
 }
 
 // ============================================================================
+// ASCII waveform (scrolling history, like an oscilloscope).
+// Uses Unicode block characters: ░▒▓█ for 4 levels of height.
+// Each column represents one sample; `history` holds the last N values [0,100].
+// ============================================================================
+static const char* kWaveChars = " ░▏▎▍▌▋▊▉█"; // 16 levels for smoother look
+
+template <typename T>
+class RingBuffer
+{
+    std::vector<T> buf_;
+    size_t head_ = 0, count_ = 0;
+public:
+    explicit RingBuffer(size_t cap) : buf_(cap, T{}) {}
+    void Push(const T& v) { buf_[head_] = v; head_ = (head_ + 1) % buf_.size(); if (count_ < buf_.size()) ++count_; }
+    size_t Size() const { return count_; }
+    T Get(size_t i) const // i=0 is oldest
+    { if (count_ == 0) return T{}; size_t idx = (head_ + buf_.size() - count_ + i) % buf_.size(); return buf_[idx]; }
+};
+
+static RingBuffer<double> g_cpuHist(60), g_ramHist(60);
+
+// Render a waveform row: `label` on left, values from `hist`, width columns.
+// Uses Unicode block chars (U+2591-U+2588) for smooth 4-level histogram.
+static void DrawWave(const char* label, const RingBuffer<double>& hist, int cols)
+{
+    std::string row;
+    row.reserve(static_cast<size_t>(cols) * 4u); // 4 bytes per UTF-8 char max
+    int steps = (int)hist.Size();
+    for (int c = 0; c < cols; ++c)
+    {
+        int hi = steps - cols + c;
+        double v = (hi >= 0) ? hist.Get(static_cast<size_t>(hi)) : 0.0;
+        v = std::max(0.0, std::min(100.0, v));
+        int lv = static_cast<int>(v / 100.0 * 4.0 + 0.5);
+        lv = std::max(0, std::min(3, lv));
+        if (lv == 0) row += ' ';
+        else
+        {
+            static const char b1[] = {'\xe2', '\x96', 0}; // U+25xx prefix
+            static const char b2[] = {'\x91', 0, 0};       // ░
+            static const char b3[] = {'\x92', 0, 0};       // ▒
+            static const char b4[] = {'\x93', 0, 0};       // ▓
+            static const char b5[] = {'\x88', 0, 0};       // █
+            row += b1;
+            if      (lv == 1) row += b2;
+            else if (lv == 2) row += b3;
+            else if (lv == 3) row += b4;
+            else                row += b5;
+        }
+    }
+    printf("%s%-12s%s%s\n", C_BOLD, label, C_RESET, row.c_str());
+}
+
+// ============================================================================
 // Render
 // ============================================================================
 static void Render(const CpuMetrics& cpu, const RamMetrics& ram,
@@ -298,22 +354,30 @@ static void Render(const CpuMetrics& cpu, const RamMetrics& ram,
         printf(" %sCPU (N/A)%s", C_GRAY, C_RESET);
     printf(" %s| Uptime: %s%s\n", C_GRAY, C_WHITE, FormatUptime(cpu.uptimeMs).c_str());
 
-    // CPU
-    printf("%s  CPU Load     %s%6.1f%%  %s[%s]%s\n",
-           C_BOLD, C_RESET, cpu.loadPercent, C_GRAY,
-           ProgressBar(cpu.loadPercent, 30).c_str(), C_RESET);
+    // Push current samples into history rings.
+    g_cpuHist.Push(cpu.loadPercent);
+    g_ramHist.Push(ram.loadPercent);
 
-    // RAM
-    printf("%s\n  RAM Usage    %s%6.1f%%  %s[%s]%s\n",
-           C_BOLD, C_RESET, ram.loadPercent, C_GRAY,
-           ProgressBar(ram.loadPercent, 30).c_str(), C_RESET);
-    printf("%s%4.1f GB used / %4.1f GB total%s\n",
+    const int kW = 40; // waveform width in chars
+
+    // CPU section
+    printf("%s\n  CPU Load     %s%5.1f%%\n", C_BOLD, C_RESET, cpu.loadPercent);
+    DrawWave("", g_cpuHist, kW);
+
+    if (cpu.powerWatts > 0.0)
+        printf("  CPU Power    %s%5.1f W / %5.0f W TDP%s\n",
+               C_RESET, cpu.powerWatts, cpu.tdpWatts, C_GRAY);
+
+    // RAM section
+    printf("%s\n  RAM Usage    %s%5.1f%%\n", C_BOLD, C_RESET, ram.loadPercent);
+    DrawWave("", g_ramHist, kW);
+    printf("%s           %4.1f GB / %4.1f GB%s\n",
            C_GRAY,
            static_cast<double>(ram.totalBytes - ram.freeBytes) / (1024.0*1024*1024),
            static_cast<double>(ram.totalBytes) / (1024.0*1024*1024),
            C_RESET);
 
-    // GPU
+    // GPU section
     if (!gpus.empty())
     {
         printf("%s%s\n  GPU%s", C_BOLD, C_NVGREEN, C_RESET);
@@ -323,9 +387,8 @@ static void Render(const CpuMetrics& cpu, const RamMetrics& ram,
             printf("\n\n  --- GPU %zu: %s ---\n", i, g.name.c_str());
             if (g.loadPercent >= 0.0)
             {
-                printf("%s    Load       %s%6.1f%%  %s[%s]%s\n",
-                       C_BOLD, C_RESET, g.loadPercent, C_GRAY,
-                       ProgressBar(g.loadPercent, 30).c_str(), C_RESET);
+                printf("%s    Load       %s%5.1f%%\n", C_BOLD, C_RESET, g.loadPercent);
+                // Could add per-GPU history rings here too.
             }
             if (g.temperature >= 0.0)
                 printf("%s    Temp       %s%4.0f C%s\n",
@@ -333,13 +396,11 @@ static void Render(const CpuMetrics& cpu, const RamMetrics& ram,
             if (g.vramTotalBytes > 0)
             {
                 double pct = g.vramUsedBytes * 100.0 / g.vramTotalBytes;
-                printf("%s    VRAM       %s%6.1f%%  %s[%s]%s\n",
-                       C_BOLD, C_RESET, pct, C_GRAY,
-                       ProgressBar(pct, 30).c_str(), C_RESET);
+                printf("%s    VRAM       %s%5.1f%%\n", C_BOLD, C_RESET, pct);
                 double usedGb = static_cast<double>(g.vramUsedBytes) / (1024.0*1024*1024);
                 double totGb  = static_cast<double>(g.vramTotalBytes) / (1024.0*1024*1024);
-                printf("%s               %s%.1f GB / %.1f GB%s\n",
-                       C_GRAY, C_RESET, usedGb, totGb, C_RESET);
+                printf("%s%4.1f GB / %4.1f GB%s\n",
+                       C_GRAY, usedGb, totGb, C_RESET);
             }
             if (g.fanPercent >= 0.0)
                 printf("%s    Fan        %s%5.0f%%\n", C_BOLD, C_RESET, g.fanPercent);

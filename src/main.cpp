@@ -70,27 +70,111 @@ LONG WINAPI TopLevelFilter(EXCEPTION_POINTERS* ep)
 #ifdef PLATFORM_WINDOWS
 static wxIcon MakeNvidiaGreenIcon()
 {
-    // NVIDIA green (#76B900)
+    // NVIDIA green (#76B900) rounded square with white "LG" label.
     const int R = 118, G = 185, B = 0;
 
-    // Create a bitmap and draw into it via a memory DC.
-    wxBitmap bmp(64, 64);
-    wxMemoryDC dc(bmp);
-    dc.SetBackground(*wxTRANSPARENT_BRUSH);
-    dc.Clear();
+    // Build the image pixel-by-pixel for full control over alpha.
+    wxImage img(64, 64);
+    unsigned char* pixels = img.GetData();
+    memset(pixels, 0, 64 * 64 * 3);          // RGB init to black (will fill)
+    unsigned char* alpha  = img.GetAlpha();
+    if (!alpha) { alpha = new unsigned char[64 * 64]; memset(alpha, 255, 64 * 64); img.SetAlpha(alpha); delete[] alpha; }
+    else        memset(alpha, 0, 64 * 64);
 
-    wxPen   pen(wxColour(R, G, B), 0);
-    wxBrush brush(wxColour(R, G, B));
-    dc.SetPen(pen);
-    dc.SetBrush(brush);
-    dc.DrawRoundedRectangle(0, 0, 64, 64, 12);
+    const int cx = 32, cy = 32, rx = 28, ry = 28, cr = 10; // center, radius, corner
+    for (int y = 0; y < 64; ++y)
+    {
+        for (int x = 0; x < 64; ++x)
+        {
+            int idx = (y * 64 + x);
+            float dx = (float)(x - cx) / (float)rx;
+            float dy = (float)(y - cy) / (float)ry;
+            // Rounded rectangle mask: ellipse with corner clipping
+            bool inEllipse = (dx*dx + dy*dy) <= 1.0f;
+            bool inCorner  = false;
+            if (!inEllipse)
+            {
+                float ex = fabsf(dx) - 1.0f;
+                float ey = fabsf(dy) - 1.0f;
+                float cd = (float)cr / (float)rx; // corner radius normalized
+                inCorner = (ex*ex + ey*ey) <= (cd*cd);
+            }
+            bool inside = inEllipse || inCorner;
+            if (inside)
+            {
+                pixels[idx*3]   = (unsigned char)R;
+                pixels[idx*3+1] = (unsigned char)G;
+                pixels[idx*3+2] = (unsigned char)B;
+                alpha[idx] = 255;
+            }
+        }
+    }
 
-    // White "LG" label
-    dc.SetTextForeground(*wxWHITE);
-    wxFont font(28, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_BOLD);
-    dc.SetFont(font);
-    dc.DrawText("LG", 14, 16);
+    // Draw "LG" text using a simple pixel font (5x7 chars, centered).
+    // White text at center.
+    const int tx0 = 18, ty0 = 18;
+    static const unsigned char lg_bits[] = {
+        // 'L': 5 wide x 7 tall
+        0x01, 0x01, 0x01, 0x01, 0x01,
+        0x01, 0x01, 0x01, 0x01, 0x01,
+        0x01, 0x01, 0x01, 0x01, 0x01,
+        0x00, 0x00, 0x00, 0x00, 0xFF,
+        // 'G': 5 wide x 7 tall
+        0x00, 0x3E, 0x41, 0x41, 0x3E,
+        0x41, 0x41, 0x41, 0x22, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00,
+    };
+    // Draw L at (tx0, ty0), G at (tx0+7, ty0) — each char is 5x7
+    auto drawChar = [&](int ox, int oy, const unsigned char* bits, int w, int h) {
+        for (int row = 0; row < h; ++row)
+            for (int col = 0; col < w; ++col)
+            {
+                if (bits[row*w + col] & 0x80)
+                {
+                    int px = ox + col, py = ty0 + row;
+                    if (px >= 0 && px < 64 && py >= 0 && py < 64)
+                    {
+                        int pi = py*64 + px;
+                        pixels[pi*3]   = 255;
+                        pixels[pi*3+1] = 255;
+                        pixels[pi*3+2] = 255;
+                        alpha[pi] = 255;
+                    }
+                }
+            }
+    };
+    // 'L' — 5x7 block: column of 7 on left, base row across bottom
+    for (int r = 0; r < 7; ++r)
+        for (int c = 0; c < 5; ++c)
+        {
+            bool lit = (c == 0) || (r == 6);
+            if (lit)
+            {
+                int px = tx0 + c, py = ty0 + r;
+                if (px>=0 && px<64 && py>=0 && py<64)
+                { int pi=py*64+px; pixels[pi*3]=255; pixels[pi*3+1]=255; pixels[pi*3+2]=255; alpha[pi]=255; }
+            }
+        }
+    // 'G' — 5x7 block
+    for (int r = 0; r < 7; ++r)
+        for (int c = 0; c < 5; ++c)
+        {
+            bool lit = false;
+            if      (r == 0 && c >= 1 && c <= 3) lit = true;
+            else if (r == 1 && c >= 0 && c <= 4) lit = true;
+            else if (r == 2 && c >= 0 && c <= 4) lit = true;
+            else if (r == 3 && (c == 0 || c == 4)) lit = true;
+            else if (r == 4 && c >= 2 && c <= 4) lit = true;
+            else if (r == 5 && c >= 1 && c <= 3) lit = true;
+            if (lit)
+            {
+                int px = tx0 + 7 + c, py = ty0 + r;
+                if (px>=0 && px<64 && py>=0 && py<64)
+                { int pi=py*64+px; pixels[pi*3]=255; pixels[pi*3+1]=255; pixels[pi*3+2]=255; alpha[pi]=255; }
+            }
+        }
 
+    wxBitmap bmp(img);
     wxIcon icon;
     icon.CopyFromBitmap(bmp);
     return icon;
