@@ -714,7 +714,7 @@ static void DumpWmiObject(IWbemClassObject* pObj)
                 {
                     swprintf(desc, 128, L"Get err=0x%08X", (unsigned)hr2);
                 }
-                LOGI("DIAG WMI prop %s: %s", bName, desc);
+                LOGI("DIAG WMI prop %ls: %ls", bName, desc);
                 VariantClear(&vt);
                 SysFreeString(bName);
             }
@@ -874,12 +874,12 @@ static void ProbeAllTempSources()
                                  reinterpret_cast<LPBYTE>(val), &vsize) == ERROR_SUCCESS)
             {
                 if (type == REG_SZ || type == REG_EXPAND_SZ)
-                    LOGI("DIAG Reg %s = \"%s\" (type=%lu)", name, val, static_cast<unsigned long>(type));
+                    LOGI("DIAG Reg %ls = \"%ls\" (type=%lu)", name, val, static_cast<unsigned long>(type));
                 else if (type == REG_DWORD)
-                    LOGI("DIAG Reg %s = 0x%08X (type=%lu)", name,
+                    LOGI("DIAG Reg %ls = 0x%08X (type=%lu)", name,
                          *reinterpret_cast<uint32_t*>(val), static_cast<unsigned long>(type));
                 else
-                    LOGI("DIAG Reg %s = <binary %lu bytes type=%lu>", name,
+                    LOGI("DIAG Reg %ls = <binary %lu bytes type=%lu>", name,
                          static_cast<unsigned long>(vsize), static_cast<unsigned long>(type));
             }
         }
@@ -943,7 +943,7 @@ void CpuMonitor::QueryCpuName()
         {
             std::lock_guard<std::mutex> lock(m_mutex);
             m_metrics.cpuName = name;
-            LOGI("CPU name: %s", name);
+            LOGI("CPU name: %ls", name);
         }
         RegCloseKey(hKey);
     }

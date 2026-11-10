@@ -215,24 +215,20 @@ static void HttpLoop(int port, const AppConfig& cfg)
         else if (isIndex)    body = RenderDashboard(port, cfg);
         else if (isFavicon)
         {
-            const char* hdr200 = "HTTP/1.1 200 OK\r\n"
-                                 "Content-Type: image/x-icon\r\n"
-                                 "Connection: close\r\n";
-            int hlen = (int)strlen(hdr200);
-            // Send header first, then ICO bytes, then content-length trailer is NOT needed
-            // because we use Connection: close — but let's be proper and send Content-Length.
-            char clen[32];
-            int clenLen = snprintf(clen, sizeof(clen), "Content-Length: %u\r\n\r\n",
-                                   (unsigned int)kLoadGraphIcoSize);
-            int total = hlen + clenLen + (int)kLoadGraphIcoSize;
+            // Build the full header in one string to avoid partial-send over-read.
+            char hdr[128];
+            int hlen = snprintf(hdr, sizeof(hdr),
+                "HTTP/1.1 200 OK\r\n"
+                "Content-Type: image/x-icon\r\n"
+                "Connection: close\r\n"
+                "Content-Length: %u\r\n\r\n",
+                (unsigned int)kLoadGraphIcoSize);
+            // Send header — if client disconnected mid-header, stop immediately.
             int sent = 0;
-            // header
             while (sent < hlen)
-            { int sn = send(client, hdr200 + sent, hlen - sent, 0); if (sn <= 0) break; sent += sn; }
-            // content-length line
-            while (sent < hlen + clenLen)
-            { int sn = send(client, clen + (sent - hlen), clenLen - (sent - hlen), 0); if (sn <= 0) break; sent += sn; }
-            // body
+            { int sn = send(client, hdr + sent, hlen - sent, 0); if (sn <= 0) break; sent += sn; }
+            if (sent < hlen) { closesocket(client); continue; }
+            // Send body.
             const unsigned char* p = kLoadGraphIcoBytes;
             size_t rem = kLoadGraphIcoSize;
             while (rem > 0)
@@ -240,7 +236,7 @@ static void HttpLoop(int port, const AppConfig& cfg)
                 int chunk = (int)(rem > 4096 ? 4096 : rem);
                 int sn = send(client, (const char*)p, chunk, 0);
                 if (sn <= 0) break;
-                sent += sn; p += sn; rem -= sn;
+                p += sn; rem -= sn;
             }
             closesocket(client);
             continue;

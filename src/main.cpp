@@ -109,7 +109,7 @@ public:
         AppConfig appCfg = LoadAppConfig();
 
         LOGI("Starting...");
-        LOGI("wxWidgets %s", wxVERSION_STRING);
+        LOGI("wxWidgets %ls", wxVERSION_STRING);
 
 #ifdef PLATFORM_WINDOWS
         // Elevated helper mode: invoked via UAC "runas" with --install-driver

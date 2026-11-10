@@ -96,7 +96,6 @@ if(WIN32 AND DEFINED WX_CONFIG_PATH)
     set(wxWidgets_LIBRARIES
         "${WX_CONFIG_PATH}/build_static/lib/vc_x64_lib/wxmsw32u_core.lib"
         "${WX_CONFIG_PATH}/build_static/lib/vc_x64_lib/wxbase32u.lib"
-        "${WX_CONFIG_PATH}/build_static/lib/vc_x64_lib/wxmsw32u_gl.lib"
         "${WX_CONFIG_PATH}/build_static/lib/vc_x64_lib/wxpng.lib"
         "${WX_CONFIG_PATH}/build_static/lib/vc_x64_lib/wxtiff.lib"
         "${WX_CONFIG_PATH}/build_static/lib/vc_x64_lib/wxjpeg.lib"

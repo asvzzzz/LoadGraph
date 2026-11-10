@@ -82,13 +82,6 @@ static wxString FormatUptime(uint64_t totalMs)
 	return result;
 }
 
-// Round a watt value up to the next multiple of 50 (minimum 100 W).
-static int RoundUpWattsTo50(double watts)
-{
-	if (watts < 50.0) return 100;
-	return static_cast<int>(std::ceil(watts / 50.0)) * 50;
-}
-
 // Convert bytes to gigabytes.
 static double BytesToGbs(uint64_t bytes)
 {
@@ -229,9 +222,15 @@ void MainFrame::RealizeUI()
 	// stretches and ellipsizes so the uptime never gets pushed out).
 	wxString cpuLabel = "CPU";
 	const CpuData cpuInit = MetricsGetCpu();
-	const std::wstring cpuName = cpuInit.cpuName;
-	if (!cpuName.empty()) cpuLabel += "  " + wxString(cpuName.c_str());
-	else                  cpuLabel += "  (N/A)";
+#ifdef PLATFORM_WINDOWS
+	const std::wstring& cpuNameW = cpuInit.cpuName;
+	if (!cpuNameW.empty()) cpuLabel += "  " + wxString(cpuNameW.c_str());
+	else                   cpuLabel += "  (N/A)";
+#else
+	const std::string& cpuNameS = cpuInit.cpuName;
+	if (!cpuNameS.empty()) cpuLabel += "  " + wxString::FromUTF8(cpuNameS.c_str());
+	else                   cpuLabel += "  (N/A)";
+#endif
 	wxStaticText* cpuT = new wxStaticText(m_header, wxID_ANY, cpuLabel);
 	wxFont cpuFont(11, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_BOLD);
 	cpuT->SetFont(cpuFont);
