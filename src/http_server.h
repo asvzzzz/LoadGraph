@@ -13,4 +13,9 @@ void StartHttpServer(const AppConfig& cfg);
 inline void StartHttpServer(const AppConfig&) {}
 #endif
 
+// HTML rendering helpers — exposed so console_app.cpp can reuse them.
+extern const char* kHtmlPageHead;
+std::string GetHtmlBody();
+std::string RenderHtml(const char* head, const char* body, int port, const AppConfig& cfg);
+
 #endif // HTTP_SERVER_H

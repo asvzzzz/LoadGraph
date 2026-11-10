@@ -103,11 +103,20 @@ MainFrame::MainFrame(const wxString& title, const AppConfig& cfg)
 	Theme::Update();
 
 	int x = 100, y = 100, w = 640, h = 720;
-	bool hasPos  = Config::LoadWindowPosition(x, y);
-	bool hasSize = Config::LoadWindowSize(w, h);
+#ifdef PLATFORM_WINDOWS
+	x = m_cfg.window_x;
+	y = m_cfg.window_y;
+#endif
+	bool hasPos = false;
+#ifdef PLATFORM_WINDOWS
+	hasPos = (m_cfg.window_x != 0 || m_cfg.window_y != 0);
+#else
+	hasPos = Config::LoadWindowPosition(x, y);
+	Config::LoadWindowSize(w, h);
+#endif
 
 	wxPoint pos = hasPos ? wxPoint(x, y) : wxDefaultPosition;
-	wxSize  size = hasSize ? wxSize(w, h) : wxSize(640, 720);
+	wxSize  size = hasPos ? wxSize(w, h) : wxSize(640, 720);
 
 	SetPosition(pos);
 	SetClientSize(size);
@@ -291,13 +300,13 @@ void MainFrame::BuildCpuSection(wxBoxSizer* container, wxWindow* parent)
 	// Row 1: CPU Load + RAM Usage side by side.
 	wxBoxSizer* row1 = new wxBoxSizer(wxHORIZONTAL);
 
-	m_cpuLoadGraph = new GraphPanel(parent, "CPU Load", "%");
+	m_cpuLoadGraph = new GraphPanel(parent, "Load", "%");
 	m_cpuLoadGraph->SetYRange(0.0, 100.0);
 	m_cpuLoadGraph->SetYMode(GraphYMode::Percent);
 	m_cpuLoadGraph->SetColor(HexColor(m_cfg.cpu_load_color));
 	m_cpuLoadGraph->SetBgColor(HexColor(m_cfg.chart_bg_color));
 
-	m_ramUsageGraph = new GraphPanel(parent, "RAM Usage", "GB");
+	m_ramUsageGraph = new GraphPanel(parent, "RAM", "GB");
 	m_ramUsageGraph->SetYMode(GraphYMode::Gigabytes);
 	m_ramUsageGraph->SetColor(HexColor(m_cfg.ram_color));
 	m_ramUsageGraph->SetBgColor(HexColor(m_cfg.chart_bg_color));
@@ -313,8 +322,8 @@ void MainFrame::BuildCpuSection(wxBoxSizer* container, wxWindow* parent)
 	container->Add(row1, 1, wxEXPAND);
 	container->AddSpacer(5);
 
-	m_viewToggles["CPU Load"]  = m_cpuLoadGraph;
-	m_viewToggles["RAM Usage"] = m_ramUsageGraph;
+	m_viewToggles["cpu_load"]  = m_cpuLoadGraph;
+	m_viewToggles["ram"]       = m_ramUsageGraph;
 
 	const CpuData cpuInit = MetricsGetCpu();
 
@@ -323,7 +332,7 @@ void MainFrame::BuildCpuSection(wxBoxSizer* container, wxWindow* parent)
 	{
 		wxBoxSizer* row2 = new wxBoxSizer(wxHORIZONTAL);
 
-		m_cpuTempGraph = new GraphPanel(parent, "CPU Temp", "C");
+		m_cpuTempGraph = new GraphPanel(parent, "Temp", "C");
 		m_cpuTempGraph->SetYRange(0.0, 100.0);
 		m_cpuTempGraph->SetYMode(GraphYMode::Celsius);
 		m_cpuTempGraph->SetAlarmThreshold(kAlarmTempC);
@@ -334,24 +343,24 @@ void MainFrame::BuildCpuSection(wxBoxSizer* container, wxWindow* parent)
 
 		if (cpuInit.fanRpm > 0)
 		{
-			m_cpuFanGraph = new GraphPanel(parent, "CPU Fan", "RPM");
+			m_cpuFanGraph = new GraphPanel(parent, "Fan", "RPM");
 			row2->Add(m_cpuFanGraph, 1, wxEXPAND | wxLEFT | wxRIGHT, 5);
 		}
 
 		container->Add(row2, 1, wxEXPAND);
 
-		m_viewToggles["CPU Temp"] = m_cpuTempGraph;
+		m_viewToggles["cpu_temp"] = m_cpuTempGraph;
 
 		if (m_cpuFanGraph)
 		{
-			m_viewToggles["CPU Fan"] = m_cpuFanGraph;
+			m_viewToggles["fan"] = m_cpuFanGraph;
 		}
 	}
 
 	// Row 3: CPU Power (only when a TDP or a real power sensor is known).
 	if (cpuInit.tdpWatts > 0.0)
 	{
-		m_cpuPowerGraph = new GraphPanel(parent, "CPU Power", "W");
+		m_cpuPowerGraph = new GraphPanel(parent, "Power", "W");
 		const double maxP = std::max(250.0, cpuInit.tdpWatts * 1.1);
 		m_cpuPowerGraph->SetYRange(0.0, maxP);
 		m_cpuPowerGraph->SetYMode(GraphYMode::Watts);
@@ -362,7 +371,7 @@ void MainFrame::BuildCpuSection(wxBoxSizer* container, wxWindow* parent)
 		// CPU section and the next one, so their border lines coincide.
 		container->Add(m_cpuPowerGraph, 1, wxEXPAND | wxLEFT | wxRIGHT, 5);
 
-		m_viewToggles["CPU Power"] = m_cpuPowerGraph;
+		m_viewToggles["cpu_power"] = m_cpuPowerGraph;
 	}
 }
 
@@ -541,11 +550,11 @@ void MainFrame::BuildViewMenu(wxMenuBar* menuBar, const std::map<std::string, bo
 		Bind(wxEVT_MENU, &MainFrame::OnViewToggle, this, id);
 	};
 
-	if (m_viewToggles.count("CPU Load"))  addToggle("CPU Load",  "CPU Load");
-	if (m_viewToggles.count("RAM Usage")) addToggle("RAM Usage", "RAM Usage");
-	if (m_viewToggles.count("CPU Power")) addToggle("CPU Power", "CPU Power");
-	if (m_viewToggles.count("CPU Temp"))  addToggle("CPU Temp",  "CPU Temperature");
-	if (m_viewToggles.count("CPU Fan"))   addToggle("CPU Fan",   "CPU Fan Speed");
+	if (m_viewToggles.count("cpu_load"))  addToggle("cpu_load",  "Load");
+	if (m_viewToggles.count("ram"))       addToggle("ram",       "RAM");
+	if (m_viewToggles.count("cpu_power")) addToggle("cpu_power", "Power");
+	if (m_viewToggles.count("cpu_temp"))  addToggle("cpu_temp",  "Temp");
+	if (m_viewToggles.count("fan"))       addToggle("fan",       "Fan");
 
 	const bool anyGpu = !m_gpuGroupToggles.empty();
 	if (anyGpu)
@@ -730,7 +739,13 @@ void MainFrame::OnClose(wxCloseEvent& evt)
 	int x = 0, y = 0, w = 0, h = 0;
 	GetPosition(&x, &y);
 	GetClientSize(&w, &h);
+#ifdef PLATFORM_WINDOWS
+	m_cfg.window_x = x;
+	m_cfg.window_y = y;
+	SaveAppConfig(m_cfg);
+#else
 	Config::SaveWindowPosition(x, y, w, h);
+#endif
 
 	if (m_timer.IsRunning()) m_timer.Stop();
 	MetricsShutdown();

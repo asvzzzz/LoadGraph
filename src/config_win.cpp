@@ -104,7 +104,7 @@ bool Config::LoadViewMenuState(std::map<std::string, bool>& out)
 
     DWORD idx = 0;
     wchar_t name[128] = {};
-    DWORD nSize = sizeof(name);
+    DWORD nSize = static_cast<DWORD>(sizeof(name) / sizeof(wchar_t)); // RegEnumValueW expects char count, not bytes.
     bool any = false;
     while (RegEnumValueW(hKey, idx, name, &nSize, nullptr, nullptr, nullptr, nullptr) == ERROR_SUCCESS)
     {
@@ -120,7 +120,7 @@ bool Config::LoadViewMenuState(std::map<std::string, bool>& out)
                 out[key] = true;
             any = true;
         }
-        nSize = sizeof(name);
+        nSize = static_cast<DWORD>(sizeof(name) / sizeof(wchar_t));
         ++idx;
     }
     RegCloseKey(hKey);

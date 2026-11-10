@@ -26,8 +26,12 @@ struct AppConfig
     std::string section_bg_color = "16213e";
     std::string chart_bg_color   = "0f3460";
 
-    int     http_port   = 9115;
-    bool    http_enabled = false;
+    int     http_port      = 9115;
+    bool    http_enabled   = false;
+    bool    log_file       = false; // write loadgraph.log when true
+    // Window position saved between sessions (0,0 means "let OS decide").
+    int     window_x       = 0;
+    int     window_y       = 0;
 };
 
 // Load config from <cwd>/loadgraph.cfg. Creates file with defaults if missing.

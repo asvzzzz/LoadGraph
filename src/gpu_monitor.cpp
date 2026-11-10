@@ -10,40 +10,43 @@
 static const unsigned int NVAPI_INITIALIZE_ID                = 0x0150E828;
 static const unsigned int NVAPI_ENUM_PHYSICAL_GPUS_ID        = 0xE5AC921F;
 static const unsigned int NVAPI_GPU_GET_FULL_NAME_ID         = 0xCEEE8E9F;
-static const unsigned int NVAPI_GPU_GET_DYNAMIC_PSTATES_EX_ID = 0x409D954A;
-static const unsigned int NVAPI_GPU_GET_USAGES_ID            = 0x189A1FDF;
-static const unsigned int NVAPI_GPU_GET_MEMORY_INFO_ID       = 0x04611521;
-static const unsigned int NVAPI_GPU_GET_THERMAL_SETTINGS_ID  = 0xE9C4B2D4;
-static const unsigned int NVAPI_GPU_GET_ALL_CLOCK_FREQS_ID   = 0x1BD69F49;
+// IDs from nvapi_interface.h (NVIDIA/nvapi repo, Sep 2 2026).
+static const unsigned int NVAPI_GPU_GET_DYNAMIC_PSTATES_EX_ID = 0x60DED2ED;
+// Note: NvAPI_GPU_GetUsages (0x189A1FDF) is not supported on modern drivers —
+// GPU load is read via NvAPI_GPU_GetDynamicPstatesInfoEx instead.
+static const unsigned int NVAPI_GPU_GET_MEMORY_INFO_ID       = 0x07F9B368;
+static const unsigned int NVAPI_GPU_GET_THERMAL_SETTINGS_ID  = 0xE3640A56;
+static const unsigned int NVAPI_GPU_GET_ALL_CLOCK_FREQS_ID   = 0xDCB616C3;
 static const unsigned int NVAPI_UNLOAD_ID                    = 0xD22BDD7E;
 
-// NvGPUUsageInfo structure for NvAPI_GPU_GetUsages.
-struct NvGPUUsageInfo
-{
-    unsigned int version;
-    unsigned int reserved[3];  // padding
-    unsigned int usage;        // overall usage percentage
-    unsigned int reserved2[15];
-};
-
 // NVAPI struct definitions (minimal, for dynamic loading).
-#pragma pack(push, 1)
+// Sizes and layouts taken from nvapi.h (R550+). Passing wrong sizes causes
+// INVALID_ARGUMENT or stack corruption.
+// NVAPI standard: version in high 16 bits, size in low 16 bits.
+// (nvapi.h convention differs from what I wrote earlier — sorry.)
+#define MAKE_NVAPI_VERSION(sz, ver) \
+    ((static_cast<unsigned int>(sz)) | (static_cast<unsigned int>(ver) << 16))
 
-// NvMemoryInfo v2
+// Match nvapi.h: #pragma pack(push,8). All fields here are NvU32 / int, so
+// default alignment already matches pack(1) for these structs — but we must
+// not override the driver's expectation.
+#pragma pack(push, 8)
+
+static const unsigned int NVAPI_MAX_GPU_PUBLIC_CLOCKS = 32;
+
+// NV_DISPLAY_DRIVER_MEMORY_INFO_V1 — sizeof = 20 bytes, VER = 1.
+// Official layout from nvapi_lite_common.h (NVIDIA/nvapi, Sep 2026).
+// No "reserved" field exists in any version. All size fields are in KB.
 struct NvMemoryInfo
 {
-    unsigned int   version;
-    unsigned int   reserved[31];
-    unsigned int   availableDedicatedVideoMemory;
-    unsigned int   dedicatedSystemMemory;
-    unsigned int   sharedSystemMemory;
-    unsigned long long dedicatedVideoMemory;
+    unsigned int version;                          // offset 0x00
+    unsigned int dedicatedVideoMemory;             // offset 0x04, VRAM size in KB
+    unsigned int availableDedicatedVideoMemory;    // offset 0x08, free VRAM in KB
+    unsigned int systemVideoMemory;                // offset 0x0C
+    unsigned int sharedSystemMemory;               // offset 0x10
 };
 
-// NvDynamicPstatesInfoEx — layout matches nvapi.h (version, flags, then
-// utilization[8] array). Each element: {UCHAR present, UCHAR percentage,
-// USHORT reserved}. The previous bitfield version was 4 bytes off and the
-// usage code read bIsPresent as a percentage flag — fixed below.
+// NV_GPU_DYNAMIC_PSTATES_INFO_EX_V1 — sizeof = 40 bytes, VER = 1.
 struct NvDynamicPstatesInfoEx
 {
     unsigned int version;
@@ -55,30 +58,40 @@ struct NvDynamicPstatesInfoEx
     } utilization[8];
 };
 
-// NvThermalSettings v2
+// NV_GPU_THERMAL_SETTINGS_V2 — sizeof = 68 bytes, VER = 2.
+// Field names differ from V1: defaultMinTemp/defaultMaxTemp/currentTemp (not
+// defaultTarget/currentTemperature).
 struct NvThermalSettings
 {
     unsigned int version;
     unsigned int count;
     struct {
         unsigned int controller;
-        int          defaultTarget;
-        float        currentTemperature;
-        unsigned int reserved[5];
+        int          defaultMinTemp;
+        int          defaultMaxTemp;
+        int          currentTemp;
+        unsigned int target;
     } sensor[3];
 };
 
-// NvClockFrequencies v2
+// NV_GPU_CLOCK_FREQUENCIES_V1 — sizeof = 264 bytes, VER = 1.
+// domain[NVAPI_MAX_GPU_PUBLIC_CLOCKS] where the constant equals 32 in nvapi.h.
 struct NvClockFrequencies
 {
     unsigned int version;
-    unsigned int flags;
+    unsigned int reserved;
     struct {
-        unsigned int present : 1;
-        unsigned int reserved : 31;
-        unsigned int frequency;
-    } domain[8];
+        unsigned int bIsPresent : 1;
+        unsigned int reserved   : 31;
+        unsigned int frequency;              // kHz
+    } domain[NVAPI_MAX_GPU_PUBLIC_CLOCKS];
 };
+
+// Verify struct sizes match nvapi.h R550+ to prevent silent regressions.
+static_assert(sizeof(NvMemoryInfo)              == 20, "NvMemoryInfo V1 size");
+static_assert(sizeof(NvDynamicPstatesInfoEx)    == 40, "NvDynamicPstatesInfoEx size");
+static_assert(sizeof(NvThermalSettings)         == 68, "NvThermalSettings size");
+static_assert(sizeof(NvClockFrequencies)        == 264, "NvClockFrequencies V1 size");
 
 #pragma pack(pop)
 
@@ -201,56 +214,65 @@ void GpuMonitor::CollectNvApi()
         if (m_fnGetDynamicPstatesInfoEx)
         {
             NvDynamicPstatesInfoEx pstates{};
-            // NVAPI checks the major version (high 16 bits); use a value that
-            // matches the struct layout above. sizeof() is wrong for NVAPI —
-            // it would pass e.g. 24 while the driver expects 0x00010002.
-            pstates.version = 0x00010002u;
+            pstates.version = MAKE_NVAPI_VERSION(sizeof(pstates), 1);
             if (m_fnGetDynamicPstatesInfoEx(hGpus[i], &pstates) == NVAPI_OK &&
                 pstates.utilization[0].bIsPresent)
                 meta.loadPercent = static_cast<double>(
                     pstates.utilization[0].percentage);
         }
 
-        // Memory info.
+        // Memory info. NV_DISPLAY_DRIVER_MEMORY_INFO_V1 (20 bytes, VER=1).
+        // All size fields are in KB — convert to bytes. For cards > 4 GB the
+        // U32 wraps; NVML is the accurate source — this path is a fallback only.
         if (m_fnGetMemoryInfo)
         {
             NvMemoryInfo memInfo{};
-            memInfo.version = sizeof(NvMemoryInfo);
-            if (m_fnGetMemoryInfo(hGpus[i], &memInfo) == NVAPI_OK)
+            memInfo.version = MAKE_NVAPI_VERSION(sizeof(memInfo), 1);
+            int rcMi = m_fnGetMemoryInfo(hGpus[i], &memInfo);
+            LOGI("NvAPI_GPU_GetMemoryInfo gpu%u rc=%d vramKB=%u availKB=%u",
+                 i, rcMi, memInfo.dedicatedVideoMemory,
+                 memInfo.availableDedicatedVideoMemory);
+            if (rcMi == NVAPI_OK)
             {
-                meta.vramTotalBytes = memInfo.dedicatedVideoMemory;
-                meta.vramUsedBytes  = 0;
-                meta.vramLoadPercent = 0.0;
+                // dedicatedVideoMemory and availableDedicatedVideoMemory are in KB.
+                meta.vramTotalBytes  = static_cast<uint64_t>(
+                    memInfo.dedicatedVideoMemory) * 1024ULL;
+                const uint64_t availBytes =
+                    static_cast<uint64_t>(memInfo.availableDedicatedVideoMemory) * 1024ULL;
+                meta.vramUsedBytes   = (meta.vramTotalBytes >= availBytes)
+                    ? (meta.vramTotalBytes - availBytes) : 0;
+                meta.vramLoadPercent = (meta.vramTotalBytes > 0)
+                    ? (static_cast<double>(meta.vramUsedBytes) /
+                       static_cast<double>(meta.vramTotalBytes) * 100.0) : 0.0;
             }
         }
 
-        // Thermal settings.
+        // Thermal settings. currentTemp is int (not float).
         if (m_fnGetThermalSettings)
         {
             NvThermalSettings thermal{};
-            thermal.version = sizeof(NvThermalSettings);
-            if (m_fnGetThermalSettings(hGpus[i], 0 /* GPU */, &thermal) == NVAPI_OK)
-            {
-                for (unsigned int s = 0; s < thermal.count && s < 3; ++s)
-                {
-                    meta.temperature = static_cast<double>(
-                        thermal.sensor[s].currentTemperature);
-                    break;
-                }
-            }
+            thermal.version = MAKE_NVAPI_VERSION(sizeof(thermal), 2);
+            if (m_fnGetThermalSettings(hGpus[i], 0 /* GPU */, &thermal) == NVAPI_OK &&
+                thermal.count > 0)
+                meta.temperature = static_cast<double>(thermal.sensor[0].currentTemp);
         }
 
-        // Clock frequencies.
+        // Clock frequencies. bIsPresent is a bit-field, frequency is 31-bit.
+        // domain[NVAPI_MAX_GPU_PUBLIC_CLOCKS] where the constant equals 32.
         if (m_fnGetAllClockFrequencies)
         {
             NvClockFrequencies clocks{};
-            clocks.version = sizeof(NvClockFrequencies);
-            if (m_fnGetAllClockFrequencies(hGpus[i], &clocks) == NVAPI_OK)
+            clocks.version = MAKE_NVAPI_VERSION(sizeof(clocks), 1);
+            int rcClk = m_fnGetAllClockFrequencies(hGpus[i], &clocks);
+            LOGI("NvAPI_GPU_GetAllClockFrequencies gpu%u rc=%d", i, rcClk);
+            if (rcClk == NVAPI_OK)
             {
-                if (clocks.domain[NVAPI_CLOCK_DOMAIN_GPU].present)
-                    meta.gpuFreqMhz = clocks.domain[NVAPI_CLOCK_DOMAIN_GPU].frequency / 1000.0;
-                if (clocks.domain[NVAPI_CLOCK_DOMAIN_MEM].present)
-                    meta.vramFreqMhz = clocks.domain[NVAPI_CLOCK_DOMAIN_MEM].frequency / 1000.0;
+                if (clocks.domain[NVAPI_CLOCK_DOMAIN_GPU].bIsPresent)
+                    meta.gpuFreqMhz =
+                        clocks.domain[NVAPI_CLOCK_DOMAIN_GPU].frequency / 1000.0;
+                if (clocks.domain[NVAPI_CLOCK_DOMAIN_MEM].bIsPresent)
+                    meta.vramFreqMhz =
+                        clocks.domain[NVAPI_CLOCK_DOMAIN_MEM].frequency / 1000.0;
             }
         }
 
@@ -540,12 +562,15 @@ bool GpuMonitor::LoadNvApi()
     // Initialize NVAPI.
     int ret = m_fnInitialize();
     LOGI("NvAPI_Initialize returned %d", ret);
-    return ret == NVAPI_OK;
+    m_initialized = (ret == NVAPI_OK);
+    return m_initialized;
 }
 
 void GpuMonitor::FreeNvApi()
 {
-    if (m_fnUnload)
+    // Only call NvAPI_Unload if Initialize succeeded — calling Unload on an
+    // uninitialised handle is undefined and may crash in newer driver versions.
+    if (m_fnUnload && m_initialized)
         m_fnUnload();
 
     if (m_hNvApi)
@@ -553,4 +578,5 @@ void GpuMonitor::FreeNvApi()
         FreeLibrary(m_hNvApi);
         m_hNvApi = nullptr;
     }
+    m_initialized = false;
 }

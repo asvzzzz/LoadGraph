@@ -414,6 +414,8 @@ std::vector<double> GraphPanel::ComputeYTicks(double minVal, double maxVal,
 // Format a value for axis labels and the header readout.
 wxString GraphPanel::FormatValue(double val)
 {
+    // Guard against NaN / Inf — static_cast of NaN to integral is UB.
+    if (!std::isfinite(val)) return "N/A";
     // Round to nearest integer to avoid floating point artifacts.
     long rounded = static_cast<long>(std::round(val));
     return wxString::Format("%ld", rounded);

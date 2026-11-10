@@ -96,6 +96,7 @@ private:
     FnNvAPI_GPU_GetThermalSettings     m_fnGetThermalSettings = nullptr;
     FnNvAPI_GPU_GetAllClockFrequencies m_fnGetAllClockFrequencies = nullptr;
     FnNvAPI_Unload                     m_fnUnload           = nullptr;
+    bool                               m_initialized       = false;  // true only after successful NVAPI_Initialize.
 
     bool LoadNvml();
     void FreeNvml();

@@ -1,609 +1,161 @@
 #include "platform.h"
 #include "http_server.h"
+#ifdef PLATFORM_WINDOWS
 #include "metrics_api.h"
+#endif
 #include "app_config.h"
+#include "dashboard_html.h"
+
+#ifdef PLATFORM_WINDOWS
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <thread>
 #include <mutex>
 #include <cstdio>
 #include <cstring>
+#include <cmath>
+#include <sstream>
 
 #pragma comment(lib, "ws2_32.lib")
+#else // PLATFORM_LINUX
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <unistd.h>
+#include <thread>
+#include <cstdio>
+#endif
 
+// ============================================================================
+// Cross-platform helpers (pure C++, no platform APIs).
+// ============================================================================
+
+static std::string JsonEscape(const char* s)
+{
+    std::string r;
+    r.reserve(strlen(s) + 8);
+    for (const unsigned char* p = (const unsigned char*)s; *p; ++p)
+    {
+        switch (*p)
+        {
+            case '"':   r += "\\\""; break;
+            case '\\':  r += "\\\\"; break;
+            case '\b':  r += "\\b";  break;
+            case '\f':  r += "\\f";  break;
+            case '\n':  r += "\\n";  break;
+            case '\r':  r += "\\r";  break;
+            case '\t':  r += "\\t";  break;
+            default:
+                if (*p < 0x20)
+                { char t[8]; snprintf(t, sizeof(t), "\\u%04x", *p); r += t; }
+                else r += (char)*p;
+        }
+    }
+    return r;
+}
+
+static double safeDouble(double v) { return std::isfinite(v) ? v : 0.0; }
+
+// ============================================================================
+// Windows: Winsock2-based HTTP server + JSON metrics builder.
+// ============================================================================
 #ifdef PLATFORM_WINDOWS
 
-// HTML dashboard — layout matches the GUI exactly.
-//   CPU section : Row1=CPU Load | RAM Usage, Row2=Power(full), Row3=Temp(±Fan)
-//   GPU per card: Title, Row1=Load|Temp, Row2=VRAM|Fan, Row3=Power(full)
-// All value labels are inline: "Label 42" instead of label left / value right.
-static const char* kHtmlPageHead = R"(<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<title>LoadGraph</title>
-<style>
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-  html, body { height: 100%; background: #1a1a2e; color: #e0e0e0;
-               font-family: Consolas, monospace; overflow: hidden; }
-  body { display: flex; flex-direction: column; padding: 12px; gap: 8px; }
-
-  h1 { color: var(--c-cpu-title, #76B900); font-size: 18px; flex: 0 0 auto; }
-  .cpu-name { color: var(--c-cpu-name, #00bcd4); }
-  .gpu-title { color: var(--c-cpu-title, #76B900); font-size: 13px; font-weight: bold;
-               flex: 0 0 auto; white-space: nowrap; overflow: hidden;
-               text-overflow: ellipsis; }
-
-  /* Контент занимает всё свободное место, ничего не выталкивает за окно. */
-  .content { flex: 1 1 0; min-height: 0; display: flex;
-             flex-direction: column; gap: 8px; overflow: hidden; }
-
-  /* Секции делят высоту контента поровну. min-height:0 разрешает им сжиматься. */
-  .section, .gpu-section {
-    background: #16213e; border-radius: 8px; padding: 8px 10px;
-    flex: 1 1 0; min-height: 0;
-    display: flex; flex-direction: column; gap: 4px;
-  }
-
-  /* Контейнер GPU-карточек — тоже flex-элемент контента. */
-  #gpuSections { flex: 1 1 0; min-height: 0;
-                 display: flex; flex-direction: column; gap: 8px;
-                 overflow: hidden; }
-  #gpuSections:empty { display: none; }
-
-  /* Ряды внутри секции тоже тянутся по высоте. */
-  .chart-row { display: flex; gap: 8px; flex: 1 1 0; min-height: 0; }
-  .full-row  { flex: 1 1 0; min-height: 0;
-               display: flex; flex-direction: column; }
-  .chart-cell { flex: 1 1 0; min-width: 0; min-height: 0;
-                display: flex; flex-direction: column; }
-
-  /* Подпись — фиксированной высоты, чарт забирает остаток. */
-  .val-row { flex: 0 0 auto; height: 18px; line-height: 18px;
-             font-size: 12px; color: #aaa; white-space: nowrap;
-             overflow: hidden; text-overflow: ellipsis; }
-  .val-val { color: #fff; font-weight: bold; font-size: 13px; }
-
-  /* Ключевое: вместо height:60px / flex-shrink:0 — растягиваемый чарт. */
-  canvas.chart { background: #0f3460; border-radius: 4px; display: block;
-                 width: 100%; flex: 1 1 0; min-height: 0; }
-
-   /* Мигающее предупреждение о потере связи. */
-   #connWarn { display:none; text-align:center; padding:6px 0;
-               font-size:13px; color:#ff5722; font-weight:bold;
-               animation: blinkWarn 1s step-start infinite; }
-   @keyframes blinkWarn { 0%,100% { opacity:1; } 50% { opacity:0; } }
-
-</style>
-<script>window.__CFG={color:{cpuLoad:'%CPU_LOAD%',cpuTemp:'%CPU_TEMP%',cpuPower:'%CPU_POWER%',ram:'%RAM%',gpuLoad:'%GPU_LOAD%',gpuTemp:'%GPU_TEMP%',gpuVram:'%GPU_VRAM%',gpuFan:'%GPU_FAN%',gpuPower:'%GPU_POWER%',totalPower:'%TOTAL_POWER%'}};</script>
-</head>)";
-static const char* kHtmlPageBody = R"(<body>
-<h1>LoadGraph <span id="cpuName" class="cpu-name"></span></h1>
-<div id="connWarn">&#9888; Connection lost — retrying...</div>
-<div class="content">
-
-<!-- CPU section — rows mirror GUI layout -->
-<div class="section" id="cpuSection">
-  <!-- Row 1: CPU Load | RAM Usage -->
-  <div class="chart-row">
-    <div class="chart-cell">
-      <div class="val-row">CPU Load <span class="val-val" id="cpuLoadVal">--%</span></div>
-      <canvas id="cpuChart" class="chart"></canvas>
-    </div>
-    <div class="chart-cell">
-      <div class="val-row">RAM Usage <span class="val-val" id="ramUsedVal">-- GB</span></div>
-      <canvas id="ramChart" class="chart"></canvas>
-    </div>
-  </div>
-  <!-- Row 2: CPU Temp | Fan -->
-  <div class="chart-row">
-    <div class="chart-cell">
-      <div class="val-row">CPU Temp <span class="val-val" id="cpuTempVal">N/A</span></div>
-      <canvas id="tempChart" class="chart"></canvas>
-    </div>
-    <div class="chart-cell" id="fanCell" style="display:none">
-      <div class="val-row">CPU Fan <span class="val-val" id="fanVal">N/A</span></div>
-      <canvas id="fanChart" class="chart"></canvas>
-    </div>
-  </div>
-  <!-- Row 3: CPU Power (full width, shown only when TDP > 0) -->
-  <div class="full-row" id="cpuPowerRow" style="display:none">
-    <div class="val-row">CPU Power <span class="val-val" id="cpuPowerVal">N/A</span></div>
-    <canvas id="powerChart" class="chart"></canvas>
-  </div>
-</div>
-
-<div id="gpuSections"></div>
-
-<!-- Total Power — section hides as a whole when no reading is available -->
-<div class="section" id="totalPowerSection" style="display:none">
-  <div class="full-row" id="totalPowerRow">
-    <div class="val-row">Total Power <span class="val-val" id="totalPowerVal">N/A</span></div>
-    <canvas id="totalPowerChart" class="chart"></canvas>
-  </div>
-</div>
-
-</div>
-
-<script>
-const C = window.__CFG.color;
-const PORT = window.__CFG.port;
-const MAX_P = 60;
-
-// Rolling chart. draw() is now exposed AND a ResizeObserver is attached per
-// canvas, so the drawing buffer tracks the CSS box on any layout change
-// (window resize, CPU-Power row appearing, GPU count changing, etc).
-function makeChart(id, color, yMax) {
-    const defYmax = yMax || 100;
-    const data = [];
-    var curYmax = defYmax;
-    var observer = null;
-    var observedEl = null;
-
-    function draw() {
-        const c = document.getElementById(id);
-        if (!c || !c.parentElement) return;
-        // clientWidth/clientHeight reflect the flex-allocated CSS size.
-        // Guard against zero-size during the first tick before layout.
-        const cw = c.clientWidth  * 2 || 400;
-        const ch = c.clientHeight * 2 || 80;
-        if (c.width  !== cw) c.width  = cw;
-        if (c.height !== ch) c.height = ch;
-        const ctx = c.getContext('2d');
-        const W = c.width, H = c.height, ymax = curYmax;
-        ctx.clearRect(0, 0, W, H);
-        // Grid lines.
-        ctx.strokeStyle = 'rgba(255,255,255,0.07)'; ctx.lineWidth = 1;
-        for (let y = 0; y <= 4; y++) {
-            const yy = H - (y / 4) * H;
-            ctx.beginPath(); ctx.moveTo(0, yy); ctx.lineTo(W, yy); ctx.stroke();
-        }
-        if (data.length < 2) return;
-        const step = W / (MAX_P - 1);
-        // Filled area.
-        ctx.beginPath(); ctx.moveTo(0, H);
-        for (let i = 0; i < data.length; i++)
-            ctx.lineTo(i * step, H - (data[i] / ymax) * H);
-        ctx.lineTo((data.length - 1) * step, H); ctx.closePath();
-        const grad = ctx.createLinearGradient(0, 0, 0, H);
-        grad.addColorStop(0, color + 'cc'); grad.addColorStop(1, color + '22');
-        ctx.fillStyle = grad; ctx.fill();
-        // Line.
-        ctx.beginPath();
-        for (let i = 0; i < data.length; i++) {
-            const x = i * step, y = H - (data[i] / ymax) * H;
-            i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
-        }
-        ctx.strokeStyle = color; ctx.lineWidth = 2; ctx.stroke();
-    }
-
-    // The GPU-section DOM is rebuilt every second; re-observe only when
-    // the underlying <canvas> element is actually replaced.
-    function attach() {
-        const c = document.getElementById(id);
-        if (!c || c === observedEl) return;
-        if (observer) observer.disconnect();
-        observer = new ResizeObserver(function() { draw(); });
-        observer.observe(c);
-        observedEl = c;
-    }
-
-    return {
-        get ymax() { return curYmax; },
-        set ymax(v) { curYmax = Math.max(curYmax, v); },
-        push(v) {
-            data.push(Math.max(0, v));
-            if (data.length > MAX_P) data.shift();
-            attach();
-            draw();
-        },
-        draw: draw
-    };
+// Convert a wchar_t string (UTF-16 on Windows) to UTF-8.
+static std::string WcharToUtf8(const std::wstring& w)
+{
+    if (w.empty()) return "";
+    int bytes = WideCharToMultiByte(CP_UTF8, 0, w.c_str(),
+                                     static_cast<int>(w.size()),
+                                     nullptr, 0, nullptr, nullptr);
+    if (bytes <= 0) return "";
+    std::string out;
+    out.resize(static_cast<size_t>(bytes));
+    WideCharToMultiByte(CP_UTF8, 0, w.c_str(),
+                        static_cast<int>(w.size()),
+                        &out[0], bytes, nullptr, nullptr);
+    return out;
 }
-
-// ── Charts ────────────────────────────────────────────────────────────────
-let cpuChart      = makeChart('cpuChart',       C.cpuLoad,   100);
-let ramChart      = makeChart('ramChart',       C.ram,       128);
-let tempChart     = makeChart('tempChart',      C.cpuTemp,   100);
-let powerChart    = null;
-let fanChart      = null;
-let totalPowerChart = null;
-
-const gpuCharts  = {};
-
-// ── Helpers ───────────────────────────────────────────────────────────────
-function esc(s)  { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;'); }
-function gb(b)   { return (b / (1024*1024*1024)).toFixed(1); }
-function tempColor(t) { return t > 80 ? 'red' : t > 65 ? 'yellow' : 'green'; }
-
-// ── CPU section update ────────────────────────────────────────────────────
-function updateCpu(d) {
-  document.getElementById('cpuName').textContent = d.cpu_name || '';
-  document.getElementById('cpuLoadVal').textContent = d.cpu_load.toFixed(1) + '%';
-  cpuChart.push(d.cpu_load);
-
-  // RAM — yMax grows with total RAM so the chart is always proportional.
-  var ramGb = d.ram_used_bytes / (1024*1024*1024);
-  var totGb = d.ram_total_bytes   / (1024*1024*1024);
-  document.getElementById('ramUsedVal').textContent = ramGb.toFixed(1) + ' GB';
-  ramChart.push(ramGb);
-  ramChart.ymax = Math.max(totGb, ramChart.ymax || totGb);
-
-  // CPU Power — row shown whenever TDP is known (shows N/A until first reading).
-  var ppRow = document.getElementById('cpuPowerRow');
-  if (d.tdp_watts > 0) {
-    ppRow.style.display = '';
-    if (!powerChart) {
-      var ymax = Math.max(250, d.tdp_watts * 1.1);
-      powerChart = makeChart('powerChart', C.cpuPower, ymax);
-    } else {
-      powerChart.ymax = Math.max(250, d.tdp_watts * 1.1);
-    }
-    if (d.cpu_power > 0) {
-      document.getElementById('cpuPowerVal').textContent = d.cpu_power.toFixed(1) + ' W';
-      powerChart.push(d.cpu_power);
-    } else {
-      document.getElementById('cpuPowerVal').textContent = 'N/A';
-    }
-  } else {
-    ppRow.style.display = 'none';
-  }
-
-  // Total Power — CPU + RAM + all GPUs + Storage with valid power readings.
-  var totalW = 0;
-  if (d.cpu_power > 0) totalW += d.cpu_power;
-  if (d.ram_power > 0) totalW += d.ram_power;
-  if (d.gpus && d.gpus.length > 0) {
-    for (var gi = 0; gi < d.gpus.length; gi++) {
-      if (d.gpus[gi].power_watts > 0) totalW += d.gpus[gi].power_watts;
-    }
-  }
-  if (d.storage && d.storage.length > 0) {
-    for (var si = 0; si < d.storage.length; si++) {
-      if (d.storage[si].power_watts > 0) totalW += d.storage[si].power_watts;
-    }
-  }
-  var tpSec = document.getElementById('totalPowerSection');
-  if (totalW > 0) {
-    tpSec.style.display = '';
-    if (!totalPowerChart) totalPowerChart = makeChart('totalPowerChart', C.totalPower, 1000);
-    document.getElementById('totalPowerVal').textContent = totalW.toFixed(1) + ' W';
-    totalPowerChart.push(totalW);
-  } else {
-    tpSec.style.display = 'none';
-  }
-
-  // CPU Temp.
-  var tcEl = document.getElementById('cpuTempVal');
-  if (d.cpu_temp >= 0) {
-    tcEl.innerHTML = '<span class="'+tempColor(d.cpu_temp)+'">'+d.cpu_temp.toFixed(0)+' C</span>';
-    tempChart.push(d.cpu_temp);
-  } else { tcEl.textContent = 'N/A'; }
-
-  // CPU Fan.
-  if (d.fan_rpm > 0) {
-    document.getElementById('fanCell').style.display = '';
-    if (!fanChart) fanChart = makeChart('fanChart', '#9c27b0', 3000);
-    document.getElementById('fanVal').textContent = d.fan_rpm + ' RPM';
-    fanChart.push(d.fan_rpm);
-  } else {
-    document.getElementById('fanCell').style.display = 'none';
-  }
-}
-
-// ── GPU sections — preserve DOM, update in place ──────────────────────────
-function getOrCreateGpuSec(i, name, col) {
-  var div = document.getElementById('gpusec'+i);
-  if (div) return div;
-  div = document.createElement('div');
-  div.className = 'gpu-section';
-  div.id = 'gpusec'+i;
-  div.innerHTML = '<div class="gpu-title">GPU '+i+': '+esc(name)+'</div>';
-  document.getElementById('gpuSections').appendChild(div);
-  return div;
-}
-
-function clearChartsFrom(sec) {
-  var rows = sec.querySelectorAll('.chart-row, .full-row');
-  rows.forEach(function(r) { r.remove(); });
-}
-
-function updateGpu(d) {
-  var gpuDiv = document.getElementById('gpuSections');
-  var existing = {};
-  gpuDiv.querySelectorAll('.gpu-section').forEach(function(el) {
-    var m = el.id.match(/^gpusec(\d+)$/);
-    if (m) existing[parseInt(m[1])] = el;
-  });
-
-  if (!d.gpus || d.gpus.length === 0) { gpuDiv.innerHTML = ''; return; }
-
-  for (var i = 0; i < d.gpus.length; i++) {
-    var g   = d.gpus[i];
-    var sec  = existing[i] || getOrCreateGpuSec(i, g.name);
-
-    // Keep title, rebuild chart rows.
-    var title = sec.querySelector('.gpu-title');
-    clearChartsFrom(sec);
-    sec.appendChild(title);
-
-    function addSideBySide(lLabel, lValId, lCanvas, rLabel, rValId, rCanvas) {
-      var row = document.createElement('div');
-      row.className = 'chart-row';
-      row.innerHTML =
-        '<div class="chart-cell"><div class="val-row">'+esc(lLabel)+' <span class="val-val" id="'+lValId+'">--</span></div>' +
-         '<canvas id="'+lCanvas+'" class="chart"></canvas></div>' +
-        '<div class="chart-cell"><div class="val-row">'+esc(rLabel)+' <span class="val-val" id="'+rValId+'">--</span></div>' +
-         '<canvas id="'+rCanvas+'" class="chart"></canvas></div>';
-      sec.appendChild(row);
-    }
-    function addFullRow(fLabel, fValId, fCanvas) {
-      var row = document.createElement('div');
-      row.className = 'full-row';
-      row.innerHTML = '<div class="val-row">'+esc(fLabel)+' <span class="val-val" id="'+fValId+'">--</span></div>' +
-                      '<canvas id="'+fCanvas+'" class="chart"></canvas>';
-      sec.appendChild(row);
-    }
-
-    // Row 1: Load | Temp.
-    addSideBySide('Load','gpu'+i+'LoadVal','gpu'+i+'LoadChart',
-                  'Temp', 'gpu'+i+'TempVal','gpu'+i+'TempChart');
-    var lcKey = 'gpu'+i+'LoadChart';
-    if (!gpuCharts[lcKey]) gpuCharts[lcKey] = makeChart(lcKey, C.gpuLoad, 100);
-    document.getElementById('gpu'+i+'LoadVal').textContent = g.load_percent.toFixed(1)+'%';
-    gpuCharts[lcKey].push(g.load_percent);
-
-    var tvEl = document.getElementById('gpu'+i+'TempVal');
-    if (g.temperature >= 0) {
-      tvEl.innerHTML = '<span class="'+tempColor(g.temperature)+'">'+g.temperature.toFixed(0)+' C</span>';
-      var tcKey = 'gpu'+i+'TempChart';
-      if (!gpuCharts[tcKey]) gpuCharts[tcKey] = makeChart(tcKey, C.gpuTemp, 100);
-      gpuCharts[tcKey].push(g.temperature);
-    } else { tvEl.textContent = 'N/A'; }
-
-    // Row 2: VRAM | Fan.
-    addSideBySide('VRAM','gpu'+i+'VramVal','gpu'+i+'VramChart',
-                  'Fan',  'gpu'+i+'FanVal', 'gpu'+i+'FanChart');
-    var vKey = 'gpu'+i+'VramChart';
-    if (g.vram_total_bytes > 0) {
-      var vGb = g.vram_used_bytes / (1024*1024*1024);
-      var vtGb = g.vram_total_bytes / (1024*1024*1024);
-      document.getElementById('gpu'+i+'VramVal').textContent = vGb.toFixed(1)+' GB';
-      if (!gpuCharts[vKey]) gpuCharts[vKey] = makeChart(vKey, C.gpuVram, vtGb);
-      gpuCharts[vKey].push(vGb);
-      gpuCharts[vKey].ymax = Math.max(vtGb, gpuCharts[vKey].ymax || vtGb);
-    } else { document.getElementById('gpu'+i+'VramVal').textContent = 'N/A'; }
-
-    var fvEl = document.getElementById('gpu'+i+'FanVal');
-    var fKey = 'gpu'+i+'FanChart';
-    if (g.fan_rpm > 0) {
-      fvEl.textContent = g.fan_rpm + ' RPM';
-      if (!gpuCharts[fKey]) gpuCharts[fKey] = makeChart(fKey, C.gpuFan, 3000);
-      gpuCharts[fKey].push(g.fan_rpm);
-    } else if (g.fan_percent >= 0) {
-      fvEl.textContent = g.fan_percent.toFixed(0) + '%';
-      if (!gpuCharts[fKey]) gpuCharts[fKey] = makeChart(fKey, C.gpuFan, 100);
-      gpuCharts[fKey].push(g.fan_percent);
-    } else { fvEl.textContent = 'N/A'; }
-
-    // Row 3: Power (full width).
-    if (g.power_watts > 0 || g.power_limit_watts > 0) {
-      var limit = g.power_limit_watts;
-      if (limit <= 0) limit = 400;
-      addFullRow('Power','gpu'+i+'PowVal','gpu'+i+'PowChart');
-      var pKey = 'gpu'+i+'PowChart';
-      if (!gpuCharts[pKey]) gpuCharts[pKey] = makeChart(pKey, C.gpuPower, Math.max(250, limit*1.1));
-      document.getElementById('gpu'+i+'PowVal').textContent = g.power_watts.toFixed(1)+' W';
-      gpuCharts[pKey].push(g.power_watts);
-    } else {
-      addFullRow('Power','gpu'+i+'PowVal','gpu'+i+'PowChart');
-      document.getElementById('gpu'+i+'PowVal').textContent = 'N/A';
-    }
-  }
-
-  // Remove stale sections.
-  Object.keys(existing).forEach(function(k) {
-    if (parseInt(k) >= d.gpus.length) existing[k].remove();
-  });
-}
-
-// ── Flex distribution: equal chart heights across the whole page ──────────
-// Each .section / .gpu-section lives in a flex column. We set its flex-grow
-// to the number of visible chart rows it contains, so every row (CPU, GPU,
-// Total) gets the same slice of the window height, no matter how many GPUs
-// are present. Sections with more rows therefore get proportionally more
-// height, which is exactly what we want.
-
-function countVisibleRows(el) {
-    void el.offsetHeight;   // force layout so offsetParent is accurate
-    var n = 0;
-    el.querySelectorAll(':scope > .chart-row, :scope > .full-row').forEach(function(r) {
-        if (r.offsetParent !== null) n++;
-    });
-    return n;
-}
-
-function setFlex(el, grow) {
-    if (grow <= 0) return;
-    el.style.flexGrow   = String(grow);
-    el.style.flexShrink = '1';
-    el.style.flexBasis  = '0';
-}
-
-function updateFlex() {
-    var cpuSec = document.getElementById('cpuSection');
-    if (cpuSec) setFlex(cpuSec, countVisibleRows(cpuSec));
-
-    var gpuDiv = document.getElementById('gpuSections');
-    var gpuTotal = 0;
-    gpuDiv.querySelectorAll(':scope > .gpu-section').forEach(function(gs) {
-        var n = countVisibleRows(gs);
-        setFlex(gs, n);
-        gpuTotal += n;
-    });
-    if (gpuTotal > 0) setFlex(gpuDiv, gpuTotal);
-
-    var totalSec = document.getElementById('totalPowerSection');
-    if (totalSec && totalSec.style.display !== 'none') {
-        setFlex(totalSec, countVisibleRows(totalSec));
-    }
-}
-
-// ── Resize handler — draw() reads the new clientWidth/clientHeight ────────
-function redrawAll() {
-    Object.keys(gpuCharts).forEach(function(k) {
-        if (gpuCharts[k] && typeof gpuCharts[k].draw === 'function') gpuCharts[k].draw();
-    });
-    [cpuChart, ramChart, tempChart, powerChart, fanChart, totalPowerChart]
-        .filter(function(c) { return c && typeof c.draw === 'function'; })
-        .forEach(function(c) { c.draw(); });
-}
-window.addEventListener('resize', redrawAll);
-
-// ── Connection loss warning ───────────────────────────────────────────────
-var connWarn = document.getElementById('connWarn');
-var connLost = false;
-function setConnLost(v) {
-  connLost = v;
-  connWarn.style.display = v ? '' : 'none';
-}
-
-// ── Main loop ─────────────────────────────────────────────────────────────
-async function fetchMetrics() {
-  try {
-    var r = await fetch('/api/metrics');
-    var d = await r.json();
-    setConnLost(false);
-    updateCpu(d); updateGpu(d); updateFlex();
-  } catch(e) {
-    setConnLost(true);
-  }
-}
-updateFlex();
-setInterval(fetchMetrics, 1000);
-fetchMetrics();
-</script>
-</body>
-</html>)";
-
 
 static std::string BuildJson()
 {
-    // Sample CPU load NOW so powerWatts estimate is fresh (SampleLoad also
-    // reads the PDH counter and estimates power from TDP + core count).
-    MetricsSampleCpuLoad();
-
+    // Do NOT call MetricsSampleCpuLoad() here: m_pdhQuery is not thread-safe
+    // and the GUI thread calls SampleLoad() concurrently on every tick. Two
+    // threads on the same PDH_HQUERY can cause value jumps or an AV in pdh.dll.
     const CpuData  cpu  = MetricsGetCpu();
     const RamData  ram  = MetricsGetRam();
     const auto&    gpus = MetricsGetGpus();
 
-    char buf[8192];
-    int off = 0;
-    std::string escaped;
-    for (wchar_t c : cpu.cpuName)
-    {
-        if (c == L'\\' || c == L'"') escaped += '\\';
-        else if (c < 128) escaped += (char)c;
-    }
+    std::string cpuNameTmp = WcharToUtf8(cpu.cpuName);
+    std::string cpuNameUtf8  = JsonEscape(cpuNameTmp.c_str());
 
-    off = snprintf(buf, sizeof(buf),
+    std::string out;
+    out.reserve(1024 + gpus.size() * 256);
+
+    char buf[512];
+    snprintf(buf, sizeof(buf),
         "{\"cpu_load\":%.1f,\"cpu_temp\":%.1f,\"cpu_power\":%.1f,"
          "\"fan_rpm\":%d,\"tdp_watts\":%.1f,"
          "\"ram_load\":%.1f,\"ram_power\":%.1f,"
          "\"ram_used_bytes\":%llu,\"ram_total_bytes\":%llu,"
-         "\"uptime_ms\":%llu,\"cpu_name\":\"%s\",\"gpus\":[",
-        cpu.loadPercent,
-        cpu.temperature,
-        cpu.powerWatts,
+         "\"uptime_ms\":%llu,\"cpu_name\":\"",
+        safeDouble(cpu.loadPercent),
+        safeDouble(cpu.temperature),
+        safeDouble(cpu.powerWatts),
         cpu.fanRpm,
-        cpu.tdpWatts,
-        ram.loadPercent,
-        ram.powerWatts,
+        safeDouble(cpu.tdpWatts),
+        safeDouble(ram.loadPercent),
+        safeDouble(ram.powerWatts),
         (unsigned long long)(ram.totalBytes > ram.freeBytes
                              ? ram.totalBytes - ram.freeBytes : 0),
         (unsigned long long)ram.totalBytes,
-        (unsigned long long)cpu.uptimeMs,
-        escaped.c_str());
+        (unsigned long long)cpu.uptimeMs);
+    out += buf;
+    out += cpuNameUtf8;
+    out += "\",\"gpus\":[";
 
     for (size_t i = 0; i < gpus.size(); ++i)
     {
         const GpuData& g = gpus[i];
-        if (i > 0) off += snprintf(buf + off, sizeof(buf) - off, ",");
-        off += snprintf(buf + off, sizeof(buf) - off,
-            "{\"name\":\"%s\",\"load_percent\":%.1f,\"temperature\":%.1f,"
+        if (i > 0) out += ',';
+        out += "{\"name\":\"";
+        out += JsonEscape(g.name.c_str());
+        snprintf(buf, sizeof(buf),
+            "\",\"load_percent\":%.1f,\"temperature\":%.1f,"
              "\"vram_used_bytes\":%llu,\"vram_total_bytes\":%llu,"
              "\"fan_rpm\":%d,\"fan_percent\":%.1f,"
              "\"power_watts\":%.1f,\"power_limit_watts\":%.1f}",
-            g.name.c_str(), g.loadPercent, g.temperature,
+            safeDouble(g.loadPercent), safeDouble(g.temperature),
             (unsigned long long)g.vramUsedBytes,
-            (unsigned long long)g.vramTotalBytes, g.fanRpm, g.fanPercent,
-            g.powerWatts, g.powerLimitWatts);
+            (unsigned long long)g.vramTotalBytes,
+            g.fanRpm, safeDouble(g.fanPercent),
+            safeDouble(g.powerWatts), safeDouble(g.powerLimitWatts));
+        out += buf;
     }
 
-    // Add storage devices.
+    // Close gpus array, start separate storage array.
+    // BUG FIX: previously storage objects were appended directly to the gpus
+    // array without a comma or key change, producing invalid JSON like
+    // "gpus":[{...},{...}{name:"..."}. JSON.parse() in the browser would fail
+    // and updateCpu() would never be called — CPU Load/Temp showed N/A.
+    out += "],\"storage\":[";
     auto storage = MetricsGetStorage();
     for (size_t i = 0; i < storage.size(); ++i)
     {
-        if (i > 0) off += snprintf(buf + off, sizeof(buf) - off, ",");
+        if (i > 0) out += ',';
         const StorageData& sd = storage[i];
-        std::string escapedName;
-        for (char c : sd.name)
-        {
-            if (c == '"') escapedName += "\\\"";
-            else if (c == '\\') escapedName += "\\\\";
-            else escapedName += c;
-        }
-        const char* storageFmt = "{\"name\":\"%s\",\"interface\":\"%s\",\"total_bytes\":%llu,\"power_watts\":%.1f}";
-        off += snprintf(buf + off, sizeof(buf) - off, storageFmt,
-            escapedName.c_str(), sd.iface.c_str(),
-            (unsigned long long)sd.totalBytes, sd.powerWatts);
+        out += "{\"name\":\"";
+        out += JsonEscape(sd.name.c_str());
+        out += "\",\"interface\":\"";
+        out += JsonEscape(sd.iface.c_str());
+        snprintf(buf, sizeof(buf),
+            "\",\"total_bytes\":%llu,\"power_watts\":%.1f}",
+            (unsigned long long)sd.totalBytes, safeDouble(sd.powerWatts));
+        out += buf;
     }
 
-    off += snprintf(buf + off, sizeof(buf) - off, "]}");
-    return std::string(buf, static_cast<size_t>(off));
-}
-
-// Replace color placeholders and inject __CFG with port into the HTML head.
-static std::string RenderHtml(const char* head, const char* body, int port, const AppConfig& cfg)
-{
-    // Build replacement map — keep strings alive for duration of function.
-    struct Rep { const char* from; std::string to; };
-    Rep reps[] = {
-        { "%CPU_LOAD%",   "#" + cfg.cpu_load_color },
-        { "%CPU_TEMP%",   "#" + cfg.cpu_temp_color },
-        { "%CPU_POWER%",  "#" + cfg.cpu_power_color },
-        { "%RAM%",        "#" + cfg.ram_color },
-        { "%GPU_LOAD%",   "#" + cfg.gpu_load_color },
-        { "%GPU_TEMP%",   "#" + cfg.gpu_temp_color },
-        { "%GPU_VRAM%",   "#" + cfg.gpu_vram_color },
-        { "%GPU_FAN%",    "#" + cfg.gpu_fan_color },
-        { "%GPU_POWER%",  "#" + cfg.gpu_power_color },
-        { "%TOTAL_POWER%", "#" + cfg.total_power_color },
-    };
-
-    std::string result;
-    result.reserve(strlen(head) + strlen(body));
-    const char* p = head;
-    while (*p)
-    {
-        bool matched = false;
-        for (int i = 0; i < 10; i++)
-        {
-            size_t len = strlen(reps[i].from);
-            if (strncmp(p, reps[i].from, len) == 0)
-            { result += reps[i].to; p += (int)len; matched = true; break; }
-        }
-        if (!matched) { result += *p; ++p; }
-    }
-    // Inject port into __CFG (colors already substituted via placeholders).
-    std::string portScript = "<script>window.__CFG.port=" + std::to_string(port) + ";</script>";
-    const char* headEnd = strstr(result.c_str(), "</head>");
-    if (headEnd)
-    { result.insert(static_cast<size_t>(headEnd - result.c_str()), portScript); }
-    else
-    { result += portScript; }
-    result += body;
-    return result;
+    out += "]}";
+    return out;
 }
 
 static void HttpLoop(int port, const AppConfig& cfg)
@@ -612,7 +164,12 @@ static void HttpLoop(int port, const AppConfig& cfg)
     if (WSAStartup(MAKEWORD(2,2), &wsa) != 0) { fprintf(stderr, "HTTP: WSAStartup failed\n"); return; }
     SOCKET srv = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     if (srv == INVALID_SOCKET) { fprintf(stderr, "HTTP: socket() failed err=%d\n", WSAGetLastError()); WSACleanup(); return; }
-    int opt = 1; setsockopt(srv, SOL_SOCKET, SO_REUSEADDR, (const char*)&opt, sizeof(opt));
+    int opt = 1;
+    setsockopt(srv, SOL_SOCKET, SO_REUSEADDR, (const char*)&opt, sizeof(opt));
+#ifdef PLATFORM_WINDOWS
+    // Prevent another process from stealing the port after a crash.
+    setsockopt(srv, SOL_SOCKET, SO_EXCLUSIVEADDRUSE, (const char*)&opt, sizeof(opt));
+#endif
     sockaddr_in addr{}; addr.sin_family=AF_INET; addr.sin_addr.s_addr=INADDR_ANY; addr.sin_port=htons((unsigned short)port);
     if (bind(srv, (sockaddr*)&addr, sizeof(addr)) == SOCKET_ERROR)
     { fprintf(stderr, "HTTP: bind() failed port=%d err=%d\n", port, WSAGetLastError()); closesocket(srv); WSACleanup(); return; }
@@ -624,51 +181,70 @@ static void HttpLoop(int port, const AppConfig& cfg)
         fd_set rf; FD_ZERO(&rf); FD_SET(srv, &rf);
         timeval tv{}; tv.tv_sec=1; tv.tv_usec=0;
         if (select(0, &rf, nullptr, nullptr, &tv) <= 0 || !FD_ISSET(srv, &rf)) continue;
-        sockaddr_in clientAddr{};
-        int clientLen = sizeof(clientAddr);
-        SOCKET client = accept(srv, (sockaddr*)&clientAddr, &clientLen);
+        SOCKET client = accept(srv, nullptr, nullptr);
         if (client == INVALID_SOCKET) continue;
-        char ipStr[64] = {};
-        inet_ntop(AF_INET, &clientAddr.sin_addr, ipStr, sizeof(ipStr));
-        char req[2048] = {};
+        DWORD rcvTimeout = 5000;
+        DWORD sndTimeout = 5000;
+        setsockopt(client, SOL_SOCKET, SO_RCVTIMEO, (const char*)&rcvTimeout, sizeof(rcvTimeout));
+        setsockopt(client, SOL_SOCKET, SO_SNDTIMEO, (const char*)&sndTimeout, sizeof(sndTimeout));
+        char req[4096] = {};
         int n = recv(client, req, sizeof(req)-1, 0);
         if (n <= 0) { closesocket(client); continue; }
         req[n] = '\0';
-        // Log: client IP + first line of request.
-        char firstLine[256] = {};
-        strncpy(firstLine, req, sizeof(firstLine)-1);
-        char* nl = strchr(firstLine, '\n'); if (nl) *nl = '\0';
-        printf("HTTP: %s -> %s\n", ipStr, firstLine);
-        fflush(stdout);
+
+        char method[8] = {}, path[512] = {};
+        sscanf(req, "%7s %511s", method, path);
+        bool isMetrics = (strcmp(method, "GET") == 0 && strcmp(path, "/api/metrics") == 0);
+        bool isIndex   = (strcmp(method, "GET") == 0 && strcmp(path, "/") == 0);
+
         std::string body;
-        if (strstr(req, "GET /api/metrics") != nullptr)
+        if (isMetrics)
         {
             body = BuildJson();
         }
-        else if (strstr(req, "GET /") != nullptr)
+        else if (isIndex)
         {
-            body = RenderHtml(kHtmlPageHead, kHtmlPageBody, port, cfg);
+            body = RenderDashboard(port, cfg);
         }
         else
         {
-            body = "Not Found";
-            send(client, "HTTP/1.1 404 Not Found\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\nNot Found", 58, 0);
+            const char* notFound = "HTTP/1.1 404 Not Found\r\n"
+                                   "Content-Type: text/plain\r\n"
+                                   "Connection: close\r\n\r\nNot Found";
+            int total = (int)strlen(notFound), sent = 0;
+            while (sent < total)
+            {
+                int sn = send(client, notFound + sent, total - sent, 0);
+                if (sn <= 0) break;
+                sent += sn;
+            }
             closesocket(client);
             continue;
         }
-        // Build headers with Content-Length for HTTP/1.1 compliance.
+
         char hdr[512] = {};
         int hlen = snprintf(hdr, sizeof(hdr),
             "HTTP/1.1 200 OK\r\n"
             "Content-Type: %s\r\n"
-            "Access-Control-Allow-Origin: *\r\n"
             "Connection: close\r\n"
             "Content-Length: %u\r\n"
             "\r\n",
-            strstr(req, "GET /api/metrics") != nullptr ? "application/json" : "text/html; charset=utf-8",
+            isMetrics ? "application/json" : "text/html; charset=utf-8",
             (unsigned int)body.size());
-        send(client, hdr, hlen, 0);
-        send(client, body.c_str(), (int)body.size(), 0);
+        int total = hlen, sent = 0;
+        while (sent < total)
+        {
+            int sn = send(client, hdr + sent, total - sent, 0);
+            if (sn <= 0) break;
+            sent += sn;
+        }
+        total = (int)body.size(); sent = 0;
+        while (sent < total)
+        {
+            int sn = send(client, body.c_str() + sent, total - sent, 0);
+            if (sn <= 0) break;
+            sent += sn;
+        }
         closesocket(client);
     }
     closesocket(srv); WSACleanup();
@@ -678,7 +254,14 @@ void StartHttpServer(const AppConfig& cfg)
 {
     std::thread([cfg] { HttpLoop(cfg.http_port, cfg); }).detach();
 }
-#else
-struct AppConfig {};
-static void StartHttpServer(const AppConfig&) {}
+
+#else // PLATFORM_LINUX — stub: HTTP server not yet ported to POSIX sockets.
+
+static void StartHttpServer(const AppConfig&)
+{
+    // Linux POSIX-socket implementation is intentionally left as a stub;
+    // the GUI web dashboard uses wxWidgets HTTP classes instead.
+    fprintf(stderr, "HTTP server: not implemented on this platform\n");
+}
+
 #endif // PLATFORM_WINDOWS

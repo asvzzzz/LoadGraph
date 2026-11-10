@@ -24,6 +24,7 @@
 #include "platform.h"
 #include "ring0_msr.h"
 #include "logger.h"
+#include <wx/wx.h>
 
 #ifdef PLATFORM_WINDOWS
 #ifndef NOMINMAX
@@ -673,10 +674,16 @@ namespace Ring0Msr
     // Write a byte to an I/O port. Returns true on success.
     bool WriteIoPortByte(uint16_t port, uint8_t value)
     {
-        if (s_backend == Backend::Dll && s_fnWrPortB)
+        if (s_backend == Backend::Dll)
         {
-            s_fnWrPortB(port, value);
-            return true;
+            if (s_fnWrPortB)
+            {
+                s_fnWrPortB(port, value);
+                return true;
+            }
+            // DLL backend loaded but WritePortByte not exported — skip driver.
+            LOGI("MSR: WritePortByte not available in DLL, skipping I/O write.");
+            return false;
         }
 
         if (s_backend != Backend::Driver || !s_drvOpened ||

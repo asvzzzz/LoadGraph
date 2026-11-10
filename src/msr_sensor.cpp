@@ -2,6 +2,7 @@
 #include "msr_sensor.h"
 #include "ring0_msr.h"
 #include "logger.h"
+#include <wx/wx.h>
 
 #ifdef _WIN32
 // platform.h already defines WIN32_LEAN_AND_MEAN and includes windows.h.

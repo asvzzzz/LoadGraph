@@ -11,6 +11,7 @@
 #define NOMINMAX
 #endif
 
+#include <new>       // std::nothrow for heap allocation without exceptions
 #include <windows.h>
 #include <objbase.h>   // CoInitializeEx, CoCreateInstance, CoSetProxyBlanket
 #include <oleauto.h>   // SysAllocString, VariantInit, VariantClear
@@ -38,19 +39,26 @@ static bool QueryWmiValueRaw(const wchar_t* ns, const wchar_t* query,
 {
     outValue = -1.0;
 
-    IWbemLocator*            pLoc  = nullptr;
-    IWbemServices*           pSvc  = nullptr;
-    IEnumWbemClassObject*    pEnum = nullptr;
-    IWbemClassObject*        pObj  = nullptr;
-    bool                     ok    = false;
-    bool                     comInit = false;
+    // Heap-allocated context so the compiler cannot clobber these values across
+    // the SEH boundary (MSVC docs flag register-clobbering as UB for __try/__except).
+    struct Context {
+        IWbemLocator*            pLoc  = nullptr;
+        IWbemServices*           pSvc  = nullptr;
+        IEnumWbemClassObject*    pEnum = nullptr;
+        IWbemClassObject*        pObj  = nullptr;
+        bool                     ok    = false;
+        bool                     comInit = false;
+    };
+
+    Context* ctx = new (std::nothrow) Context();
+    if (!ctx) return false;
 
     __try
     {
         HRESULT hres = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
         // RPC_E_CHANGED_MODE means COM is already initialized differently on
         // this thread; that is fine, we just must not uninitialize it.
-        comInit = SUCCEEDED(hres);
+        ctx->comInit = SUCCEEDED(hres);
 
         // Best-effort security setup - ignored if already configured.
         CoInitializeSecurity(nullptr, -1, nullptr, nullptr,
@@ -60,38 +68,38 @@ static bool QueryWmiValueRaw(const wchar_t* ns, const wchar_t* query,
 
         hres = CoCreateInstance(CLSID_WbemLocator, nullptr, CLSCTX_INPROC_SERVER,
                                 IID_IWbemLocator,
-                                reinterpret_cast<LPVOID*>(&pLoc));
-        if (SUCCEEDED(hres) && pLoc)
+                                reinterpret_cast<LPVOID*>(&ctx->pLoc));
+        if (SUCCEEDED(hres) && ctx->pLoc)
         {
             BSTR bNs = SysAllocString(ns);
-            hres = pLoc->ConnectServer(bNs, nullptr, nullptr, nullptr, 0,
-                                       nullptr, nullptr, &pSvc);
+            hres = ctx->pLoc->ConnectServer(bNs, nullptr, nullptr, nullptr, 0,
+                                       nullptr, nullptr, &ctx->pSvc);
             SysFreeString(bNs);
 
-            if (SUCCEEDED(hres) && pSvc)
+            if (SUCCEEDED(hres) && ctx->pSvc)
             {
-                CoSetProxyBlanket(pSvc, RPC_C_AUTHN_WINNT, RPC_C_AUTHZ_NONE,
+                CoSetProxyBlanket(ctx->pSvc, RPC_C_AUTHN_WINNT, RPC_C_AUTHZ_NONE,
                                   nullptr, RPC_C_AUTHN_LEVEL_CALL,
                                   RPC_C_IMP_LEVEL_IMPERSONATE, nullptr,
                                   EOAC_NONE);
 
                 BSTR bQ = SysAllocString(query);
-                hres = pSvc->ExecQuery(BSTR(L"WQL"), bQ,
-                                       WBEM_FLAG_FORWARD_ONLY |
-                                       WBEM_FLAG_RETURN_IMMEDIATELY,
-                                       nullptr, &pEnum);
+                hres = ctx->pSvc->ExecQuery(BSTR(L"WQL"), bQ,
+                                            WBEM_FLAG_FORWARD_ONLY |
+                                            WBEM_FLAG_RETURN_IMMEDIATELY,
+                                            nullptr, &ctx->pEnum);
                 SysFreeString(bQ);
 
-                if (SUCCEEDED(hres) && pEnum)
+                if (SUCCEEDED(hres) && ctx->pEnum)
                 {
                     ULONG returned = 0;
-                    if (pEnum->Next(WBEM_INFINITE, 1, &pObj, &returned) == S_OK &&
-                        returned > 0 && pObj)
+                    if (ctx->pEnum->Next(WBEM_INFINITE, 1, &ctx->pObj, &returned) == S_OK &&
+                        returned > 0 && ctx->pObj)
                     {
                         VARIANT vt;
                         VariantInit(&vt);
                         BSTR bProp = SysAllocString(prop);
-                        hres = pObj->Get(bProp, 0, &vt, nullptr, nullptr);
+                        hres = ctx->pObj->Get(bProp, 0, &vt, nullptr, nullptr);
                         SysFreeString(bProp);
 
                         if (SUCCEEDED(hres))
@@ -99,17 +107,17 @@ static bool QueryWmiValueRaw(const wchar_t* ns, const wchar_t* query,
                             if (vt.vt == VT_I4)
                             {
                                 outValue = static_cast<double>(vt.lVal);
-                                ok = true;
+                                ctx->ok = true;
                             }
                             else if (vt.vt == VT_R8)
                             {
                                 outValue = vt.dblVal;
-                                ok = true;
+                                ctx->ok = true;
                             }
                             else if (vt.vt == VT_UI4)
                             {
                                 outValue = static_cast<double>(vt.ulVal);
-                                ok = true;
+                                ctx->ok = true;
                             }
                         }
                         VariantClear(&vt);
@@ -121,17 +129,20 @@ static bool QueryWmiValueRaw(const wchar_t* ns, const wchar_t* query,
     __except (EXCEPTION_EXECUTE_HANDLER)
     {
         // fastprox.dll (or another WMI component) crashed. Disable WMI.
-        ok = false;
+        ctx->ok = false;
         outValue = -1.0;
     }
 
     // Best-effort cleanup (skipped if we took the exception path).
-    if (pObj)  pObj->Release();
-    if (pEnum) pEnum->Release();
-    if (pSvc)  pSvc->Release();
-    if (pLoc)  pLoc->Release();
-    if (comInit) CoUninitialize();
+    if (ctx->pObj)  ctx->pObj->Release();
+    if (ctx->pEnum) ctx->pEnum->Release();
+    if (ctx->pSvc)  ctx->pSvc->Release();
+    if (ctx->pLoc)  ctx->pLoc->Release();
+    if (ctx->comInit) CoUninitialize();
 
+    // Read ok BEFORE delete — reading ctx->ok after delete is use-after-free.
+    const bool ok = ctx->ok;
+    delete ctx;
     return ok;
 }
 
@@ -309,7 +320,10 @@ void CpuMonitor::Collect()
             const double msrTemp = MsrSensor::ProbeTemperature(
                 m_msrFamily, m_msrModel, m_msrStepping, m_msrTjmax);
             if (msrTemp >= 0.0)
+            {
                 temp = msrTemp;
+                m_lastMsrTemp = msrTemp; // save for cooldown restore
+            }
             else
             {
                 m_msrOk = false;
@@ -320,6 +334,7 @@ void CpuMonitor::Collect()
         else
         {
             --m_msrCooldown;
+            temp = m_lastMsrTemp; // restore last known value, avoid spurious WMI fallback
         }
         if (temp >= 0.0) filled = 1u;
     }
@@ -353,9 +368,16 @@ void CpuMonitor::Collect()
     // Runs once per session: if no fan RPM yet but the kernel driver is loaded,
     // try reading the hardware monitoring chip directly. Guarded by m_wmiTried
     // so we only attempt after WMI has been tried at least once.
-    if (fan < 0 && Ring0Msr::IsOpen() && !m_fanIoTried)
+    // Disabled by default — direct port I/O can affect unknown LPC devices.
+    // Enable via environment variable: LOADGRAPH_SUPERIO_FAN=1
+    static bool s_superioEnabled = ([]() -> bool {
+        const char* v = getenv("LOADGRAPH_SUPERIO_FAN");
+        return (v != nullptr && v[0] != '0' && v[0] != 'f' && v[0] != 'F');
+    })();
+    if (s_superioEnabled && fan < 0 && Ring0Msr::IsOpen() && !m_fanIoTried)
     {
         m_fanIoTried = true;
+        LOGI("Super I/O fan probe enabled via LOADGRAPH_SUPERIO_FAN=1");
         int ioFan = ProbeSuperIoFan();
         if (ioFan > 0)
         {

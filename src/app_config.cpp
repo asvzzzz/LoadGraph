@@ -2,6 +2,8 @@
 #include "app_config.h"
 #include "logger.h"
 
+#include <cstring>   // strncmp, strlen, strncpy
+#include <cstdlib>   // strtod, atoi
 #include <filesystem>
 #include <fstream>
 #ifdef PLATFORM_WINDOWS
@@ -80,14 +82,21 @@ namespace
         std::string out = "\"";
         for (char c : s)
         {
-            switch (c)
+            unsigned char uc = static_cast<unsigned char>(c);
+            switch (uc)
             {
-                case '"':  out += "\\\""; break;
-                case '\\': out += "\\\\"; break;
-                case '\n': out += "\\n";  break;
-                case '\t': out += "\\t";  break;
-                case '\r': out += "\\r";  break;
-                default:   out += c;      break;
+                case '"':   out += "\\\""; break;
+                case '\\':  out += "\\\\"; break;
+                case '\b':  out += "\\b";  break;
+                case '\f':  out += "\\f";  break;
+                case '\n':  out += "\\n";  break;
+                case '\r':  out += "\\r";  break;
+                case '\t':  out += "\\t";  break;
+                default:
+                    if (uc < 0x20)
+                    { char t[8]; snprintf(t, sizeof(t), "\\u%04x", uc); out += t; }
+                    else out += c;
+                    break;
             }
         }
         out += '"';
@@ -144,12 +153,37 @@ namespace
 // Public API
 // ---------------------------------------------------------------------------
 
+// Return the path to loadgraph.cfg for the current platform.
+static std::string GetConfigPath()
+{
+#ifdef PLATFORM_WINDOWS
+    return GetCwdPath() + "/" + "loadgraph.cfg";
+#else
+    // Linux: use XDG_CONFIG_HOME/loadgraph/loadgraph.cfg
+    const char* xdg = getenv("XDG_CONFIG_HOME");
+    std::string dir;
+    if (xdg && xdg[0])
+        dir = xdg;
+    else
+    {
+        const char* home = getenv("HOME");
+        if (home && home[0])
+            dir = std::string(home) + "/.config";
+    }
+    if (dir.empty()) return "./loadgraph.cfg";
+    std::string path = dir + "/loadgraph/loadgraph.cfg";
+    // Ensure directory exists.
+    std::error_code ec;
+    std::filesystem::create_directories(dir + "/loadgraph", ec);
+    return path;
+#endif
+}
+
 AppConfig LoadAppConfig()
 {
     AppConfig cfg;
 
-#ifdef PLATFORM_WINDOWS
-    const std::string path = GetCwdPath() + "/" + "loadgraph.cfg";
+    const std::string path = GetConfigPath();
 
     std::error_code ec;
     if (!std::filesystem::exists(path, ec))
@@ -208,6 +242,32 @@ AppConfig LoadAppConfig()
                     v = (sv == "true");
             }
             cfg.http_enabled = v;
+        }
+        else if (key == "log_file")
+        {
+            bool v = false;
+            SkipSpaces(p);
+            if (strncmp(p, "true", 4) == 0)       { p += 4;  v = true;  }
+            else if (strncmp(p, "false", 5) == 0) { p += 5;  v = false; }
+            else if (*p == '"')
+            {
+                std::string sv;
+                if (ReadJsonString(p, sv))
+                    v = (sv == "true");
+            }
+            cfg.log_file = v;
+        }
+        else if (key == "window_x")
+        {
+            double v = 0.0;
+            if (ReadJsonNumber(p, v) && v >= -32000 && v <= 32000)
+                cfg.window_x = static_cast<int>(v);
+        }
+        else if (key == "window_y")
+        {
+            double v = 0.0;
+            if (ReadJsonNumber(p, v) && v >= -32000 && v <= 32000)
+                cfg.window_y = static_cast<int>(v);
         }
         else if (key == "colors")
         {
@@ -330,22 +390,25 @@ AppConfig LoadAppConfig()
         }
     }
 
-    LOGI("Config: port=%d enabled=%s", cfg.http_port, cfg.http_enabled ? "on" : "off");
-#endif // PLATFORM_WINDOWS
+    LOGI("Config: port=%d http=%s log_file=%s win=(%d,%d)",
+         cfg.http_port, cfg.http_enabled ? "on" : "off",
+         cfg.log_file ? "on" : "off",
+         cfg.window_x, cfg.window_y);
 
     return cfg;
 }
 
 void SaveAppConfig(const AppConfig& cfg)
 {
-#ifdef PLATFORM_WINDOWS
-    std::string cwd  = GetCwdPath();
-    std::string path = cwd + "/loadgraph.cfg";
+    const std::string path = GetConfigPath();
 
     std::string out;
     out += "{\n";
     out += "  \"http_port\": "   + EmitJsonNumber((double)cfg.http_port)   + ",\n";
     out += "  \"http_enabled\": " + std::string(cfg.http_enabled ? "true" : "false") + ",\n";
+    out += "  \"log_file\": "    + std::string(cfg.log_file     ? "true"  : "false") + ",\n";
+    out += "  \"window_x\": "    + EmitJsonNumber((double)cfg.window_x)     + ",\n";
+    out += "  \"window_y\": "    + EmitJsonNumber((double)cfg.window_y)     + ",\n";
     out += "  \"colors\": {\n";
     out += "    \"cpu_load\":     " + EmitJsonString(cfg.cpu_load_color)      + ",\n";
     out += "    \"cpu_temp\":     " + EmitJsonString(cfg.cpu_temp_color)      + ",\n";
@@ -369,5 +432,4 @@ void SaveAppConfig(const AppConfig& cfg)
         LOGE("Failed to write loadgraph.cfg");
     else
         LOGI("Saved loadgraph.cfg");
-#endif // PLATFORM_WINDOWS
 }

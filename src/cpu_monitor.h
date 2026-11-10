@@ -101,6 +101,7 @@ private:
     bool        m_msrTried   = false;
     bool        m_msrOk      = false;
     int         m_msrCooldown = 0;
+    double      m_lastMsrTemp = -1.0; // last successful MSR temperature (restored during cooldown)
     uint32_t    m_msrFamily  = 0;
     uint32_t    m_msrModel   = 0;
     uint32_t    m_msrStepping = 0;

@@ -156,6 +156,8 @@ if(WIN32)
         src/metrics_api.cpp
         src/http_server.h
         src/http_server.cpp
+        src/dashboard_html.h
+        src/dashboard_html.cpp
         src/app_config.h
         src/app_config.cpp
         src/storage_monitor.h
@@ -212,16 +214,19 @@ if(WIN32)
     # Compile .rc → .res at configure time so IDI_ICON is available during compilation.
     set(RC_FILE "${CMAKE_SOURCE_DIR}/src/icon.rc")
     set(RES_FILE "${CMAKE_BINARY_DIR}/icon.res")
-    execute_process(COMMAND
-        "C:/Program Files (x86)/Windows Kits/10/bin/10.0.22621.0/x64/rc.exe"
-        /fo "${RES_FILE}" "${RC_FILE}"
-        RESULT_VARIABLE RC_RESULT
-    )
-    if(NOT RC_RESULT EQUAL 0)
-        message(FATAL_ERROR "RC compiler failed to compile icon.rc")
+    if(CMAKE_RC_COMPILER)
+        execute_process(COMMAND "${CMAKE_RC_COMPILER}" /fo "${RES_FILE}" "${RC_FILE}"
+            RESULT_VARIABLE RC_RESULT)
+    else()
+        message(WARNING "No RC compiler found; icon resource will be skipped")
+        set(RC_RESULT 1)
     endif()
-    set_source_files_properties("${RES_FILE}" PROPERTIES LINKABLE ON)
-    target_sources(${PROJECT_NAME} PRIVATE "${RES_FILE}")
+    if(NOT RC_RESULT EQUAL 0)
+        message(WARNING "RC compiler failed to compile icon.rc — running without embedded icon")
+    else()
+        set_source_files_properties("${RES_FILE}" PROPERTIES LINKABLE ON)
+        target_sources(${PROJECT_NAME} PRIVATE "${RES_FILE}")
+    endif()
 
     # Suppress C4996 (unsafe CRT) from our own code; wxWidgets headers emit it
     # regardless, and we use safe equivalents where it matters (snprintf/strncpy).
@@ -233,14 +238,12 @@ if(WIN32)
     # ----------------------------------------------------------------------------
     # Console-only binary (htop-like, no wxWidgets dependency).
     # ----------------------------------------------------------------------------
-    set(CONSOLE_SOURCES src/console_app.cpp)
+    set(CONSOLE_SOURCES src/console_app.cpp src/app_config.cpp src/logger.cpp src/power_table.cpp src/wmi_helper.cpp src/dashboard_html.cpp)
     add_executable(loadgraph-console ${CONSOLE_SOURCES})
     target_include_directories(loadgraph-console PRIVATE src)
     target_compile_definitions(loadgraph-console PRIVATE USE_HTTP_SERVER _CRT_SECURE_NO_WARNINGS)
     target_compile_options(loadgraph-console PRIVATE /W4 /WX-)
-    target_link_libraries(loadgraph-console pdh psapi)
-    target_compile_options(loadgraph-console PRIVATE /W4 /WX-)
-    target_link_libraries(loadgraph-console pdh psapi iphlpapi wbemuuid)
+    target_link_libraries(loadgraph-console pdh psapi ws2_32)
     set_target_properties(loadgraph-console PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
     )
@@ -291,4 +294,18 @@ elseif(UNIX AND NOT APPLE)
     )
 
     target_compile_options(${PROJECT_NAME} PRIVATE -Wall -Wextra -Wpedantic)
+
+    # Console-only binary for Linux (htop-like, no wxWidgets dependency).
+    set(CONSOLE_SOURCES_LINUX src/console_app.cpp src/app_config.cpp src/logger.cpp src/power_table.cpp src/wmi_helper.cpp src/dashboard_html.cpp)
+    add_executable(loadgraph-console-linux ${CONSOLE_SOURCES_LINUX})
+    target_include_directories(loadgraph-console-linux PRIVATE src)
+    target_compile_definitions(loadgraph-console-linux PRIVATE USE_HTTP_SERVER PLATFORM_LINUX)
+    target_compile_options(loadgraph-console-linux PRIVATE -Wall -Wextra -Wno-unused-parameter)
+    target_link_libraries(loadgraph-console-linux pthread dl)
+    if(NVML_LIB)
+        target_link_libraries(loadgraph-console-linux ${NVML_LIB})
+    endif()
+    set_target_properties(loadgraph-console-linux PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+    )
 endif()
