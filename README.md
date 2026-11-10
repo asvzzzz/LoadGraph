@@ -40,11 +40,13 @@ LoadGraph solves this: **all metrics for all GPUs are visible at once in a singl
 
 ### Windows
 
-Works on Windows 10/11 with NVIDIA GPUs and optional CPU temperature via WinRing0-compatible driver or direct rdmsr fallback.
+![Windows](lgwin.png)
 
 ### Linux / WSL2
 
 Works on native Linux and inside WSL2 thanks to the GPU-PV bridge (NVML exposed at `/usr/lib/wsl/lib/libnvidia-ml.so.1`). NVAPI is Windows-only; Linux uses NVML exclusively.
+
+![Linux](lglin.png)
 
 ## Requirements
 
