@@ -1,5 +1,8 @@
 #include "platform.h"
 #ifdef PLATFORM_LINUX
+#include <fstream>
+#include <filesystem>
+#include <system_error>
 #include "config.h"
 #include "logger.h"
 

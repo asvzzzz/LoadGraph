@@ -1,3 +1,4 @@
+#include <cstring>
 #include "dashboard_html.h"
 
 // HTML dashboard strings - copied from http_server.cpp so both GUI and console

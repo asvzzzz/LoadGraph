@@ -6,6 +6,7 @@
 
 #include <cstdlib>
 #include <cstring>
+#include <ctime>
 #include <string>
 #include <fstream>
 
@@ -199,7 +200,7 @@ bool Theme::Update()
     // only delay cache refresh, never cause spurious updates).
     static constexpr double kCacheSec = 30.0;
     const bool wasDark = g_dark;
-    double now = static_cast<double>(wxGetLocalTime().GetValue());
+    double now = static_cast<double>(time(nullptr));
     if (now - g_darkCached > kCacheSec || g_darkCached == 0.0)
     {
         g_dark = ReadDarkFlag();

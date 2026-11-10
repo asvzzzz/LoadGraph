@@ -281,6 +281,7 @@ target_include_directories(LoadGraphGUI PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src/lib_sensors
     ${CMAKE_CURRENT_SOURCE_DIR}/src/lib_http
     ${CMAKE_CURRENT_SOURCE_DIR}/src/lib_config
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/lib_logger
     ${CMAKE_CURRENT_SOURCE_DIR}/src/lib_theme
 )
 if(WIN32)

@@ -405,7 +405,7 @@ void MainFrame::BuildGpuSection(wxBoxSizer* container, wxWindow* parent)
 		const GpuData& gpu = gpus[i];
 
 		const wxString gpuTitle = wxString::Format("GPU %d: ", static_cast<int>(i))
-			+ wxString::FromUTF8(gpu.name);
+			+ wxString::FromUTF8(gpu.name.c_str());
 
 		// Title label as a direct child of the container (proportion=0, no stretch).
 		wxStaticText* gpuTitleLabel = new wxStaticText(parent, wxID_ANY, gpuTitle);
@@ -415,7 +415,7 @@ void MainFrame::BuildGpuSection(wxBoxSizer* container, wxWindow* parent)
 		container->Add(gpuTitleLabel, 0, wxLEFT | wxRIGHT, 5);
 
 		GpuPanelData data;
-		data.name = wxString::FromUTF8(gpu.name);
+		data.name = wxString::FromUTF8(gpu.name.c_str());
 
 		// Row 1: Load + Temp.
 		wxBoxSizer* row1 = new wxBoxSizer(wxHORIZONTAL);
