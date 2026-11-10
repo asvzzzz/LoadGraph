@@ -94,6 +94,10 @@ private:
     // names match the rest of the labels (wxStaticBox uses the system color).
     std::vector<wxWindow*> m_gpuBoxes;
 
+    // Labels that must keep a custom config color even after theme switches.
+    struct ColoredLabel { wxWindow* win = nullptr; wxColour color; };
+    std::vector<ColoredLabel> m_customColoredLabels;
+
     // View menu state persistence. Keys map to graph panel pointers so the
     // toggle handler can show/hide a specific chart on demand.
     std::map<std::string, GraphPanel*> m_viewToggles;

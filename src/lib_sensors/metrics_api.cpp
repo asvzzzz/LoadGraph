@@ -5,6 +5,7 @@
 #include "storage_monitor.h"
 #include <chrono>
 #include <thread>
+#include <cstring>
 
 #ifdef PLATFORM_WINDOWS
 #include <windows.h>
@@ -45,38 +46,38 @@ void MetricsShutdown()
     if (s_storage) { s_storage->Stop(); delete s_storage; s_storage = nullptr; }
 }
 
-CpuData MetricsGetCpu()
+void MetricsGetCpu(CpuData& out)
 {
-    CpuData d{};
-    if (!s_cpu) return d;
-    const auto& m = s_cpu->GetMetrics();
-    d.loadPercent   = m.loadPercent;
-    d.temperature   = m.temperature;
-    d.fanRpm        = m.fanRpm;
-    d.uptimeMs      = m.uptimeMs;
-    d.cpuName       = m.cpuName;
-    d.powerWatts    = m.powerWatts;
-    d.tdpWatts      = m.tdpWatts;
-    return d;
+    // Zero-initialize to prevent reading garbage from uninitialized padding.
+    std::memset(&out, 0, sizeof(out));
+    if (!s_cpu) return;
+    CpuMetrics m{};
+    s_cpu->GetMetrics(m);
+    out.loadPercent   = m.loadPercent;
+    out.temperature   = m.temperature;
+    out.fanRpm        = m.fanRpm;
+    out.uptimeMs      = m.uptimeMs;
+    out.cpuName = m.cpuName;
+    out.powerWatts    = m.powerWatts;
+    out.tdpWatts      = m.tdpWatts;
 }
 
-RamData MetricsGetRam()
+void MetricsGetRam(RamData& out)
 {
-    RamData d{};
-    if (!s_ram) return d;
+    std::memset(&out, 0, sizeof(out));
+    if (!s_ram) return;
     const auto& m = s_ram->GetMetrics();
-    d.totalBytes   = m.totalBytes;
-    d.freeBytes    = m.freeBytes;
-    d.loadPercent  = m.loadPercent;
-    d.powerWatts   = m.powerWatts;
-    return d;
+    out.totalBytes   = m.totalBytes;
+    out.freeBytes    = m.freeBytes;
+    out.loadPercent  = m.loadPercent;
+    out.powerWatts   = m.powerWatts;
 }
 
 std::vector<GpuData> MetricsGetGpus()
 {
     std::vector<GpuData> out;
     if (!s_gpu || !s_gpu->IsAvailable()) return out;
-    const auto& metrics = s_gpu->GetMetrics();
+    auto metrics = s_gpu->GetMetrics();
     out.reserve(metrics.size());
     for (const auto& m : metrics)
     {

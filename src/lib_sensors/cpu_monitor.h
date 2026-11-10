@@ -27,9 +27,9 @@ struct CpuMetrics
     int       fanRpm      = -1;    // Fan speed in RPM, -1 means N/A
     uint64_t  uptimeMs    = 0;     // System uptime in milliseconds
 #ifdef PLATFORM_WINDOWS
-    std::wstring cpuName;          // UTF-16 from registry (Windows)
+    wchar_t   cpuName[256] = {};   // UTF-16 from registry (Windows)
 #else
-    std::string  cpuName;          // UTF-8 from /proc/cpuinfo (Linux)
+    char      cpuName[256] = {};   // UTF-8 from /proc/cpuinfo (Linux)
 #endif
     double    powerWatts  = -1.0;  // Current CPU power draw in watts, -1.0 = N/A
     double    tdpWatts    = -1.0;  // CPU TDP (max power) in watts, -1.0 = N/A
@@ -46,8 +46,10 @@ public:
     CpuMonitor();
     ~CpuMonitor() override;
 
-    // Get current CPU metrics (thread-safe copy).
-    CpuMetrics GetMetrics();
+    // Get current CPU metrics (thread-safe, field-by-field under lock).
+    // Returns each field individually while holding the lock to prevent
+    // any race condition with the polling thread's m_metrics writes.
+    void GetMetrics(CpuMetrics& out);
 
     // Sample CPU load (PDH delta on Windows, /proc/stat on Linux).
     // Thread-safe: writes into m_metrics under its own lock.

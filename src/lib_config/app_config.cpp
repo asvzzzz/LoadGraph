@@ -282,6 +282,18 @@ AppConfig LoadAppConfig()
             if (ReadJsonNumber(p, v) && v >= -32000 && v <= 32000)
                 cfg.window_y = static_cast<int>(v);
         }
+        else if (key == "window_w")
+        {
+            double v = 0.0;
+            if (ReadJsonNumber(p, v) && v >= 0 && v <= 10000)
+                cfg.window_w = static_cast<int>(v);
+        }
+        else if (key == "window_h")
+        {
+            double v = 0.0;
+            if (ReadJsonNumber(p, v) && v >= 0 && v <= 10000)
+                cfg.window_h = static_cast<int>(v);
+        }
         else if (key == "colors")
         {
             // Parse inner object.
@@ -370,6 +382,43 @@ AppConfig LoadAppConfig()
             }
             if (*p == '}') ++p;
         }
+        else if (key == "view_menu")
+        {
+            // Parse view menu visibility state: {"cpu_load":true,"ram":false,...}
+            if (*p != '{') break;
+            ++p;
+            while (*p && *p != '}')
+            {
+                SkipSpaces(p);
+                if (*p == ',') { ++p; continue; }
+                if (*p == '}') break;
+
+                std::string ck;
+                if (!ReadJsonString(p, ck)) break;
+
+                SkipSpaces(p);
+                if (*p != ':') break;
+                ++p;
+                SkipSpaces(p);
+
+                bool cv = false;
+                if (strncmp(p, "true", 4) == 0)       { p += 4;  cv = true; }
+                else if (strncmp(p, "false", 5) == 0) { p += 5;  cv = false; }
+                else
+                {
+                    // Skip unknown value and continue.
+                    if (*p == '"') { std::string dummy; ReadJsonString(p, dummy); }
+                    else if (*p == '{')
+                    { int depth = 1; ++p; while (*p && depth > 0) { if (*p == '{') ++depth; else if (*p == '}') --depth; ++p; } }
+                    else if (*p == '[')
+                    { int depth = 1; ++p; while (*p && depth > 0) { if (*p == '[') ++depth; else if (*p == ']') --depth; ++p; } }
+                    else { while (*p && *p != ',' && *p != '}') ++p; }
+                    continue;
+                }
+                cfg.view_menu[ck] = cv;
+            }
+            if (*p == '}') ++p;
+        }
         else
         {
             // Skip unknown value.
@@ -403,10 +452,10 @@ AppConfig LoadAppConfig()
         }
     }
 
-    LOGI("Config: port=%d http=%s log_file=%s win=(%d,%d)",
+    LOGI("Config: port=%d http=%s log_file=%s win=(%d,%d) sz=%dx%d",
          cfg.http_port, cfg.http_enabled ? "on" : "off",
          cfg.log_file ? "on" : "off",
-         cfg.window_x, cfg.window_y);
+         cfg.window_x, cfg.window_y, cfg.window_w, cfg.window_h);
 
     return cfg;
 }
@@ -422,6 +471,8 @@ void SaveAppConfig(const AppConfig& cfg)
     out += "  \"log_file\": "    + std::string(cfg.log_file     ? "true"  : "false") + ",\n";
     out += "  \"window_x\": "    + EmitJsonNumber((double)cfg.window_x)     + ",\n";
     out += "  \"window_y\": "    + EmitJsonNumber((double)cfg.window_y)     + ",\n";
+    out += "  \"window_w\": "    + EmitJsonNumber((double)cfg.window_w)     + ",\n";
+    out += "  \"window_h\": "    + EmitJsonNumber((double)cfg.window_h)     + ",\n";
     out += "  \"colors\": {\n";
     out += "    \"cpu_load\":     " + EmitJsonString(cfg.cpu_load_color)      + ",\n";
     out += "    \"cpu_temp\":     " + EmitJsonString(cfg.cpu_temp_color)      + ",\n";
@@ -438,7 +489,20 @@ void SaveAppConfig(const AppConfig& cfg)
     out += "    \"page\":       " + EmitJsonString(cfg.page_bg_color)       + ",\n";
     out += "    \"section\":    " + EmitJsonString(cfg.section_bg_color)    + ",\n";
     out += "    \"chart\":      " + EmitJsonString(cfg.chart_bg_color)      + "\n";
-    out += "  }\n";
+    out += "  },\n";
+    // View menu state.
+    if (!cfg.view_menu.empty())
+    {
+        out += "  \"view_menu\": {\n";
+        size_t idx = 0;
+        for (const auto& kv : cfg.view_menu)
+        {
+            out += "    \"" + kv.first + "\": " + std::string(kv.second ? "true" : "false");
+            if (++idx < cfg.view_menu.size()) out += ",";
+            out += "\n";
+        }
+        out += "  },\n";
+    }
     out += "}\n";
 
     if (!WriteFile(path, out))

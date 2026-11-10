@@ -381,3 +381,23 @@ else()
     )
     target_compile_options(LoadGraphTTY PRIVATE -Wall -Wextra -Wno-unused-parameter)
 endif()
+
+# ============================================================================
+# Valgrind custom targets (Linux only).
+# Usage: cmake --build build_linux --target valgrind-gui
+#        cmake --build build_linux --target valgrind-tty
+# Output: build_linux/bin/log.log (GUI) / build_linux/bin/log_tty.log (TTY)
+# ============================================================================
+if(UNIX AND NOT APPLE)
+    add_custom_target(valgrind-gui
+        COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/run_valgrind_gui.sh
+        WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+        COMMENT "Running LoadGraphGUI under Valgrind (output: bin/log.log)"
+    )
+
+    add_custom_target(valgrind-tty
+        COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/run_valgrind_tty.sh
+        WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+        COMMENT "Running LoadGraphTTY under Valgrind (output: bin/log_tty.log)"
+    )
+endif()

@@ -201,10 +201,24 @@ CpuMonitor::~CpuMonitor()
     }
 }
 
-CpuMetrics CpuMonitor::GetMetrics()
+void CpuMonitor::GetMetrics(CpuMetrics& out)
 {
+    // Copy fields individually under the lock. We must NOT use a temporary
+    // and assign it to `out` because NRVO may alias `tmp` with `out`, causing
+    // the destructor of `tmp` (which runs when GetMetrics returns) to free
+    // memory that `out` still needs. Copying field-by-field avoids this trap.
     std::lock_guard<std::mutex> lock(m_mutex);
-    return m_metrics;
+    out.loadPercent   = m_metrics.loadPercent;
+    out.temperature   = m_metrics.temperature;
+    out.fanRpm        = m_metrics.fanRpm;
+    out.uptimeMs      = m_metrics.uptimeMs;
+#ifdef PLATFORM_WINDOWS
+    wcsncpy(out.cpuName, m_metrics.cpuName, sizeof(out.cpuName) / sizeof(wchar_t) - 1);
+#else
+    strncpy(out.cpuName, m_metrics.cpuName, sizeof(out.cpuName) - 1);
+#endif
+    out.powerWatts    = m_metrics.powerWatts;
+    out.tdpWatts      = m_metrics.tdpWatts;
 }
 
 // Sample the CPU load right now via PDH. This is called from the GUI thread
@@ -942,8 +956,12 @@ void CpuMonitor::QueryCpuName()
             type == REG_SZ && name[0])
         {
             std::lock_guard<std::mutex> lock(m_mutex);
-            m_metrics.cpuName = name;
-            LOGI("CPU name: %ls", name);
+#ifdef PLATFORM_WINDOWS
+            wcsncpy(m_metrics.cpuName, name, sizeof(m_metrics.cpuName) / sizeof(wchar_t) - 1);
+#else
+            strncpy(m_metrics.cpuName, name.c_str(), sizeof(m_metrics.cpuName) - 1);
+#endif
+            LOGI("CPU name: %s", m_metrics.cpuName);
         }
         RegCloseKey(hKey);
     }
@@ -951,8 +969,13 @@ void CpuMonitor::QueryCpuName()
     // CPU names are ASCII; narrow char-by-char (no locale conversion needed).
     {
         std::lock_guard<std::mutex> lock(m_mutex);
-        for (const wchar_t* p = m_metrics.cpuName.c_str(); *p; ++p)
+#ifdef PLATFORM_WINDOWS
+        for (const wchar_t* p = m_metrics.cpuName; *p; ++p)
             nameA += static_cast<char>(*p);
+#else
+        for (const char* p = m_metrics.cpuName; *p; ++p)
+            nameA += *p;
+#endif
     }
 
     // Resolve the TDP limit once from the static table (unknown CPU -> 125 W).

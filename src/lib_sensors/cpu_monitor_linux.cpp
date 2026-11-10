@@ -220,8 +220,8 @@ CpuMonitor::CpuMonitor()
     // Read CPU name once at startup.
     std::string name = ReadCpuName();
     if (!name.empty())
-        m_metrics.cpuName = name;
-    LOGI("CPU name: %s", m_metrics.cpuName.c_str());
+        strncpy(m_metrics.cpuName, name.c_str(), sizeof(m_metrics.cpuName) - 1);
+    LOGI("CPU name: %s", m_metrics.cpuName);
 
     // Resolve the TDP limit once from the static table via family+model key.
     const std::string famModel = ReadCpuFamilyModel();
@@ -252,10 +252,20 @@ CpuMonitor::~CpuMonitor()
 {
 }
 
-CpuMetrics CpuMonitor::GetMetrics()
+void CpuMonitor::GetMetrics(CpuMetrics& out)
 {
+    // Copy fields individually under the lock. We must NOT use a temporary
+    // and assign it to `out` because NRVO may alias `tmp` with `out`, causing
+    // the destructor of `tmp` (which runs when GetMetrics returns) to free
+    // memory that `out` still needs. Copying field-by-field avoids this trap.
     std::lock_guard<std::mutex> lock(m_mutex);
-    return m_metrics;
+    out.loadPercent   = m_metrics.loadPercent;
+    out.temperature   = m_metrics.temperature;
+    out.fanRpm        = m_metrics.fanRpm;
+    out.uptimeMs      = m_metrics.uptimeMs;
+    strncpy(out.cpuName, m_metrics.cpuName, sizeof(out.cpuName) - 1);
+    out.powerWatts    = m_metrics.powerWatts;
+    out.tdpWatts      = m_metrics.tdpWatts;
 }
 
 // Read the RAPL energy counter and return package power in watts.

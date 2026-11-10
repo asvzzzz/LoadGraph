@@ -59,7 +59,7 @@ public:
     // Set Y-axis tick spacing mode. Controls how axis labels are computed so
     // that they always land on round numbers regardless of panel height.
     void SetYMode(GraphYMode mode);
-    static wxString FormatValue(double val);
+    wxString FormatValue(double val) const;
 
 protected:
     void OnPaint(wxPaintEvent& evt);

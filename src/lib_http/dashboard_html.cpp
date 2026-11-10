@@ -82,12 +82,7 @@ static const char* kHtmlPageBody1 = R"(<body>
       <canvas id="ramChart" class="chart"></canvas>
     </div>
   </div>
-  <!-- Row 2: Power (full width, shown only when TDP > 0) -->
-  <div class="full-row" id="cpuPowerRow" style="display:none">
-    <div class="val-row">Power <span class="val-val" id="cpuPowerVal">N/A</span></div>
-      <canvas id="powerChart" class="chart"></canvas>
-  </div>
-  <!-- Row 3: Temp | Fan -->
+  <!-- Row 2: Temp | Fan -->
   <div class="chart-row">
     <div class="chart-cell">
       <div class="val-row">Temp <span class="val-val" id="cpuTempVal">N/A</span></div>
@@ -97,6 +92,11 @@ static const char* kHtmlPageBody1 = R"(<body>
       <div class="val-row">Fan <span class="val-val" id="fanVal">N/A</span></div>
       <canvas id="fanChart" class="chart"></canvas>
     </div>
+  </div>
+  <!-- Row 3: Power (full width, shown only when TDP > 0) -->
+  <div class="full-row" id="cpuPowerRow" style="display:none">
+    <div class="val-row">Power <span class="val-val" id="cpuPowerVal">N/A</span></div>
+      <canvas id="powerChart" class="chart"></canvas>
   </div>
 </div>
 
@@ -177,6 +177,8 @@ function makeChart(id, color, yMax) {
     return {
         get ymax() { return curYmax; },
         set ymax(v) { curYmax = Math.max(curYmax, v); },
+        get color() { return color; },
+        set color(v) { color = v; draw(); },
         push(v) {
             data.push(Math.max(0, v));
             if (data.length > MAX_P) data.shift();
@@ -255,8 +257,10 @@ function updateCpu(d) {
   // CPU Temp.
   var tcEl = document.getElementById('cpuTempVal');
   if (d.cpu_temp >= 0) {
-    tcEl.innerHTML = '<span class="'+tempColor(d.cpu_temp)+'">'+d.cpu_temp.toFixed(0)+' C</span>';
+    var tc = tempColor(d.cpu_temp);
+    tcEl.innerHTML = '<span class="'+tc+'">'+d.cpu_temp.toFixed(0)+' C</span>';
     tempChart.push(d.cpu_temp);
+    tempChart.color = tc;
   } else { tcEl.textContent = 'N/A'; }
 
   // CPU Fan.
@@ -334,10 +338,12 @@ function updateGpu(d) {
 
     var tvEl = document.getElementById('gpu'+i+'TempVal');
     if (g.temperature >= 0) {
-      tvEl.innerHTML = '<span class="'+tempColor(g.temperature)+'">'+g.temperature.toFixed(0)+' C</span>';
+      var gtc = tempColor(g.temperature);
+      tvEl.innerHTML = '<span class="'+gtc+'">'+g.temperature.toFixed(0)+' C</span>';
       var tcKey = 'gpu'+i+'TempChart';
       if (!gpuCharts[tcKey]) gpuCharts[tcKey] = makeChart(tcKey, C.gpuTemp, 100);
       gpuCharts[tcKey].push(g.temperature);
+      gpuCharts[tcKey].color = gtc;
     } else { tvEl.textContent = 'N/A'; }
 
     // Row 2: VRAM | Fan.

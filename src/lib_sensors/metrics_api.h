@@ -59,10 +59,13 @@ bool MetricsInit();
 void MetricsShutdown();
 
 // Fetch current CPU metrics. Thread-safe.
-CpuData  MetricsGetCpu();
+// Uses output parameter to avoid return-by-value copy of structs
+// containing std::string (prevents NRVO-related crashes on some
+// compiler/libstdc++ combinations under Valgrind).
+void MetricsGetCpu(CpuData& out);
 
 // Fetch current RAM metrics. Thread-safe.
-RamData  MetricsGetRam();
+void MetricsGetRam(RamData& out);
 
 // Fetch current GPU metrics. Thread-safe. Returns empty vector if no GPU.
 std::vector<GpuData> MetricsGetGpus();

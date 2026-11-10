@@ -412,10 +412,18 @@ std::vector<double> GraphPanel::ComputeYTicks(double minVal, double maxVal,
 }
 
 // Format a value for axis labels and the header readout.
-wxString GraphPanel::FormatValue(double val)
+wxString GraphPanel::FormatValue(double val) const
 {
     // Guard against NaN / Inf — static_cast of NaN to integral is UB.
     if (!std::isfinite(val)) return "N/A";
+    switch (m_yMode)
+    {
+        case GraphYMode::Gigabytes:
+            // One decimal place so small values like 0.2 GB are visible.
+            return wxString::Format("%.1f", val);
+        default:
+            break;
+    }
     // Round to nearest integer to avoid floating point artifacts.
     long rounded = static_cast<long>(std::round(val));
     return wxString::Format("%ld", rounded);

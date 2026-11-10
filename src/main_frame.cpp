@@ -1,5 +1,4 @@
 #include "main_frame.h"
-#include "config.h"
 #include "theme.h"
 #include "power_table.h"
 #include "logger.h"
@@ -95,18 +94,13 @@ MainFrame::MainFrame(const wxString& title, const AppConfig& cfg)
 	// Refresh the system palette once before first use.
 	Theme::Update();
 
-	int x = 100, y = 100, w = 640, h = 720;
-#ifdef PLATFORM_WINDOWS
-	x = m_cfg.window_x;
-	y = m_cfg.window_y;
-#endif
-	bool hasPos = false;
-#ifdef PLATFORM_WINDOWS
-	hasPos = (m_cfg.window_x != 0 || m_cfg.window_y != 0);
-#else
-	hasPos = Config::LoadWindowPosition(x, y);
-	Config::LoadWindowSize(w, h);
-#endif
+	int x = m_cfg.window_x;
+	int y = m_cfg.window_y;
+	int w = m_cfg.window_w;
+	int h = m_cfg.window_h;
+	// (0,0,0,0 means "let OS decide" — default placement).
+	bool hasPos = (x != 0 || y != 0);
+	if (!hasPos) { x = 100; y = 100; w = 640; h = 720; }
 
 	wxPoint pos = hasPos ? wxPoint(x, y) : wxDefaultPosition;
 	wxSize  size = hasPos ? wxSize(w, h) : wxSize(640, 720);
@@ -129,12 +123,16 @@ MainFrame::MainFrame(const wxString& title, const AppConfig& cfg)
 	// Build the layout first - the View menu needs the created graph panels.
 	RealizeUI();
 
-	std::map<std::string, bool> initialState;
-	Config::LoadViewMenuState(initialState);
+	const std::map<std::string, bool>& initialState = m_cfg.view_menu;
 
 	wxMenuBar* menuBar = new wxMenuBar();
 	BuildViewMenu(menuBar, initialState);
 	SetMenuBar(menuBar);
+
+	// Remember the saved client size BEFORE applying visibility adjustments,
+	// because ApplyHeightAdjustment changes the window height and we must not
+	// let that override the user's persisted size on restart.
+	const wxSize savedCs = GetClientSize();
 
 	// Apply the persisted visibility (hide everything unchecked).
 	for (const auto& kv : initialState)
@@ -149,7 +147,9 @@ MainFrame::MainFrame(const wxString& title, const AppConfig& cfg)
 	{
 		const wxPoint winPos = GetPosition();
 		const wxSize  mn = sizer->CalcMin();
-		const wxSize  cs = GetClientSize();
+		// Use the pre-adjustment size so user-persisted dimensions are preserved
+		// even when some sections were hidden in a previous session.
+		const wxSize cs = savedCs;
 		// Use saved height if it is larger than content minimum — this preserves
 		// the user's preferred window size across restarts.
 		wxSize finalSz(std::max(cs.x, mn.x), std::max(cs.y, mn.y));
@@ -221,7 +221,8 @@ void MainFrame::RealizeUI()
 	// CPU model label (the redundant "LoadGraph" title was removed; the label
 	// stretches and ellipsizes so the uptime never gets pushed out).
 	wxString cpuLabel = "CPU";
-	const CpuData cpuInit = MetricsGetCpu();
+	CpuData cpuInit{};
+	MetricsGetCpu(cpuInit);
 #ifdef PLATFORM_WINDOWS
 	const std::wstring& cpuNameW = cpuInit.cpuName;
 	if (!cpuNameW.empty()) cpuLabel += "  " + wxString(cpuNameW.c_str());
@@ -238,7 +239,8 @@ void MainFrame::RealizeUI()
 	// width. The CPU label ellipsizes instead of pushing uptime off-screen.
 	const int kUptimeMinWidth = 200;
 	cpuT->SetMaxSize(wxSize(-1, -1));
-	AddThemedText(cpuT, true);
+	// CPU name keeps its config color across theme switches.
+	m_customColoredLabels.push_back({ cpuT, HexColor(m_cfg.cpu_name_color) });
 	hdrS->Add(cpuT, 1, wxALL | wxALIGN_CENTER_VERTICAL, 6);
 
 	m_uptimeText = new wxStaticText(m_header, wxID_ANY, " Uptime: ...");
@@ -305,7 +307,8 @@ void MainFrame::BuildCpuSection(wxBoxSizer* container, wxWindow* parent)
 	m_ramUsageGraph->SetColor(HexColor(m_cfg.ram_color));
 	m_ramUsageGraph->SetBgColor(HexColor(m_cfg.chart_bg_color));
 	// Fixed 0..total RAM range: avoids a drifting auto-scale.
-	const RamData ramInit = MetricsGetRam();
+	RamData ramInit{};
+	MetricsGetRam(ramInit);
 	if (ramInit.totalBytes > 0)
 		m_ramUsageGraph->SetYRange(0.0, std::ceil(BytesToGbs(ramInit.totalBytes)));
 
@@ -319,7 +322,8 @@ void MainFrame::BuildCpuSection(wxBoxSizer* container, wxWindow* parent)
 	m_viewToggles["cpu_load"]  = m_cpuLoadGraph;
 	m_viewToggles["ram"]       = m_ramUsageGraph;
 
-	const CpuData cpuInit = MetricsGetCpu();
+	CpuData cpuInit{};
+	MetricsGetCpu(cpuInit);
 
 	// Row 2: CPU Temp (+ CPU Fan when a fan sensor exists).
 	if (cpuInit.temperature >= 0.0 || cpuInit.fanRpm > 0)
@@ -411,6 +415,8 @@ void MainFrame::BuildGpuSection(wxBoxSizer* container, wxWindow* parent)
 		wxStaticText* gpuTitleLabel = new wxStaticText(parent, wxID_ANY, gpuTitle);
 		gpuTitleLabel->SetFont(
 			wxFont(11, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_BOLD));
+		gpuTitleLabel->SetForegroundColour(HexColor(m_cfg.gpu_name_color));
+		m_customColoredLabels.push_back({ gpuTitleLabel, HexColor(m_cfg.gpu_name_color) });
 		m_gpuBoxes.push_back(gpuTitleLabel);
 		container->Add(gpuTitleLabel, 0, wxLEFT | wxRIGHT, 5);
 
@@ -597,7 +603,12 @@ void MainFrame::OnViewToggle(wxCommandEvent& evt)
 			state[itId->second] = mi->IsChecked();
 			foundAny = true;
 		}
-		if (foundAny) { Config::SaveViewMenuState(state); break; }
+		if (foundAny)
+		{
+			m_cfg.view_menu = state;
+			SaveAppConfig(m_cfg);
+			break;
+		}
 	}
 }
 
@@ -659,8 +670,10 @@ void MainFrame::OnTimer(wxTimerEvent&)
 {
 	if (!m_uiCreated) return;
 
-	const CpuData  cpu  = MetricsGetCpu();
-	const RamData  ram  = MetricsGetRam();
+	CpuData  cpu{};
+	MetricsGetCpu(cpu);
+	RamData  ram{};
+	MetricsGetRam(ram);
 	const std::vector<GpuData> gpus = MetricsGetGpus();
 
 	// React to live light/dark theme switches.
@@ -730,13 +743,11 @@ void MainFrame::OnClose(wxCloseEvent& evt)
 	int x = 0, y = 0, w = 0, h = 0;
 	GetPosition(&x, &y);
 	GetClientSize(&w, &h);
-#ifdef PLATFORM_WINDOWS
 	m_cfg.window_x = x;
 	m_cfg.window_y = y;
+	m_cfg.window_w = w;
+	m_cfg.window_h = h;
 	SaveAppConfig(m_cfg);
-#else
-	Config::SaveWindowPosition(x, y, w, h);
-#endif
 
 	if (m_timer.IsRunning()) m_timer.Stop();
 	MetricsShutdown();
@@ -935,6 +946,12 @@ void MainFrame::ApplyTheme()
 		if (!b) continue;
 		b->SetForegroundColour(text);
 		b->Refresh();
+	}
+
+	// Re-apply custom config colors for labels that must keep them across theme switches.
+	for (const auto& cl : m_customColoredLabels)
+	{
+		if (cl.win) cl.win->SetForegroundColour(cl.color);
 	}
 
 	Refresh();

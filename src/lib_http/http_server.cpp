@@ -71,8 +71,10 @@ static std::string WcharToUtf8(const std::wstring& w)
 // ============================================================================
 static std::string BuildJson()
 {
-    const CpuData  cpu  = MetricsGetCpu();
-    const RamData  ram  = MetricsGetRam();
+    CpuData  cpu{};
+    MetricsGetCpu(cpu);
+    RamData  ram{};
+    MetricsGetRam(ram);
     const auto&    gpus = MetricsGetGpus();
 
 #ifdef PLATFORM_WINDOWS

@@ -40,40 +40,12 @@
 #include "platform.h"   // defines PLATFORM_WINDOWS / PLATFORM_LINUX before any guards below
 #include "app_config.h"
 #include "power_table.h" // CPU TDP lookup and power estimation
+#include "cpu_monitor.h" // CpuMetrics (shared definition with lib_sensors)
+#include "ram_monitor.h" // RamMetrics (shared definition with lib_sensors)
+#include "gpu_monitor.h" // GpuMetrics (shared definition with lib_sensors)
 #include "metrics_api.h" // MetricsGet* API from lib_sensors
 #include "http_server.h" // StartHttpServer from lib_http
 #include "console_colors.h" // GetConsoleColors / SetConsoleColor from lib_theme
-
-// ============================================================================
-// Metrics structures (local aliases — kept minimal to match old console_app)
-// ============================================================================
-struct CpuMetrics
-{
-    double   loadPercent  = 0.0;
-    double   temperature  = -1.0; // degrees C, -1 = N/A
-    double   powerWatts   = -1.0;
-    double   tdpWatts     = -1.0;
-    uint64_t uptimeMs     = 0;
-    std::string cpuName;
-};
-
-struct RamMetrics
-{
-    uint64_t totalBytes  = 0;
-    uint64_t freeBytes   = 0;
-    double   loadPercent = 0.0;
-};
-
-struct GpuMetrics
-{
-    std::string name;
-    double      loadPercent     = 0.0;
-    double      temperature     = -1.0;
-    uint64_t    vramTotalBytes  = 0;
-    uint64_t    vramUsedBytes   = 0;
-    double      fanPercent      = -1.0;
-    double      powerWatts      = -1.0;
-};
 
 // ============================================================================
 // Helpers
@@ -222,10 +194,14 @@ static void Render(const CpuMetrics& cpu, const RamMetrics& ram,
     // Header
     SetConsoleColor(cc.title | FOREGROUND_INTENSITY);
     printf(" LoadGraph Console");
-    if (!cpu.cpuName.empty())
+    if (cpu.cpuName[0] != '\0')
     {
         SetConsoleColor(FOREGROUND_BLUE | FOREGROUND_GREEN); // cyan for CPU name
-        printf(" %s", cpu.cpuName.c_str());
+#ifdef PLATFORM_WINDOWS
+        printf(" %ls", cpu.cpuName);
+#else
+        printf(" %s", cpu.cpuName);
+#endif
     }
     else
     {
@@ -330,8 +306,8 @@ static void Render(const CpuMetrics& cpu, const RamMetrics& ram,
 #else // PLATFORM_LINUX — ANSI output
     const ConsoleColors& cc = GetConsoleColors();
     printf("%s%s LoadGraph Console%s", cc.bold.c_str(), cc.title.c_str(), cc.reset.c_str());
-    if (!cpu.cpuName.empty())
-        printf(" %s%s%s", "\x1b[36m", cpu.cpuName.c_str(), cc.reset.c_str()); // cyan
+    if (cpu.cpuName[0] != '\0')
+        printf(" %s%s%s", "\x1b[36m", cpu.cpuName, cc.reset.c_str()); // cyan
     else
         printf(" %sCPU (N/A)%s", cc.dim.c_str(), cc.reset.c_str());
     printf(" %s| Uptime: %s%s\n", cc.dim.c_str(), cc.value.c_str(), FormatUptime(cpu.uptimeMs).c_str());
@@ -528,12 +504,18 @@ int main(int argc, char* argv[])
     // Accept plain Q or q to quit (polls console input, works reliably).
     while (!PollQuitKey())
     {
-        const CpuData  cpuData  = MetricsGetCpu();
-        const RamData  ramData  = MetricsGetRam();
+        CpuData  cpuData{};
+        MetricsGetCpu(cpuData);
+        RamData  ramData{};
+        MetricsGetRam(ramData);
         const auto&    gpuDatas = MetricsGetGpus();
 
         CpuMetrics cpu{};
-        cpu.cpuName      = std::string(cpuData.cpuName.begin(), cpuData.cpuName.end());
+#ifdef PLATFORM_WINDOWS
+        wcsncpy(cpu.cpuName, cpuData.cpuName.c_str(), sizeof(cpu.cpuName) / sizeof(wchar_t) - 1);
+#else
+        strncpy(cpu.cpuName, cpuData.cpuName.c_str(), sizeof(cpu.cpuName) - 1);
+#endif
         cpu.loadPercent  = cpuData.loadPercent;
         cpu.temperature  = cpuData.temperature;
         cpu.uptimeMs     = cpuData.uptimeMs;
@@ -568,12 +550,18 @@ int main(int argc, char* argv[])
     bool running = true;
     while (running)
     {
-        const CpuData  cpuData  = MetricsGetCpu();
-        const RamData  ramData  = MetricsGetRam();
+        CpuData  cpuData{};
+        MetricsGetCpu(cpuData);
+        RamData  ramData{};
+        MetricsGetRam(ramData);
         const auto&    gpuDatas = MetricsGetGpus();
 
         CpuMetrics cpu{};
-        cpu.cpuName      = cpuData.cpuName;
+#ifdef PLATFORM_WINDOWS
+        wcsncpy(cpu.cpuName, cpuData.cpuName.c_str(), sizeof(cpu.cpuName) / sizeof(wchar_t) - 1);
+#else
+        strncpy(cpu.cpuName, cpuData.cpuName.c_str(), sizeof(cpu.cpuName) - 1);
+#endif
         cpu.loadPercent  = cpuData.loadPercent;
         cpu.temperature  = cpuData.temperature;
         cpu.uptimeMs     = cpuData.uptimeMs;
