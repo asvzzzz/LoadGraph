@@ -29,3 +29,6 @@ test.log
 
 # Documentation (exclude from git)
 AGENTS.md
+
+# Static analysis output
+ccpcheck.*
