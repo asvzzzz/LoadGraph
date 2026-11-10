@@ -40,13 +40,11 @@ LoadGraph решает эту проблему: **все метрики всех
 
 ### Windows
 
-![Windows](lgwin.png)
+Работает на Windows 10/11 с NVIDIA GPU и опциональной температурой CPU через драйвер WinRing0 или fallback rdmsr.
 
 ### Linux / WSL2
 
 Работает на нативном Linux и внутри WSL2 благодаря GPU-PV bridge (NVML доступен по `/usr/lib/wsl/lib/libnvidia-ml.so.1`). NVAPI — только для Windows; на Linux используется исключительно NVML.
-
-![Linux](lglin.png)
 
 ## Требования
 
