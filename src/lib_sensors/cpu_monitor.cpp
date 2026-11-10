@@ -611,7 +611,7 @@ static int ProbeSuperIoFan()
             (static_cast<uint16_t>(baseHigh & 0xFF) << 8) |
              static_cast<uint16_t>(baseLow  & 0xFF));
 
-        if (baseAddr < 0x100 || baseAddr > 0xFFFF) continue;
+        if (baseAddr < 0x100) continue;
         LOGI("Super I/O base I/O = 0x%04X", baseAddr);
 
         // Select logical device #1 (typically fan controller) — config reg 0x07.
@@ -1003,10 +1003,12 @@ void CpuMonitor::ProbeMsrInit()
                 family     = static_cast<uint32_t>(wcstoul(p + 7, nullptr, 10));
                 p = wcsstr(p, L"Model ");
                 if (p)
+                {
                     model = static_cast<uint32_t>(wcstoul(p + 6, nullptr, 10));
-                p = wcsstr(p, L"Stepping ");
-                if (p)
-                    stepping = static_cast<uint32_t>(wcstoul(p + 9, nullptr, 10));
+                    p = wcsstr(p, L"Stepping ");
+                    if (p)
+                        stepping = static_cast<uint32_t>(wcstoul(p + 9, nullptr, 10));
+                }
             }
         }
         RegCloseKey(hKey);

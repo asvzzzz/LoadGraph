@@ -153,7 +153,7 @@ protected:
                             result.push_back(d);
                             pObj->Release();
                         }
-                        pEnumerator->Release();
+                        if (pEnumerator) pEnumerator->Release();
                     }
                     SysFreeString(query);
                 }

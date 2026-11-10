@@ -33,7 +33,7 @@ namespace
             line.erase(0, start);
 
             // Skip comments and empty lines.
-            if (line[0] == ';' || line[0] == '#' || line.empty())
+            if (line.empty() || line[0] == ';' || line[0] == '#')
                 continue;
 
             // Section header — check for [Settings].
