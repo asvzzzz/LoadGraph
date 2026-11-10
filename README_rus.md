@@ -122,6 +122,37 @@ make -j$(nproc)
 WX_CONFIG=/opt/wx/3.2/bin/wx-config cmake ..
 ```
 
+## Конфигурация
+
+Все настройки хранятся в одном файле `loadgraph.cfg` формата JSON:
+
+- **Windows**: рядом с исполняемым файлом (`.<директория exe>/loadgraph.cfg`)
+- **Linux**: `$XDG_CONFIG_HOME/loadgraph/loadgraph.cfg` (по умолчанию `~/.config/loadgraph/loadgraph.cfg`)
+
+```jsonc
+{
+  "http_port": 9115,
+  "http_enabled": false,
+  "log_file": false,
+  // Позиция и размер окна — (0,0,0,0 = дать ОС решить)
+  "window_x": 100,
+  "window_y": 100,
+  "window_w": 640,
+  "window_h": 720,
+  "colors": {
+    "cpu_load": "76B900", "cpu_temp": "00bcd4", "cpu_power": "ffc107",
+    "ram": "AEB4E1", "gpu_load": "e91e63", "gpu_temp": "00bcd4",
+    "gpu_vram": "AEB4E1", "gpu_fan": "3154E1", "gpu_power": "ffc107",
+    "total_power": "ff5722"
+  },
+  "backgrounds": {
+    "page": "1a1a2e", "section": "16213e", "chart": "0f3460"
+  },
+  // Состояние видимости меню View (сохраняется между сессиями)
+  "view_menu": { "cpu_load": true, "ram": true, "gpu_temp": false, ... }
+}
+```
+
 ## Архитектура
 
 ```
@@ -145,9 +176,7 @@ src/
   power_table.{h,cpp}       # статическая таблица TDP для CPU Intel/AMD и GPU NVIDIA (match по подстроке)
   theme.{h,cpp}             # Windows — Registry AppsUseLightTheme, кэш тёмной палитры
   theme_linux.cpp           # Linux — GTK_THEME, XDG_CURRENT_DESKTOP, кэш gsettings на 30 с
-  config.h                  # общий API Config
-  config_win.cpp            # Windows — Registry (позиция/размер окна)
-  config_linux.cpp          # Linux — $XDG_CONFIG_HOME/loadgraph/*.json
+  app_config.h/cpp          # структура AppConfig + парсер/эмиттер JSON для loadgraph.cfg
   logger.{h,cpp}            # файловый логгер (loadgraph.log в CWD; fallback в stderr при ошибке fopen)
   platform.h                # PLATFORM_WINDOWS / PLATFORM_LINUX, ReadFileToString, помощник mkdir -p
 ```
@@ -156,6 +185,7 @@ src/
 
 - **MetricsCollector** использует `condition_variable` для остановки — поток завершается за миллисекунды, а не за секунды.
 - **SEH-защита** вокруг вызовов `rdmsr` и WMI предотвращает падения на системах, где эти API ведут себя нестабильно.
+- **Единый файл конфигурации**: позиция/размер окна, состояние меню View, цвета, настройки HTTP — всё в одном `loadgraph.cfg`. Никаких отдельных файлов.
 - **Жизненный цикл драйвера**: `Open()` сначала пробует DLL, затем ядерное устройство, затем известную службу, затем регистрирует из `.sys`. `Close()` *не* останавливает и не удаляет службы — драйвер остаётся установленным между запусками (служба типа DEMAND_START сохраняется без необходимости повторной установки; сам драйвер загружается при первом использовании).
 - **Повышение UAC** выполняется однократно: вспомогательный процесс устанавливает/запускает службу и завершается; последующие запуски без повышения используют уже запущенную службу.
 - **Таблица TDP GPU** сопоставляет по подстроке, причём более длинные шаблоны идут раньше (например, `"RTX A4000"` перед `"A40"`), чтобы избежать перекрытия.

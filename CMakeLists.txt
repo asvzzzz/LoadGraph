@@ -144,11 +144,7 @@ set(CONFIG_SOURCES
     src/lib_config/color_utils.h
     src/lib_config/color_utils.cpp
 )
-if(WIN32)
-    list(APPEND CONFIG_SOURCES src/lib_config/config_win.cpp)
-elseif(UNIX AND NOT APPLE)
-    list(APPEND CONFIG_SOURCES src/lib_config/config_linux.cpp)
-endif()
+
 
 add_library(loadgraph_config STATIC ${CONFIG_SOURCES} ${COMMON_HEADERS})
 target_include_directories(loadgraph_config PUBLIC

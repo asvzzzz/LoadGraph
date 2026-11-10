@@ -122,6 +122,37 @@ Override wx-config path:
 WX_CONFIG=/opt/wx/3.2/bin/wx-config cmake ..
 ```
 
+## Configuration
+
+All settings are stored in a single `loadgraph.cfg` JSON file:
+
+- **Windows**: next to the executable (`.<exe dir>/loadgraph.cfg`)
+- **Linux**: `$XDG_CONFIG_HOME/loadgraph/loadgraph.cfg` (defaults to `~/.config/loadgraph/loadgraph.cfg`)
+
+```jsonc
+{
+  "http_port": 9115,
+  "http_enabled": false,
+  "log_file": false,
+  // Window position and size — (0,0,0,0 = let OS decide)
+  "window_x": 100,
+  "window_y": 100,
+  "window_w": 640,
+  "window_h": 720,
+  "colors": {
+    "cpu_load": "76B900", "cpu_temp": "00bcd4", "cpu_power": "ffc107",
+    "ram": "AEB4E1", "gpu_load": "e91e63", "gpu_temp": "00bcd4",
+    "gpu_vram": "AEB4E1", "gpu_fan": "3154E1", "gpu_power": "ffc107",
+    "total_power": "ff5722"
+  },
+  "backgrounds": {
+    "page": "1a1a2e", "section": "16213e", "chart": "0f3460"
+  },
+  // View menu visibility state (persisted across sessions)
+  "view_menu": { "cpu_load": true, "ram": true, "gpu_temp": false, ... }
+}
+```
+
 ## Architecture
 
 ```
@@ -142,9 +173,7 @@ src/
   power_table.{h,cpp}       # Static TDP table for Intel/AMD CPUs and NVIDIA GPUs (substring match)
   theme.{h,cpp}             # Windows — Registry AppsUseLightTheme, dark palette cache
   theme_linux.cpp           # Linux — GTK_THEME, XDG_CURRENT_DESKTOP, gsettings 30 s cache
-  config.h                  # shared Config API
-  config_win.cpp            # Windows — Registry (window pos/size)
-  config_linux.cpp          # Linux — $XDG_CONFIG_HOME/loadgraph/*.json
+  app_config.h/cpp          # AppConfig struct + JSON parser/emitter for loadgraph.cfg
   logger.{h,cpp}            # file logger (loadgraph.log in CWD; stderr fallback on fopen fail)
   platform.h                # PLATFORM_WINDOWS / PLATFORM_LINUX, ReadFileToString, mkdir -p helper
 ```
@@ -153,6 +182,7 @@ src/
 
 - **MetricsCollector** uses a `condition_variable` for stop — thread exits in milliseconds, not seconds.
 - **SEH protection** around `rdmsr` and WMI calls prevents crashes on systems where these APIs misbehave.
+- **Single config file**: window position/size, view menu state, colors, HTTP settings — all in one `loadgraph.cfg`. No separate files.
 - **Driver lifecycle**: `Open()` tries DLL first, then kernel device, then known service, then registers from `.sys`. `Close()` does *not* stop or delete services — the driver stays installed across runs (the DEMAND_START service survives without requiring reinstall; the driver itself is loaded on first use).
 - **UAC elevation** is one-shot: the helper process installs/starts the service and exits; subsequent non-elevated launches reuse the running service.
 - **GPU TDP table** matches by substring with longer patterns first (e.g. `"RTX A4000"` before `"A40"`) to avoid shadowing.
