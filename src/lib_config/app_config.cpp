@@ -114,9 +114,21 @@ namespace
         return buf;
     }
 
-    // Get current working directory path as std::string.
-    static std::string GetCwdPath()
+    // Get the directory containing the running executable.
+    // Falls back to cwd on failure.
+    static std::string GetExeDir()
     {
+#ifdef PLATFORM_WINDOWS
+        wchar_t path[MAX_PATH] = {};
+        DWORD n = GetModuleFileNameW(NULL, path, MAX_PATH);
+        if (n > 0 && n < MAX_PATH)
+        {
+            std::wstring wstr(path);
+            size_t pos = wstr.find_last_of(L"\\/");
+            if (pos != std::wstring::npos)
+                return std::string(wstr.begin(), wstr.begin() + static_cast<std::wstring::iterator::difference_type>(pos));
+        }
+#endif
         try { return std::filesystem::current_path().string(); }
         catch (...) { return "."; }
     }
@@ -154,10 +166,11 @@ namespace
 // ---------------------------------------------------------------------------
 
 // Return the path to loadgraph.cfg for the current platform.
+// Windows: looks in exe directory first (config travels with binary).
 static std::string GetConfigPath()
 {
 #ifdef PLATFORM_WINDOWS
-    return GetCwdPath() + "/" + "loadgraph.cfg";
+    return GetExeDir() + "/loadgraph.cfg";
 #else
     // Linux: use XDG_CONFIG_HOME/loadgraph/loadgraph.cfg
     const char* xdg = getenv("XDG_CONFIG_HOME");

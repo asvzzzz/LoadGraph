@@ -290,6 +290,12 @@ static int ProbeSuperIoFan();
 
 void CpuMonitor::Collect()
 {
+    // CPU load — PDH delta sample once per tick, same cadence as the polling loop.
+    // SampleLoad writes loadPercent and powerWatts into m_metrics under its own lock;
+    // calling it here (instead of from a separate timer thread) keeps the delta
+    // calculation single-threaded and avoids race conditions.
+    (void)SampleLoad();
+
     // Temperature / fan: try MSR (kernel driver or direct rdmsr) first, then WMI.
     double temp = -1.0;
     int    fan  = -1;

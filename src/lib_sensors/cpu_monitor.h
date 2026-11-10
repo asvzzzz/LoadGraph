@@ -26,7 +26,11 @@ struct CpuMetrics
     double    temperature = -1.0;  // Temperature in Celsius, -1.0 means N/A
     int       fanRpm      = -1;    // Fan speed in RPM, -1 means N/A
     uint64_t  uptimeMs    = 0;     // System uptime in milliseconds
-    std::wstring cpuName;          // CPU model name (empty if unavailable)
+#ifdef PLATFORM_WINDOWS
+    std::wstring cpuName;          // UTF-16 from registry (Windows)
+#else
+    std::string  cpuName;          // UTF-8 from /proc/cpuinfo (Linux)
+#endif
     double    powerWatts  = -1.0;  // Current CPU power draw in watts, -1.0 = N/A
     double    tdpWatts    = -1.0;  // CPU TDP (max power) in watts, -1.0 = N/A
 };
@@ -45,9 +49,9 @@ public:
     // Get current CPU metrics (thread-safe copy).
     CpuMetrics GetMetrics();
 
-    // Sample the CPU load right now (call from the GUI thread each tick).
-    // On Windows uses PDH for zero-lag reading; on Linux reads /proc/stat.
-    // Returns the load percentage, or -1.0 on failure.
+    // Sample CPU load (PDH delta on Windows, /proc/stat on Linux).
+    // Thread-safe: writes into m_metrics under its own lock.
+    // Called from the polling thread inside Collect() — do NOT call from GUI thread.
     double SampleLoad();
 
     // Read the CPU model name (called once at startup before polling starts).
@@ -96,7 +100,7 @@ private:
     // OpenHardwareMonitor WMI namespace). Probed once, then read each tick.
     bool        m_powerLhmTried = false;
     bool        m_powerLhmOk    = false;
-    std::wstring m_powerLhmNs;          // namespace that exposed the sensor
+    std::wstring m_powerLhmNs;          // namespace that exposed the sensor (UTF-16)
     // MSR-based temperature (kernel driver or direct rdmsr). Probed once per session.
     bool        m_msrTried   = false;
     bool        m_msrOk      = false;

@@ -24,7 +24,12 @@
 #include "platform.h"
 #include "ring0_msr.h"
 #include "logger.h"
-#include <wx/wx.h>
+// windows.h already included above via platform.h, but restore full API for
+// ShellExecuteExW / winsvc / winioctl which WIN32_LEAN_AND_MEAN hides.
+#ifdef PLATFORM_WINDOWS
+#undef WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#endif
 
 #ifdef PLATFORM_WINDOWS
 #ifndef NOMINMAX
@@ -210,7 +215,7 @@ namespace Ring0Msr
                                  reinterpret_cast<LPBYTE>(path), &size) == ERROR_SUCCESS
                 && path[0])
             {
-                LOGI("MSR driver from registry: %s", wxString(path).c_str());
+                LOGI("MSR driver from registry: %S", path);
                 RegCloseKey(hKey);
                 return std::wstring(path);
             }

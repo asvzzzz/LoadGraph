@@ -198,7 +198,6 @@ const gpuCharts  = {};
 
 // ── Helpers ───────────────────────────────────────────────────────────────
 function esc(s)  { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;'); }
-function gb(b)   { return (b / (1024*1024*1024)).toFixed(1); }
 function tempColor(t) { return t > 80 ? 'red' : t > 65 ? 'yellow' : 'green'; }
 
 // ── CPU section update ────────────────────────────────────────────────────
@@ -271,7 +270,7 @@ function updateCpu(d) {
 }
 
 // ── GPU sections - preserve DOM, update in place ──────────────────────────
-function getOrCreateGpuSec(i, name, col) {
+function getOrCreateGpuSec(i, name) {
   var div = document.getElementById('gpusec'+i);
   if (div) return div;
   div = document.createElement('div');

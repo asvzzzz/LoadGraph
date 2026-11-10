@@ -220,7 +220,7 @@ CpuMonitor::CpuMonitor()
     // Read CPU name once at startup.
     std::string name = ReadCpuName();
     if (!name.empty())
-        m_metrics.cpuName = std::wstring(name.begin(), name.end());
+        m_metrics.cpuName = name;
     LOGI("CPU name: %s", m_metrics.cpuName.c_str());
 
     // Resolve the TDP limit once from the static table via family+model key.
@@ -401,6 +401,10 @@ void CpuMonitor::QueryCpuName()
 
 void CpuMonitor::Collect()
 {
+    // CPU load: /proc/stat delta. SampleLoad writes loadPercent and powerWatts
+    // into m_metrics under its own lock — called here so the delta is single-threaded.
+    (void)SampleLoad();
+
     const uint64_t uptimeMs = ReadUptimeMs();
 
     // Temperature: availability is probed once (guarded); after a successful

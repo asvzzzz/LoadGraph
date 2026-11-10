@@ -4,9 +4,7 @@
 // Public API for reading current system metrics.
 // Used by the HTTP server to build JSON responses without depending on wxWidgets.
 
-#ifdef PLATFORM_WINDOWS
-#include <windows.h>
-#endif
+#include "platform.h"   // defines PLATFORM_WINDOWS / PLATFORM_LINUX and includes windows.h
 
 #include <cstdint>
 #include <string>
@@ -25,7 +23,11 @@ struct CpuData {
     double  temperature  = -1.0;
     int     fanRpm       = -1;
     uint64_t uptimeMs    = 0;
-    std::wstring cpuName;
+#ifdef PLATFORM_WINDOWS
+    std::wstring cpuName;   // UTF-16 from registry (ProcessorNameString)
+#else
+    std::string  cpuName;   // UTF-8 from /proc/cpuinfo
+#endif
     double  powerWatts   = -1.0;
     double  tdpWatts     = -1.0;
 };
@@ -55,11 +57,6 @@ bool MetricsInit();
 
 // Shutdown and free resources.
 void MetricsShutdown();
-
-// Sample CPU load NOW (calls CpuMonitor::SampleLoad internally).
-// Must be called periodically (e.g. from HTTP server thread) to keep
-// powerWatts estimate up-to-date — the background Collect() only updates temp.
-void MetricsSampleCpuLoad();
 
 // Fetch current CPU metrics. Thread-safe.
 CpuData  MetricsGetCpu();

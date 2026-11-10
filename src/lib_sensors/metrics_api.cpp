@@ -37,12 +37,6 @@ bool MetricsInit()
     return true;
 }
 
-void MetricsSampleCpuLoad()
-{
-    if (!s_cpu) return;
-    s_cpu->SampleLoad();
-}
-
 void MetricsShutdown()
 {
     if (s_cpu)   { s_cpu->Stop();   delete s_cpu;   s_cpu = nullptr; }

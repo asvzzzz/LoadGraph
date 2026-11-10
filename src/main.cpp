@@ -69,84 +69,12 @@ LONG WINAPI TopLevelFilter(EXCEPTION_POINTERS* ep)
 // a white "LG" label in the center.
 // ----------------------------------------------------------------------------
 #ifdef PLATFORM_WINDOWS
-// RC compiler auto-assigns ID 1 when no explicit number is given.
-// src/icon.rc has: IDI_ICON ICON "loadgraph.ico" → GROUP_ICON named IDI_ICON, ICON id=1
-#define IDI_ICON 1
-
 static wxIcon MakeEmbeddedGreenIcon()
 {
-    // Load the embedded Windows icon resource (IDI_ICON) compiled into the
-    // binary via src/icon.rc. Recolor non-transparent pixels to NVIDIA green.
-    const int R = 118, G = 185, B = 0;
-
-    // Use MAKEINTRESOURCE so Windows looks up the icon by ID in the module's
-    // resource table — this is the correct way to load a compiled .rc icon.
-    HICON hIcon = LoadIcon(GetModuleHandle(NULL), MAKEINTRESOURCE(IDI_ICON));
-    if (!hIcon) return wxIcon();
-
-    ICONINFO info{};
-    if (!GetIconInfo(hIcon, &info)) { DestroyIcon(hIcon); return wxIcon(); }
-
-    // Copy icon bitmap into a 32-bit DIB section for pixel manipulation.
-    HDC hdcScreen = GetDC(nullptr);
-    HDC hdcMem = CreateCompatibleDC(hdcScreen);
-    HBITMAP hbmSrc = info.hbmColor ? info.hbmColor : info.hbmMask;
-    HBITMAP hbmOld = (HBITMAP)SelectObject(hdcMem, hbmSrc);
-
-    BITMAP bm{};
-    GetObject(hbmSrc, sizeof(bm), &bm);
-
-    BITMAPINFOHEADER bih{};
-    bih.biSize          = sizeof(BITMAPINFOHEADER);
-    bih.biWidth         = bm.bmWidth;
-    bih.biHeight        = -bm.bmHeight;   // top-down DIB
-    bih.biPlanes        = 1;
-    bih.biBitCount      = 32;
-    bih.biCompression   = BI_RGB;
-
-    void* pBits = nullptr;
-    HBITMAP hbmDIB = CreateDIBSection(hdcMem, (BITMAPINFO*)&bih, DIB_RGB_COLORS, &pBits, nullptr, 0);
-    HBITMAP hbmOld2 = (HBITMAP)SelectObject(hdcMem, hbmDIB);
-    BitBlt(hdcMem, 0, 0, bm.bmWidth, bm.bmHeight, hdcMem, 0, 0, SRCCOPY);
-
-    // Copy pixels BEFORE cleaning up GDI objects.
-    unsigned char* pixels = static_cast<unsigned char*>(pBits);
-    const int w = bm.bmWidth, h = bm.bmHeight;
-    wxImage img(w, h);
-    memcpy(img.GetData(), pBits, w * h * 4);
-
-    // Recolor non-transparent pixels to NVIDIA green (#76B900).
-    for (int y = 0; y < h; ++y)
-        for (int x = 0; x < w; ++x)
-        {
-            int idx = (y * w + x) * 4;
-            if (pixels[idx + 3] > 0)
-            {
-                pixels[idx]     = B;
-                pixels[idx + 1] = G;
-                pixels[idx + 2] = R;
-            }
-        }
-
-    // Build alpha channel from the copied pixels.
-    unsigned char* alpha = new unsigned char[w * h];
-    for (int i = 0; i < w * h; ++i)
-        alpha[i] = pixels[i * 4 + 3];
-    img.SetAlpha(alpha);
-
-    SelectObject(hdcMem, hbmOld2);
-    DeleteObject(hbmDIB);
-    SelectObject(hdcMem, hbmOld);
-    DeleteDC(hdcMem);
-    ReleaseDC(nullptr, hdcScreen);
-    DestroyIcon(hIcon);
-    if (info.hbmColor)  DeleteObject(info.hbmColor);
-    if (info.hbmMask)   DeleteObject(info.hbmMask);
-
-    wxBitmap bmp(img);
-    wxIcon icon;
-    icon.CopyFromBitmap(bmp);
-    return icon;
+    // Load the embedded Windows icon resource directly.
+    // The .rc file compiles loadgraph.ico as ordinal 1 into the executable,
+    // so Windows Explorer shows it immediately — no runtime temp files needed.
+    return wxIcon(wxT("#1"), wxBITMAP_TYPE_ICO_RESOURCE);
 }
 #endif
 
@@ -208,12 +136,19 @@ public:
             LOGI("Images OK.");
 
             LOGI("Creating frame...");
-            MainFrame* frame = new MainFrame(L"LoadGraph", appCfg);
+            MainFrame* frame = nullptr;
+            try { frame = new MainFrame(L"LoadGraph", appCfg); }
+            catch (const std::exception& e) { LOGE("MainFrame ctor exception: %hs", e.what()); throw; }
+            catch (...) { LOGE("MainFrame ctor: unknown exception"); throw; }
             if (!frame) return false;
             LOGI("Frame created 0x%p", static_cast<void*>(frame));
 
 #ifdef PLATFORM_WINDOWS
-            frame->SetIcon(MakeEmbeddedGreenIcon());
+            {
+                wxIcon icon = MakeEmbeddedGreenIcon();
+                LOGI("MakeEmbeddedGreenIcon: isOk=%d", icon.IsOk());
+                if (icon.IsOk()) frame->SetIcon(icon);
+            }
 #endif
 
             LOGI("Showing frame...");

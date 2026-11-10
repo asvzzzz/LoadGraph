@@ -24,6 +24,9 @@ public:
     bool IsRunning() const;
 
     // Force a synchronous collection (blocks until done).
+    // Must be called only before Start() or after Stop() — calling it while
+    // the polling thread is running races on collector-specific state (PDH handles,
+    // /proc/stat deltas, NVML device handles).
     void CollectNow() { Collect(); }
 
 protected:

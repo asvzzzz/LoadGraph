@@ -5,28 +5,22 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-# ----------------------------------------------------------------------------
-# wxWidgets configuration (cross-platform)
-# ----------------------------------------------------------------------------
+# Force static library naming convention: lib<name>.a on Linux, <name>.lib on Windows.
+set(CMAKE_STATIC_LIBRARY_PREFIX "lib")
+set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
+
+# ============================================================================
+# wxWidgets configuration (cross-platform) — only needed by LoadGraphGUI.
+# ============================================================================
 if(DEFINED ENV{WXSTATIC_ROOT})
-    # Static wxWidgets build (built from source).
     set(WXSTATIC_ROOT "$ENV{WXSTATIC_ROOT}")
     message(STATUS "Using static wxWidgets from: ${WXSTATIC_ROOT}")
 
-    # Layout: <WXSTATIC_ROOT>/{libwx*.a, include/wx/*.h, include/gtk3-unicode-static-3.2/wx/setup.h}
     set(wxWidgets_INCLUDE_DIRS
         "${WXSTATIC_ROOT}/include"
         "${WXSTATIC_ROOT}/include/gtk3-unicode-static-3.2"
     )
     set(wxWidgets_LIBRARY_DIRS "${WXSTATIC_ROOT}")
-    # wxWidgets static libraries required by the current feature set:
-    #   core       — all widgets, scrolled windows, sizers (mandatory)
-    #   base       — fundamental classes (strings, containers, IO)
-    #   base_net   — wxWebRequest / networking primitives
-    #   base_xml   — wxXmlDocument / config parsing
-    # If you add features that pull in wxHtml, wxAui, wxMedia or wxImage with
-    # handlers (PNG/JPEG), extend this list accordingly — otherwise linking
-    # will fail with undefined references at link time.
     set(wxWidgets_LIBRARIES
         "${WXSTATIC_ROOT}/libwx_gtk3u_core-3.2.a"
         "${WXSTATIC_ROOT}/libwx_baseu-3.2.a"
@@ -34,7 +28,6 @@ if(DEFINED ENV{WXSTATIC_ROOT})
         "${WXSTATIC_ROOT}/libwx_baseu_xml-3.2.a"
     )
     set(wxWidgets_COMPILE_OPTIONS "-D_FILE_OFFSET_BITS=64;-DwxDEBUG_LEVEL=0;-D__WXGTK__;-pthread")
-    # System libraries required by static wxWidgets (GTK3 stack).
     set(wxWidgets_SYSTEM_LIBS
         gtk-3 gdk-3 pangocairo-1.0 atk-1.0 cairo-gobject cairo
         gdk_pixbuf-2.0 gio-2.0 Xtst pangoft2-1.0 pango-1.0
@@ -43,15 +36,12 @@ if(DEFINED ENV{WXSTATIC_ROOT})
     )
     set(wxWidgets_LINK_OPTIONS "-pthread")
 
-    message(STATUS "Static wxWidgets include: ${wxWidgets_INCLUDE_DIRS}")
-    message(STATUS "Static wxWidgets libs: ${wxWidgets_LIBRARIES}")
 elseif(DEFINED ENV{WX_CONFIG})
-    set(WX_CONFIG_PATH "$ENV{WX_CONFIG}")
+    # WX_CONFIG points to the wx-config binary itself (e.g. /opt/wx/3.2/bin/wx-config).
+    set(WX_CONFIG_EXECUTABLE "$ENV{WX_CONFIG}")
 elseif(WIN32)
-    # Windows: prefer static build at known location.
     set(WX_CONFIG_PATH "C:/wxWidgets" CACHE PATH "wxWidgets installation root")
 else()
-    # Linux dynamic: parse wx-config (system wxWidgets).
     find_program(WX_CONFIG_EXECUTABLE wx-config-3.2)
     if(NOT WX_CONFIG_EXECUTABLE)
         find_program(WX_CONFIG_EXECUTABLE wx-config)
@@ -62,22 +52,18 @@ else()
     message(STATUS "Using wx-config: ${WX_CONFIG_EXECUTABLE}")
 
     execute_process(COMMAND ${WX_CONFIG_EXECUTABLE} --cflags
-                   OUTPUT_VARIABLE WX_CFLAGS
-                   RESULT_VARIABLE WX_CFLAGS_RESULT)
+                   OUTPUT_VARIABLE WX_CFLAGS RESULT_VARIABLE WX_CFLAGS_RESULT)
     if(NOT WX_CFLAGS_RESULT EQUAL 0)
         message(FATAL_ERROR "wx-config --cflags failed")
     endif()
     string(STRIP "${WX_CFLAGS}" WX_CFLAGS)
-    message(STATUS "wxWidgets cflags: ${WX_CFLAGS}")
 
     execute_process(COMMAND ${WX_CONFIG_EXECUTABLE} --libs
-                   OUTPUT_VARIABLE WX_LIBS_OUTPUT
-                   RESULT_VARIABLE WX_LIBS_RESULT)
+                   OUTPUT_VARIABLE WX_LIBS_OUTPUT RESULT_VARIABLE WX_LIBS_RESULT)
     if(NOT WX_LIBS_RESULT EQUAL 0)
         message(FATAL_ERROR "wx-config --libs failed")
     endif()
     string(STRIP "${WX_LIBS_OUTPUT}" WX_LIBS_OUTPUT)
-    message(STATUS "wxWidgets libs: ${WX_LIBS_OUTPUT}")
 
     separate_arguments(WX_CFLAGS_LIST NATIVE_COMMAND "${WX_CFLAGS}")
     separate_arguments(WX_LIBS_LIST NATIVE_COMMAND "${WX_LIBS_OUTPUT}")
@@ -99,10 +85,6 @@ else()
             list(APPEND wxWidgets_LINK_OPTIONS "${arg}")
         endif()
     endforeach()
-
-    message(STATUS "wxWidgets include dirs: ${wxWidgets_INCLUDE_DIRS}")
-    message(STATUS "wxWidgets compile options: ${wxWidgets_COMPILE_OPTIONS}")
-    message(STATUS "wxWidgets libraries: ${wxWidgets_LIBRARIES}")
 endif()
 
 if(WIN32 AND DEFINED WX_CONFIG_PATH)
@@ -123,189 +105,276 @@ if(WIN32 AND DEFINED WX_CONFIG_PATH)
     )
 endif()
 
-# ----------------------------------------------------------------------------
-# Sources (platform-specific files included via conditionals)
-# ----------------------------------------------------------------------------
-set(SOURCES
-    src/main.cpp
-    src/logger.h
-    src/logger.cpp
-    src/platform.h
-    src/metrics_collector.h
-    src/metrics_collector.cpp
-    src/cpu_monitor.h
-    src/config.h
-)
-
-if(WIN32)
-    list(APPEND SOURCES
-        src/cpu_monitor.cpp
-        src/msr_sensor.h
-        src/msr_sensor.cpp
-        src/ring0_msr.h
-        src/ring0_msr.cpp
-        src/ram_monitor.cpp
-        src/gpu_monitor.cpp
-        src/power_table.cpp
-        src/graph_panel.h
-        src/graph_panel.cpp
-        src/theme.cpp
-        src/config_win.cpp
-        src/main_frame.cpp
-        src/metrics_api.h
-        src/metrics_api.cpp
-        src/http_server.h
-        src/http_server.cpp
-        src/dashboard_html.h
-        src/dashboard_html.cpp
-        src/app_config.h
-        src/app_config.cpp
-        src/storage_monitor.h
-        src/storage_monitor.cpp
-    )
-elseif(UNIX AND NOT APPLE)
-    # Linux
-    list(APPEND SOURCES
-        src/cpu_monitor_linux.cpp
-        src/ram_monitor_linux.cpp
-        src/gpu_monitor_linux.cpp
-        src/power_table.cpp
-        src/graph_panel.h
-        src/graph_panel.cpp
-        src/theme_linux.cpp
-        src/config_linux.cpp
-        src/main_frame.cpp
-    )
+# ============================================================================
+# Common libraries (shared by all targets).
+# ============================================================================
+find_library(NVML_LIB nvidia-ml PATHS /usr/lib/x86_64-linux-gnu /usr/local/cuda/lib64 /usr/lib)
+if(NVML_LIB)
+    message(STATUS "Found NVML: ${NVML_LIB}")
 else()
-    message(WARNING "Unsupported platform: CMAKE_SYSTEM_NAME=${CMAKE_SYSTEM_NAME}")
+    message(STATUS "NVML not found — GPU monitoring unavailable on this system")
 endif()
 
-# ----------------------------------------------------------------------------
-# Executable
-# ----------------------------------------------------------------------------
-add_executable(${PROJECT_NAME} ${SOURCES})
-
-target_include_directories(${PROJECT_NAME} PRIVATE
-    src
+# ============================================================================
+# Common headers (shared by all targets).
+# ============================================================================
+set(COMMON_HEADERS
+    src/platform.h
 )
 
+# ============================================================================
+# libloadgraph_logger — minimal vfprintf-based logger, wxWidgets-free.
+# Linked by all other libs so the static member Logger::s_file is defined once.
+# ============================================================================
+add_library(loadgraph_logger STATIC src/lib_logger/logger.h src/lib_logger/logger.cpp)
+target_include_directories(loadgraph_logger PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/lib_logger
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+
+# ============================================================================
+# libloadgraph_config — AppConfig + platform config storage + color_utils.
+# Dependencies: logger.
+# ============================================================================
+set(CONFIG_SOURCES
+    src/lib_config/app_config.h
+    src/lib_config/app_config.cpp
+    src/lib_config/color_utils.h
+    src/lib_config/color_utils.cpp
+)
 if(WIN32)
-    # Windows SDK include paths are supplied automatically by the MSVC generator;
-    # hard-coding a specific SDK version (10.0.26100.0) would break on machines
-    # with any other SDK revision installed.
-    target_include_directories(${PROJECT_NAME} PRIVATE ${wxWidgets_INCLUDE_DIRS})
+    list(APPEND CONFIG_SOURCES src/lib_config/config_win.cpp)
+elseif(UNIX AND NOT APPLE)
+    list(APPEND CONFIG_SOURCES src/lib_config/config_linux.cpp)
+endif()
 
-    set(WINDOWS_LIBS ws2_32 rpcrt4 odbc32 shlwapi shell32 comctl32 ole32 oleaut32 uuid winmm psapi advapi32 dwmapi)
+add_library(loadgraph_config STATIC ${CONFIG_SOURCES} ${COMMON_HEADERS})
+target_include_directories(loadgraph_config PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/lib_config
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+target_link_libraries(loadgraph_config PRIVATE loadgraph_logger)
+if(WIN32)
+    target_compile_definitions(loadgraph_config PRIVATE _CRT_SECURE_NO_WARNINGS)
+endif()
 
-    target_link_libraries(${PROJECT_NAME}
-        ${wxWidgets_LIBRARIES}
-        wbemuuid
-        pdh
-        psapi
-        ${WINDOWS_LIBS}
+# ============================================================================
+# libloadgraph_sensors — all hardware sensor polling behind MetricsGet* API.
+# Dependencies: logger, platform.  No wxWidgets.
+# ============================================================================
+set(SENSORS_SOURCES
+    src/lib_sensors/metrics_collector.h
+    src/lib_sensors/metrics_collector.cpp
+    src/lib_sensors/cpu_monitor.h
+    src/lib_sensors/cpu_monitor.cpp
+    src/lib_sensors/gpu_monitor.h
+    src/lib_sensors/gpu_monitor.cpp
+    src/lib_sensors/ram_monitor.h
+    src/lib_sensors/ram_monitor.cpp
+    src/lib_sensors/storage_monitor.h
+    src/lib_sensors/storage_monitor.cpp
+    src/lib_sensors/power_table.h
+    src/lib_sensors/power_table.cpp
+    src/lib_sensors/metrics_api.h
+    src/lib_sensors/metrics_api.cpp
+    src/lib_sensors/msr_sensor.h
+    src/lib_sensors/msr_sensor.cpp
+    src/lib_sensors/ring0_msr.h
+    src/lib_sensors/ring0_msr.cpp
+)
+if(WIN32)
+    # Windows sensors — all files are used as-is.
+elseif(UNIX AND NOT APPLE)
+    # Linux sensor implementations replace the Win32-only files above.
+    list(REMOVE_ITEM SENSORS_SOURCES
+        src/lib_sensors/cpu_monitor.cpp
+        src/lib_sensors/gpu_monitor.cpp
+        src/lib_sensors/ram_monitor.cpp
+        # Windows-only MSRs / ring0 driver / WMI — all code inside #ifdef _WIN32,
+        # so on Linux they compile to empty TUs and leave missing symbols.
+        src/lib_sensors/msr_sensor.cpp
+        src/lib_sensors/ring0_msr.cpp
     )
+    list(APPEND SENSORS_SOURCES
+        src/lib_sensors/cpu_monitor_linux.cpp
+        src/lib_sensors/gpu_monitor_linux.cpp
+        src/lib_sensors/ram_monitor_linux.cpp
+    )
+endif()
 
-    set_target_properties(${PROJECT_NAME} PROPERTIES
+add_library(loadgraph_sensors STATIC ${SENSORS_SOURCES} ${COMMON_HEADERS})
+target_include_directories(loadgraph_sensors PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/lib_sensors
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+# lib_config + logger are dependencies of lib_sensors.
+target_link_libraries(loadgraph_sensors PRIVATE loadgraph_config loadgraph_logger)
+if(WIN32)
+    target_compile_definitions(loadgraph_sensors PRIVATE _CRT_SECURE_NO_WARNINGS)
+endif()
+
+# ============================================================================
+# libloadgraph_theme — console terminal colors only (wxWidgets-free).
+# GUI-specific theme (theme.cpp / theme_linux.cpp) is compiled directly into
+# LoadGraphGUI since it depends on wxColour.
+# Dependencies: lib_config (HexToRgb).
+# ============================================================================
+set(THEME_SOURCES
+    src/lib_theme/console_colors.h
+    src/lib_theme/console_colors.cpp
+)
+
+add_library(loadgraph_theme STATIC ${THEME_SOURCES} ${COMMON_HEADERS})
+target_include_directories(loadgraph_theme PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/lib_theme
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+target_link_libraries(loadgraph_theme PRIVATE loadgraph_config loadgraph_logger)
+if(WIN32)
+    target_compile_definitions(loadgraph_theme PRIVATE _CRT_SECURE_NO_WARNINGS)
+endif()
+
+# ============================================================================
+# libloadgraph_http — cross-platform HTTP server + web dashboard HTML.
+# Dependencies: lib_sensors (MetricsGet* API), lib_config, logger.
+# ============================================================================
+set(HTTP_SOURCES
+    src/lib_http/http_server.h
+    src/lib_http/http_server.cpp
+    src/lib_http/dashboard_html.h
+    src/lib_http/dashboard_html.cpp
+)
+
+add_library(loadgraph_http STATIC ${HTTP_SOURCES} ${COMMON_HEADERS})
+target_include_directories(loadgraph_http PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/lib_http
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+target_link_libraries(loadgraph_http PRIVATE loadgraph_sensors loadgraph_config loadgraph_logger)
+if(WIN32)
+    target_compile_definitions(loadgraph_http PRIVATE _CRT_SECURE_NO_WARNINGS USE_HTTP_SERVER)
+endif()
+
+# ============================================================================
+# LoadGraphGUI — wxWidgets desktop application.
+# ============================================================================
+set(GUI_SOURCES
+    src/main.cpp
+    src/main_frame.h
+    src/main_frame.cpp
+    src/graph_panel.h
+    src/graph_panel.cpp
+    src/lib_theme/theme.h
+)
+if(WIN32)
+    list(APPEND GUI_SOURCES src/lib_theme/theme.cpp)
+elseif(UNIX AND NOT APPLE)
+    list(APPEND GUI_SOURCES src/lib_theme/theme_linux.cpp)
+endif()
+
+add_executable(LoadGraphGUI ${GUI_SOURCES} ${COMMON_HEADERS})
+target_include_directories(LoadGraphGUI PRIVATE
+    src
+    ${wxWidgets_INCLUDE_DIRS}
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/lib_sensors
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/lib_http
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/lib_config
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/lib_theme
+)
+if(WIN32)
+    target_link_libraries(LoadGraphGUI
+        loadgraph_logger
+        loadgraph_sensors
+        loadgraph_config
+        loadgraph_theme
+        loadgraph_http
+        ${wxWidgets_LIBRARIES}
+        wbemuuid pdh psapi
+        ws2_32 rpcrt4 odbc32 shlwapi shell32 comctl32 ole32 oleaut32 uuid winmm advapi32 dwmapi
+    )
+    set_target_properties(LoadGraphGUI PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
         WIN32_EXECUTABLE ON
     )
 
-    # Embed icon as a compiled Windows resource (no external file at runtime).
-    # Compile .rc → .res at configure time so IDI_ICON is available during compilation.
-    set(RC_FILE "${CMAKE_SOURCE_DIR}/src/icon.rc")
-    set(RES_FILE "${CMAKE_BINARY_DIR}/icon.res")
-    if(CMAKE_RC_COMPILER)
-        execute_process(COMMAND "${CMAKE_RC_COMPILER}" /fo "${RES_FILE}" "${RC_FILE}"
-            RESULT_VARIABLE RC_RESULT)
-    else()
-        message(WARNING "No RC compiler found; icon resource will be skipped")
-        set(RC_RESULT 1)
-    endif()
-    if(NOT RC_RESULT EQUAL 0)
-        message(WARNING "RC compiler failed to compile icon.rc — running without embedded icon")
-    else()
-        set_source_files_properties("${RES_FILE}" PROPERTIES LINKABLE ON)
-        target_sources(${PROJECT_NAME} PRIVATE "${RES_FILE}")
-    endif()
+    # Embed icon as compiled resource.
+    # Using CMake's native RC support instead of manual execute_process:
+    #   - correct CWD so relative paths in .rc resolve properly
+    #   - include dirs from target_include_directories passed to rc.exe via /I
+    #   - automatic rebuild when loadgraph.ico changes (dependency tracking)
+    enable_language(RC)
+    target_include_directories(LoadGraphGUI PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
+    target_sources(LoadGraphGUI PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/icon.rc")
 
-    # Suppress C4996 (unsafe CRT) from our own code; wxWidgets headers emit it
-    # regardless, and we use safe equivalents where it matters (snprintf/strncpy).
-    target_compile_definitions(${PROJECT_NAME} PRIVATE _CRT_SECURE_NO_WARNINGS)
-    target_compile_definitions(${PROJECT_NAME} PRIVATE USE_HTTP_SERVER)
-    target_compile_options(${PROJECT_NAME} PRIVATE /W4 /WX-)
-    target_link_options(${PROJECT_NAME} PRIVATE /SUBSYSTEM:WINDOWS)
-
-    # ----------------------------------------------------------------------------
-    # Console-only binary (htop-like, no wxWidgets dependency).
-    # ----------------------------------------------------------------------------
-    set(CONSOLE_SOURCES src/console_app.cpp src/app_config.cpp src/logger.cpp src/power_table.cpp src/wmi_helper.cpp src/dashboard_html.cpp)
-    add_executable(loadgraph-console ${CONSOLE_SOURCES})
-    target_include_directories(loadgraph-console PRIVATE src)
-    target_compile_definitions(loadgraph-console PRIVATE USE_HTTP_SERVER _CRT_SECURE_NO_WARNINGS)
-    target_compile_options(loadgraph-console PRIVATE /W4 /WX-)
-    target_link_libraries(loadgraph-console pdh psapi ws2_32)
-    set_target_properties(loadgraph-console PROPERTIES
-        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
-    )
-elseif(UNIX AND NOT APPLE)
-    # Linux-specific settings.
-    target_include_directories(${PROJECT_NAME} PRIVATE ${wxWidgets_INCLUDE_DIRS})
-    target_link_directories(${PROJECT_NAME} PRIVATE ${wxWidgets_LIBRARY_DIRS})
-    target_compile_options(${PROJECT_NAME} PRIVATE ${wxWidgets_COMPILE_OPTIONS})
-    target_link_options(${PROJECT_NAME} PRIVATE ${wxWidgets_LINK_OPTIONS})
-
-    find_library(NVML_LIB nvidia-ml PATHS /usr/lib/x86_64-linux-gnu /usr/local/cuda/lib64 /usr/lib)
-
-    set(LINUX_LIBS pthread dl)
-    if(NVML_LIB)
-        list(APPEND LINUX_LIBS ${NVML_LIB})
-        message(STATUS "Found NVML: ${NVML_LIB}")
-    else()
-        message(WARNING "NVML not found - GPU monitoring will use fallback or be disabled")
-    endif()
-
-    # GTK3 stack required by static wxWidgets (matches pkg-config gtk+-3.0).
-    set(wxWidgets_SYSTEM_LIBS
-        gtk-3 gdk-3 pangocairo-1.0 atk-1.0 cairo-gobject cairo
-        gdk_pixbuf-2.0 gio-2.0 Xtst pangoft2-1.0 pango-1.0
-        gobject-2.0 glib-2.0 harfbuzz fontconfig freetype
-        jbig expat pcre2-32 png jpeg lzma z X11 SM xkbcommon gthread-2.0
-    )
-
-    # Point linker at our bundled .so files.
-    target_link_directories(${PROJECT_NAME} PRIVATE "${CMAKE_SOURCE_DIR}/libs")
-    # Embed rpath so the binary finds bundled .so files at runtime without
-    # LD_LIBRARY_PATH. BUILD_RPATH covers the build tree; INSTALL_RPATH uses
-    # $ORIGIN/../libs so a copied tree (install or zip distribution) works too.
-    set_target_properties(${PROJECT_NAME} PROPERTIES
-        BUILD_RPATH "${CMAKE_SOURCE_DIR}/libs"
-        INSTALL_RPATH "$ORIGIN/../libs"
-        INSTALL_RPATH_USE_LINK_PATH OFF
-    )
-
-    target_link_libraries(${PROJECT_NAME}
+    target_compile_definitions(LoadGraphGUI PRIVATE _CRT_SECURE_NO_WARNINGS USE_HTTP_SERVER)
+    target_compile_options(LoadGraphGUI PRIVATE /W4 /WX-)
+    target_link_options(LoadGraphGUI PRIVATE /SUBSYSTEM:WINDOWS)
+else()
+    # Linux build.
+    target_link_libraries(LoadGraphGUI
+        loadgraph_sensors
+        loadgraph_config
+        loadgraph_theme
+        loadgraph_http
         ${wxWidgets_LIBRARIES}
         ${wxWidgets_SYSTEM_LIBS}
-        ${LINUX_LIBS}
+        pthread dl
     )
-
-    set_target_properties(${PROJECT_NAME} PROPERTIES
-        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
-    )
-
-    target_compile_options(${PROJECT_NAME} PRIVATE -Wall -Wextra -Wpedantic)
-
-    # Console-only binary for Linux (htop-like, no wxWidgets dependency).
-    set(CONSOLE_SOURCES_LINUX src/console_app.cpp src/app_config.cpp src/logger.cpp src/power_table.cpp src/wmi_helper.cpp src/dashboard_html.cpp)
-    add_executable(loadgraph-console-linux ${CONSOLE_SOURCES_LINUX})
-    target_include_directories(loadgraph-console-linux PRIVATE src)
-    target_compile_definitions(loadgraph-console-linux PRIVATE USE_HTTP_SERVER PLATFORM_LINUX)
-    target_compile_options(loadgraph-console-linux PRIVATE -Wall -Wextra -Wno-unused-parameter)
-    target_link_libraries(loadgraph-console-linux pthread dl)
+    target_compile_options(LoadGraphGUI PRIVATE ${wxWidgets_COMPILE_OPTIONS} -Wall -Wextra -Wpedantic)
+    target_link_options(LoadGraphGUI PRIVATE ${wxWidgets_LINK_OPTIONS})
     if(NVML_LIB)
-        target_link_libraries(loadgraph-console-linux ${NVML_LIB})
+        target_link_libraries(LoadGraphGUI ${NVML_LIB})
     endif()
-    set_target_properties(loadgraph-console-linux PROPERTIES
+
+    set_target_properties(LoadGraphGUI PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
     )
+endif()
+
+# ============================================================================
+# LoadGraphTTY — console-only binary (htop-like, no wxWidgets).
+# ============================================================================
+set(TTY_SOURCES
+    src/console_app.cpp
+)
+
+add_executable(LoadGraphTTY ${TTY_SOURCES})
+target_include_directories(LoadGraphTTY PRIVATE
+    src
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/lib_sensors
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/lib_http
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/lib_theme
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/lib_config
+)
+
+if(WIN32)
+    target_link_libraries(LoadGraphTTY
+        loadgraph_logger
+        loadgraph_sensors
+        loadgraph_config
+        loadgraph_theme
+        loadgraph_http
+        wbemuuid pdh psapi ws2_32 rpcrt4 odbc32 shlwapi shell32 comctl32 ole32 oleaut32 uuid winmm advapi32
+    )
+    set_target_properties(LoadGraphTTY PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+    )
+    target_compile_definitions(LoadGraphTTY PRIVATE _CRT_SECURE_NO_WARNINGS USE_HTTP_SERVER)
+    target_compile_options(LoadGraphTTY PRIVATE /W4 /WX-)
+else()
+    target_link_libraries(LoadGraphTTY
+        loadgraph_logger
+        loadgraph_sensors
+        loadgraph_config
+        loadgraph_theme
+        loadgraph_http
+        pthread dl
+    )
+    if(NVML_LIB)
+        target_link_libraries(LoadGraphTTY ${NVML_LIB})
+    endif()
+    set_target_properties(LoadGraphTTY PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+    )
+    target_compile_options(LoadGraphTTY PRIVATE -Wall -Wextra -Wno-unused-parameter)
 endif()

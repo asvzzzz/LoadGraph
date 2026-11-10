@@ -38,9 +38,9 @@ namespace MsrSensor
     // service without creating any GUI. Returns 0 on success.
     int RunInstallHelper(const wchar_t* exeDir);
 
-    // Probe IA32_TEMPERATURE_REPORTING_POINT_STATUS (0xC001_0294) and decode
-    // Celsius from Tjmax - (bits[15:8] * resolution). Returns -1.0 on any
-    // failure (driver absent, MSR blocked, implausible value).
+    // Probe IA32_THERM_STATUS (0x19C) + IA32_TEMPERATURE_TARGET (0x1A2),
+    // decode Celsius as Tjmax - digital_readout. Returns -1.0 on any failure
+    // (driver absent, MSR blocked, implausible value).
     double ProbeTemperature(uint32_t family, uint32_t model,
                             uint32_t stepping, int8_t tjmax);
 

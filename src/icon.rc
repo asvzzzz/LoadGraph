@@ -1,1 +1,5 @@
-IDI_ICON ICON "loadgraph.ico"
+// Ordinal ID 1 = first icon by ordinal. Windows Explorer uses this as the
+// exe file icon. wxWidgets also picks it up automatically for title bar /
+// taskbar when SetIcon() is not called explicitly.
+#define IDI_LOADGRAPH 1
+IDI_LOADGRAPH ICON "loadgraph.ico"

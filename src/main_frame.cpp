@@ -122,13 +122,8 @@ MainFrame::MainFrame(const wxString& title, const AppConfig& cfg)
 	SetClientSize(size);
 	SetMinSize(wxSize(480, 540));
 
-	// Application icon (loaded from the working directory).
-	if (wxFileExists("loadgraph.png"))
-	{
-		wxIcon icon("loadgraph.png", wxBITMAP_TYPE_PNG);
-		if (icon.IsOk()) SetIcon(icon);
-	}
-
+	// Icon is set in OnInit via MakeEmbeddedGreenIcon() which loads from the
+	// embedded ICO bytes — avoids Win32 LoadIcon quirks.
 	// Initialize the shared metrics system (CPU / RAM / GPU monitors).
 	MetricsInit();
 
@@ -664,9 +659,6 @@ void MainFrame::ApplyHeightAdjustment(const std::string& key, bool showingItem)
 void MainFrame::OnTimer(wxTimerEvent&)
 {
 	if (!m_uiCreated) return;
-
-	// Sample CPU load NOW so powerWatts estimate is fresh (also reads PDH).
-	MetricsSampleCpuLoad();
 
 	const CpuData  cpu  = MetricsGetCpu();
 	const RamData  ram  = MetricsGetRam();

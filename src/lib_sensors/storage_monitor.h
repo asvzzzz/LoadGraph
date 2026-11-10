@@ -5,6 +5,7 @@
 #include <vector>
 #include <string>
 #include <mutex>
+#include <condition_variable>
 #include <thread>
 #include <atomic>
 
@@ -25,21 +26,25 @@ public:
     // Start background polling at 5000ms intervals.
     virtual void Start() = 0;
 
-    // Stop polling thread gracefully.
+    // Stop polling thread gracefully — wakes it immediately via cv.
     virtual void Stop()
     {
-        m_stop = true;
+        {
+            std::lock_guard<std::mutex> lock(m_mutex);
+            m_stop = true;
+        }
+        m_cv.notify_one();
         if (m_thread.joinable()) m_thread.join();
     }
 
 protected:
     virtual void Collect() = 0;
 
-private:
     std::vector<StorageData> m_metrics;
-    std::atomic<bool> m_stop{false};
+    bool m_stop = false;
     std::thread m_thread;
     std::mutex m_mutex;
+    std::condition_variable m_cv;
 };
 
 // Platform-specific factory.

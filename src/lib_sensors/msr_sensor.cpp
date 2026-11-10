@@ -2,10 +2,14 @@
 #include "msr_sensor.h"
 #include "ring0_msr.h"
 #include "logger.h"
-#include <wx/wx.h>
 
 #ifdef _WIN32
 // platform.h already defines WIN32_LEAN_AND_MEAN and includes windows.h.
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#undef WIN32_LEAN_AND_MEAN  // restore for intrin.h
 #include <intrin.h>
 
 namespace MsrSensor
@@ -35,19 +39,6 @@ namespace MsrSensor
         {
             value = 0xFFFFFFFFu;
         }
-        return value;
-    }
-
-    // SEH-safe wrapper: performs the read and logs a failure once.
-    // Logging lives here (not in RdmsrRaw) because wxString temporaries make
-    // a function ineligible for __try.
-    static uint32_t RdmsrSafe(uint32_t msr)
-    {
-        ULONG excCode = 0;
-        const uint32_t value = RdmsrRaw(msr, excCode);
-        if (excCode != 0)
-            LOGI("MSR 0x%08X read raised 0x%08X, treating as unavailable",
-                 msr, static_cast<unsigned>(excCode));
         return value;
     }
 
@@ -107,7 +98,8 @@ namespace MsrSensor
         }
 
         // --- Raw rdmsr fallback (EAX only) -------------------------------------
-        auto [loT, hiT] = ReadMsrOnCore(kTargetMsr);
+        auto [loT, hiT] = ReadMsrOnCore(kTargetMsr);   // EDX ignored — rdmsr returns EAX only
+        (void)hiT;
         if (loT != 0xFFFFFFFF)
         {
             // Tjmax is in bits[23:16] of EAX (low part).
@@ -115,7 +107,8 @@ namespace MsrSensor
             if (computedTjmax <= 0 || computedTjmax > 150)
                 computedTjmax = static_cast<int>(tjmax);
 
-            auto [lo, hi] = ReadMsrOnCore(kThermMsr);
+            auto [lo, hi] = ReadMsrOnCore(kThermMsr);     // EDX ignored — rdmsr returns EAX only
+            (void)hi;
             if (lo != 0xFFFFFFFF)
             {
                 const double temp = DecodeTempFromTherm(lo,
@@ -162,15 +155,15 @@ namespace MsrSensor
             return;
         }
 
-        const int answer = wxMessageBox(
-            "LoadGraph needs a small kernel driver (WinRing0) to read the "
-            "CPU temperature.\n\n"
-            "Install it now? Windows will ask for administrator permission.\n\n"
-            "If you decline, temperature will be shown as N/A.",
-            "LoadGraph - CPU temperature",
-            wxYES_NO | wxICON_QUESTION);
+        const int answer = MessageBoxW(nullptr,
+            L"LoadGraph needs a small kernel driver (WinRing0) to read the "
+            L"CPU temperature.\n\n"
+            L"Install it now? Windows will ask for administrator permission.\n\n"
+            L"If you decline, temperature will be shown as N/A.",
+            L"LoadGraph - CPU temperature",
+            MB_YESNO | MB_ICONQUESTION);
 
-        if (answer != wxYES)
+        if (answer != IDYES)
         {
             LOGI("MSR: driver installation declined by user, using WMI fallback.");
             return;
