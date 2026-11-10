@@ -49,8 +49,11 @@ else()
     if(NOT WX_CONFIG_EXECUTABLE)
         message(FATAL_ERROR "wx-config not found. Install: sudo apt install libwxgtk3.2-dev")
     endif()
-    message(STATUS "Using wx-config: ${WX_CONFIG_EXECUTABLE}")
+endif()
 
+# Run wx-config to extract flags/libs — needed for both WX_CONFIG env and auto-detect.
+if(DEFINED WX_CONFIG_EXECUTABLE AND NOT WIN32)
+    message(STATUS "Using wx-config: ${WX_CONFIG_EXECUTABLE}")
     execute_process(COMMAND ${WX_CONFIG_EXECUTABLE} --cflags
                    OUTPUT_VARIABLE WX_CFLAGS RESULT_VARIABLE WX_CFLAGS_RESULT)
     if(NOT WX_CFLAGS_RESULT EQUAL 0)

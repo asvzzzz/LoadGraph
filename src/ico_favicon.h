@@ -1,4 +1,4 @@
-// Auto-generated from loadgraph.ico — do not edit.
+// Auto-generated from loadgraph.ico - do not edit.
 // Size: 1472 bytes
 
 static const unsigned char kLoadGraphIcoBytes[] = {

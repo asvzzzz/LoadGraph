@@ -318,12 +318,38 @@ static void HttpLoop(int port, const AppConfig& cfg)
 
         char method[8] = {}, path[512] = {};
         sscanf(req, "%7s %511s", method, path);
-        bool isMetrics = (strcmp(method, "GET") == 0 && strcmp(path, "/api/metrics") == 0);
-        bool isIndex   = (strcmp(method, "GET") == 0 && strcmp(path, "/") == 0);
+        bool isMetrics   = (strcmp(method, "GET") == 0 && strcmp(path, "/api/metrics") == 0);
+        bool isIndex     = (strcmp(method, "GET") == 0 && strcmp(path, "/") == 0);
+        bool isFavicon   = (strcmp(method, "GET") == 0 && strcmp(path, "/favicon.ico") == 0);
 
         std::string body;
         if (isMetrics)       body = BuildJson();
         else if (isIndex)    body = RenderDashboard(port, cfg);
+        else if (isFavicon)
+        {
+            char hdr[128];
+            int hlen = snprintf(hdr, sizeof(hdr),
+                "HTTP/1.1 200 OK\r\n"
+                "Content-Type: image/x-icon\r\n"
+                "Connection: close\r\n"
+                "Content-Length: %u\r\n\r\n",
+                (unsigned int)kLoadGraphIcoSize);
+            int sent = 0;
+            while (sent < hlen)
+            { int sn = send(client, hdr + sent, hlen - sent, 0); if (sn <= 0) break; sent += sn; }
+            if (sent < hlen) { close(client); continue; }
+            const unsigned char* p = kLoadGraphIcoBytes;
+            size_t rem = kLoadGraphIcoSize;
+            while (rem > 0)
+            {
+                int chunk = (int)(rem > 4096 ? 4096 : rem);
+                int sn = send(client, (const char*)p, chunk, 0);
+                if (sn <= 0) break;
+                p += sn; rem -= sn;
+            }
+            close(client);
+            continue;
+        }
         else
         {
             const char* notFound = "HTTP/1.1 404 Not Found\r\n"
