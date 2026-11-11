@@ -395,28 +395,24 @@ int main(int argc, char* argv[])
     const int barCols = std::min(60, std::max(20, (consW - 18) * 60 / 100));
 
     static FILE* s_logFp = nullptr;
-    char logPath[1024] = "loadgraph.log";
-    int rc = 0;
+    if (cfg.log_file)
+    {
+        char logPath[1024] = "loadgraph.log";
 #ifdef PLATFORM_WINDOWS
-    DWORD len = GetCurrentDirectoryA(sizeof(logPath), logPath);
-    if (len > 0 && len < sizeof(logPath))
-        strncat_s(logPath, sizeof(logPath), "\\loadgraph.log", 14);
-    else
-        strncpy_s(logPath, sizeof(logPath), "loadgraph.log", _TRUNCATE);
-    rc = fopen_s(&s_logFp, logPath, "a");
+        DWORD len = GetCurrentDirectoryA(sizeof(logPath), logPath);
+        if (len > 0 && len < sizeof(logPath))
+            strncat_s(logPath, sizeof(logPath), "\\loadgraph.log", 14);
+        else
+            strncpy_s(logPath, sizeof(logPath), "loadgraph.log", _TRUNCATE);
+        fopen_s(&s_logFp, logPath, "a");
 #else
-    s_logFp = fopen("loadgraph.log", "a");
-    if (!s_logFp) rc = 1;
+        s_logFp = fopen("loadgraph.log", "a");
 #endif
-    if (s_logFp)
-    {
-        fprintf(s_logFp, "console: logging enabled file=%s\n", logPath);
-        fflush(s_logFp);
-    }
-    else
-    {
-        printf("WARN: cannot open log err=%d\n", rc);
-        fflush(stdout);
+        if (s_logFp)
+        {
+            fprintf(s_logFp, "console: logging enabled file=%s\n", logPath);
+            fflush(s_logFp);
+        }
     }
 
     bool httpActive = cfg.http_enabled || cliPort >= 0;
