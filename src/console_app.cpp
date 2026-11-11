@@ -355,6 +355,18 @@ int main(int argc, char* argv[])
     }
 
     ApplyColors(cfg);
+
+    // Set console window title with HTTP server info.
+    {
+        int portToUse = (cliPort >= 0) ? cliPort : cfg.http_port;
+        bool httpActive = cfg.http_enabled || cliPort >= 0;
+        char title[256];
+        if (httpActive)
+            snprintf(title, sizeof(title), "LoadGraphTTY - HTTP server listening on port %d", portToUse);
+        else
+            snprintf(title, sizeof(title), "LoadGraphTTY");
+        SetConsoleTitleA(title);
+    }
 #else
     ApplyColors(cfg);
 #endif
