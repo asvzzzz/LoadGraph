@@ -24,6 +24,10 @@
 #include <string>
 #include <vector>
 
+#ifdef PLATFORM_WINDOWS
+#include <io.h>
+#include <fcntl.h>
+#endif
 #ifdef PLATFORM_LINUX
 #include <unistd.h>
 #include <sys/select.h>
@@ -106,18 +110,52 @@ static int GetConsoleWidth()
 }
 #endif
 
+// Convert UTF-8 frame string to UTF-16 for WriteConsoleW (VT-aware on Windows).
+#ifdef PLATFORM_WINDOWS
+static std::wstring Utf8ToUtf16(const std::string& utf8)
+{
+    if (utf8.empty()) return {};
+    int len = MultiByteToWideChar(CP_UTF8, 0, utf8.c_str(), -1, nullptr, 0);
+    if (len <= 0) return {};
+    std::wstring wstr;
+    wstr.resize(len - 1);
+    MultiByteToWideChar(CP_UTF8, 0, utf8.c_str(), -1, &wstr[0], len);
+    return wstr;
+}
+#endif
+
 // ============================================================================
 // OutputFrame — clears screen then writes frame atomically.
-// Windows: Win32 API clear + WriteConsoleA (VT enabled for ANSI colors).
+// Windows: Win32 clear + WriteConsoleW (VT processes ANSI in UTF-16).
 // Linux:   ANSI \x1b[H\x1b[2J + fputs.
 // ============================================================================
 static void OutputFrame(const std::string& frame)
 {
 #ifdef PLATFORM_WINDOWS
-    // WriteConsoleA does NOT process ANSI sequences even with VT enabled.
-    // Use fputs(stdout) so the console driver processes \x1b[H\x1b[2J etc.
-    fputs("\x1b[H\x1b[2J", stdout);
-    fputs(frame.c_str(), stdout);
+    // Clear screen via Win32 (reliable, no dependency on ANSI processing for clear).
+    HANDLE hOut = GetConsoleOutputHandle();
+    if (hOut != INVALID_HANDLE_VALUE)
+    {
+        CONSOLE_SCREEN_BUFFER_INFO info;
+        if (GetConsoleScreenBufferInfo(hOut, &info))
+        {
+            COORD zero   = { 0, 0 };
+            DWORD written = 0;
+            const DWORD cells = static_cast<DWORD>(info.dwSize.X) *
+                                static_cast<DWORD>(info.srWindow.Bottom + 1);
+            FillConsoleOutputAttribute(hOut, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE,
+                                       cells, zero, &written);
+            FillConsoleOutputCharacterA(hOut, ' ', cells, zero, &written);
+            SetConsoleCursorPosition(hOut, zero);
+        }
+    }
+    // Write frame via WriteConsoleW — VT driver processes ANSI sequences in UTF-16.
+    std::wstring wframe = Utf8ToUtf16(frame);
+    if (!wframe.empty() && hOut != INVALID_HANDLE_VALUE)
+    {
+        DWORD written = 0;
+        WriteConsoleW(hOut, wframe.c_str(), static_cast<DWORD>(wframe.size()), &written, nullptr);
+    }
 #else
     fputs("\x1b[H\x1b[2J", stdout);
     fputs(frame.c_str(), stdout);
@@ -342,7 +380,7 @@ int main(int argc, char* argv[])
     if (!SetConsoleCP(CP_UTF8))
         fprintf(stderr, "WARN: SetConsoleCP failed err=%lu\n", GetLastError());
 
-    // Enable VT processing so ANSI escape sequences work with WriteConsoleA / printf.
+    // Enable VT processing so ANSI escape sequences work with printf/fputs.
     {
         HANDLE hOut = GetConsoleOutputHandle();
         if (hOut != INVALID_HANDLE_VALUE)
