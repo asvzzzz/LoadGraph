@@ -22,6 +22,7 @@
 #include <algorithm>
 #include <cmath>
 #include <string>
+#include <sstream>
 #include <vector>
 
 #ifdef PLATFORM_WINDOWS
@@ -67,20 +68,21 @@ static std::string FormatUptime(uint64_t ms)
 // Progress bar — plain text, no colors. Label is right-padded to 12 chars
 // so all bars start at the same column. Value appended after the bar.
 // ============================================================================
-static const char* const kBarEmpty = "\xe2\x96\x91";
-static const char* const kBarFull  = "\xe2\x96\x88";
+static const char* const kBarFull = "\xe2\x96\x88";
 
+// Build a progress bar string. Empty cells are spaces (invisible on dark bg).
+// Label right-padded to 14 chars so all bars align at the same column.
 static std::string BuildProgress(const char* label, double percent, int cols)
 {
     percent = std::max(0.0, std::min(100.0, percent));
     const int filled = static_cast<int>(std::round(percent / 100.0 * cols));
     std::string out;
-    // Right-pad label to 14 chars so CPU and GPU bars align.
     out += label;
     for (int i = static_cast<int>(strlen(label)); i < 14; ++i) out += ' ';
     out += '[';
     for (int i = 0; i < filled;   ++i) out += kBarFull;
-    for (int i = filled; i < cols; ++i) out += kBarEmpty;
+    // Empty cells: spaces (background already dark, no need for ░).
+    for (int i = filled; i < cols; ++i) out += ' ';
     out += ']';
     return out;
 }
@@ -112,11 +114,18 @@ static int GetConsoleWidth()
 
 // ============================================================================
 // OutputFrame — unified ANSI output on both platforms.
+// Windows: writes frame atomically via fputs (VT handles ANSI).
+// Linux:   same fputs path with ANSI clear+home.
 // ============================================================================
 static void OutputFrame(const std::string& frame)
 {
+#ifdef PLATFORM_WINDOWS
+    // No screen clear — just overwrite. VT processes ANSI color codes.
+    fputs(frame.c_str(), stdout);
+#else
     fputs("\x1b[H\x1b[2J", stdout);
     fputs(frame.c_str(), stdout);
+#endif
     fflush(stdout);
 }
 
@@ -253,7 +262,7 @@ static std::string BuildFrame(const CpuMetrics& cpu, const RamMetrics& ram,
                 out += "[";
                 for (int ti = 0; ti < tFilled; ++ti) out += kBarFull;
                 out += "\x1b[90m";
-                for (int ti = tFilled; ti < barCols; ++ti) out += kBarEmpty;
+                for (int ti = tFilled; ti < barCols; ++ti) out += ' ';
                 out += cReset + "]";
                 snprintf(tmp, sizeof(tmp), " %4.0f C", g.temperature);
                 out += tc + std::string(tmp) + cReset;
