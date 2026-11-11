@@ -208,7 +208,7 @@ static std::string BuildFrame(const CpuMetrics& cpu, const RamMetrics& ram,
         const std::string bar = BuildProgress("CPU Power", pwrPct, barCols);
         out += "\n" + cCpuLoad + bar + " " + cReset;
         snprintf(tmp, sizeof(tmp), "%5.1f W / %5.0f W TDP", cpu.powerWatts, cpu.tdpWatts);
-        out += cCpuLoad + std::string(tmp) + cReset;
+        out += cDim + std::string(tmp) + cReset;
     }
 
     // RAM Usage — bar + value
@@ -352,15 +352,8 @@ int main(int argc, char* argv[])
     }
 
     ApplyColors(cfg);
-    // VT is already enabled above; use ANSI sequences for all output.
-    printf("\x1b[1;38;2;233;30;99mLoadGraph Console - system monitoring\x1b[0m\n\n");
-    printf("  Press Q to quit. Updates every 1 second.\n");
 #else
     ApplyColors(cfg);
-    const ConsoleColors& cc = GetConsoleColors();
-    printf("%sLoadGraph Console%s - system monitoring\n\n"
-           "  Press Q to quit. Updates every 1 second.%s\n",
-           cc.bold.c_str(), cc.title.c_str(), cc.reset.c_str());
 #endif
 
     const int consW = GetConsoleWidth();
@@ -392,15 +385,7 @@ int main(int argc, char* argv[])
         fflush(stdout);
     }
 
-    int effectivePort = (cliPort >= 0) ? cliPort : cfg.http_port;
     bool httpActive = cfg.http_enabled || cliPort >= 0;
-
-    printf("  config: port=%d effective=%d http=%s log=%s bar_cols=%d console_w=%d\n\n",
-           cfg.http_port, effectivePort,
-           cfg.http_enabled ? "on" : "off",
-           cfg.log_file ? "on"  : "off",
-           barCols, consW);
-    fflush(stdout);
 
     MetricsInit();
     if (httpActive)
