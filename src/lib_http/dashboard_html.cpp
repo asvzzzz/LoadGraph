@@ -201,7 +201,7 @@ const gpuCharts  = {};
 
 // ── Helpers ───────────────────────────────────────────────────────────────
 function esc(s)  { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;'); }
-function tempColor(t) { return t > 80 ? '#ff0000' : t > 65 ? '#ffc107' : '#76b900'; }
+function tempColor(t) { return t > 80 ? '#ff0000' : C.cpuTemp; }
 
 // ── CPU section update ────────────────────────────────────────────────────
 function updateCpu(d) {
