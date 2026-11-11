@@ -113,18 +113,22 @@ static void Render(const CpuMetrics& cpu, const RamMetrics& ram,
 #ifdef PLATFORM_WINDOWS
     // Move cursor to home and clear screen via WinAPI.
     // Use cached handle from InitConsoleHandle() instead of calling GetStdHandle again.
+    // Clear BOTH characters and attributes in the visible region only —
+    // filling beyond the window size corrupts the console display on some systems.
     HANDLE hOut = GetConsoleOutputHandle();
     if (hOut != INVALID_HANDLE_VALUE)
     {
-        COORD zero = { 0, 0 };
-        SetConsoleCursorPosition(hOut, zero);
         CONSOLE_SCREEN_BUFFER_INFO info;
         if (GetConsoleScreenBufferInfo(hOut, &info))
         {
+            COORD zero = { 0, 0 };
             DWORD written = 0;
-            const DWORD fill = static_cast<DWORD>(
-                (info.dwSize.Y + 2) * info.dwSize.X);
-            FillConsoleOutputCharacterA(hOut, ' ', fill, zero, &written);
+            const DWORD cells = static_cast<DWORD>(info.dwSize.X * info.srWindow.Bottom);
+            // Reset attributes to dim white across the visible area.
+            FillConsoleOutputAttribute(hOut, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_INTENSITY,
+                                       cells, zero, &written);
+            // Clear characters.
+            FillConsoleOutputCharacterA(hOut, ' ', cells, zero, &written);
             SetConsoleCursorPosition(hOut, zero);
         }
     }
