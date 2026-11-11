@@ -116,6 +116,99 @@ static int GetConsoleWidth()
 #endif
 
 // ============================================================================
+// GPU load classification — determine workload type from utilization patterns.
+// Returns descriptive string for display and logging.
+// ============================================================================
+static std::string ClassifyGpuLoad(double load, double temp, double power, double fanPct)
+{
+    // High load + high temperature + high power = compute-intensive (LLM inference, rendering)
+    if (load > 80.0 && temp > 65.0 && power > 50.0)
+        return "compute";
+    // Moderate load with variable patterns = general purpose
+    if (load > 20.0)
+        return "mixed";
+    // Very low load = idle or light task
+    if (load < 5.0)
+        return "idle";
+    // Medium load with cooling activity = sustained workload
+    if (fanPct > 50.0)
+        return "sustained";
+    return "light";
+}
+
+// ============================================================================
+// JSONL logger — append one line per snapshot for easy parsing and diffing.
+// Format: {"timestamp":"...","cpu":{...},"gpus":[...]}
+// Reopens file on each write to avoid lock issues.
+// ============================================================================
+static void LogJsonlSnapshot(const std::string& logPath,
+                              const CpuMetrics& cpu,
+                              const RamMetrics& ram,
+                              const std::vector<GpuMetrics>& gpus)
+{
+    if (logPath.empty()) return;
+
+    // Get current timestamp in ISO 8601 format.
+    auto now = std::chrono::system_clock::now();
+    auto time_t_now = std::chrono::system_clock::to_time_t(now);
+    auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        now.time_since_epoch()) % 1000;
+    char timeBuf[64];
+    struct tm tm_info;
+#ifdef PLATFORM_WINDOWS
+    localtime_s(&tm_info, &time_t_now);
+    strftime(timeBuf, sizeof(timeBuf), "%Y-%m-%dT%H:%M:%S", &tm_info);
+#else
+    localtime_r(&time_t_now, &tm_info);
+    strftime(timeBuf, sizeof(timeBuf), "%Y-%m-%dT%H:%M:%S", &tm_info);
+#endif
+    std::string timestamp = std::string(timeBuf) + "." + std::to_string(ms.count()) + "Z";
+
+    // Build JSON manually to avoid dependency on JSON library.
+    std::string json;
+    json += "{\"timestamp\":\"" + timestamp + "\",";
+    json += "\"cpu\":{\"load\":" + std::to_string(cpu.loadPercent) + ",";
+    json += "\"temp\":" + std::to_string(cpu.temperature) + ",";
+    json += "\"fan\":" + std::to_string(cpu.fanRpm) + ",";
+    json += "\"power\":" + std::to_string(cpu.powerWatts) + ",";
+    json += "\"tdp\":" + std::to_string(cpu.tdpWatts) + "},";
+    json += "\"ram\":{\"load\":" + std::to_string(ram.loadPercent) + ",";
+    json += "\"total\":" + std::to_string(static_cast<double>(ram.totalBytes) / (1024.0*1024*1024)) + ",";
+    json += "\"used\":" + std::to_string(static_cast<double>(ram.totalBytes - ram.freeBytes) / (1024.0*1024*1024)) + "},";
+    json += "\"gpus\":[";
+
+    for (size_t i = 0; i < gpus.size(); ++i)
+    {
+        const auto& g = gpus[i];
+        std::string loadType = ClassifyGpuLoad(g.loadPercent, g.temperature, g.powerWatts, g.fanPercent);
+        if (i > 0) json += ",";
+        json += "{\"idx\":" + std::to_string(i) + ",";
+        json += "\"load\":" + std::to_string(g.loadPercent) + ",";
+        json += "\"temp\":" + std::to_string(g.temperature) + ",";
+        json += "\"fan\":" + std::to_string(g.fanRpm) + ",";
+        json += "\"power\":" + std::to_string(g.powerWatts) + ",";
+        json += "\"vram_total\":" + std::to_string(static_cast<double>(g.vramTotalBytes) / (1024.0*1024*1024)) + ",";
+        json += "\"vram_used\":" + std::to_string(static_cast<double>(g.vramUsedBytes) / (1024.0*1024*1024)) + ",";
+        json += "\"type\":\"" + loadType + "\"}";
+    }
+
+    json += "]}";
+
+    // Append to file.
+    FILE* fp = nullptr;
+#ifdef PLATFORM_WINDOWS
+    fopen_s(&fp, logPath.c_str(), "a");
+#else
+    fp = fopen(logPath.c_str(), "a");
+#endif
+    if (fp)
+    {
+        fprintf(fp, "%s\n", json.c_str());
+        fclose(fp);
+    }
+}
+
+// ============================================================================
 // OutputFrame — unified ANSI output on both platforms.
 // Windows: VT enabled, write frame atomically without full clear to avoid flicker.
 // Linux:   clear screen then write.
@@ -349,6 +442,18 @@ static std::string BuildFrame(const CpuMetrics& cpu, const RamMetrics& ram,
                 snprintf(tmp, sizeof(tmp), "%5.1f W", g.powerWatts);
                 out += cGpuPwr + std::string(tmp) + cReset;
             }
+
+            // GPU load classification — shown as colored tag
+            {
+                std::string loadType = ClassifyGpuLoad(g.loadPercent, g.temperature, g.powerWatts, g.fanPercent);
+                const char* typeColor = "\x1b[90m";  // dim gray by default
+                if (loadType == "compute") typeColor = "\x1b[31m";      // red for heavy compute
+                else if (loadType == "sustained") typeColor = "\x1b[33m"; // yellow for sustained
+                else if (loadType == "idle") typeColor = "\x1b[90m";    // gray for idle
+                else typeColor = "\x1b[36m";                             // cyan for light/mixed
+
+                out += "\n" + std::string(typeColor) + " [" + loadType + "]" + cReset;
+            }
         }
     }
 
@@ -442,19 +547,19 @@ int main(int argc, char* argv[])
     static std::string s_logPath;
     if (cfg.log_file)
     {
-        char logPath[1024] = "loadgraph.log";
+        char logPath[1024] = "loadgraph.jsonl";
 #ifdef PLATFORM_WINDOWS
         DWORD len = GetCurrentDirectoryA(sizeof(logPath), logPath);
         if (len > 0 && len < sizeof(logPath))
-            strncat_s(logPath, sizeof(logPath), "\\loadgraph.log", 14);
+            strncat_s(logPath, sizeof(logPath), "\\loadgraph.jsonl", 16);
         else
-            strncpy_s(logPath, sizeof(logPath), "loadgraph.log", _TRUNCATE);
+            strncpy_s(logPath, sizeof(logPath), "loadgraph.jsonl", _TRUNCATE);
 #else
         // On Linux use home directory for config compatibility.
         const char* home = getenv("HOME");
         if (home && strlen(home) > 0)
         {
-            snprintf(logPath, sizeof(logPath), "%s/.config/loadgraph/loadgraph.log", home);
+            snprintf(logPath, sizeof(logPath), "%s/.config/loadgraph/loadgraph.jsonl", home);
         }
 #endif
         s_logPath = logPath;
@@ -530,25 +635,8 @@ int main(int argc, char* argv[])
         // Reopen file each time to avoid lock issues when user views log.
         if (!s_logPath.empty() && now - lastLog >= std::chrono::seconds(5))
         {
-            FILE* fp = nullptr;
-#ifdef PLATFORM_WINDOWS
-            fopen_s(&fp, s_logPath.c_str(), "a");
-#else
-            fp = fopen(s_logPath.c_str(), "a");
-#endif
-            if (fp)
-            {
-                fprintf(fp, "CPU: load=%.1f%% temp=%.0fC fan=%dRPM power=%.1fW/%.0fW TDP\n",
-                        cpu.loadPercent, cpu.temperature, cpu.fanRpm, cpu.powerWatts, cpu.tdpWatts);
-                for (size_t i = 0; i < gpus.size(); ++i)
-                {
-                    const auto& g = gpus[i];
-                    fprintf(fp, "GPU%d: load=%.1f%% temp=%.0fC fan=%dRPM pwr=%.1fW\n",
-                            (int)i, g.loadPercent, g.temperature, g.fanRpm, g.powerWatts);
-                }
-                fclose(fp);
-                lastLog = now;
-            }
+            LogJsonlSnapshot(s_logPath, cpu, ram, gpus);
+            lastLog = now;
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
@@ -615,25 +703,8 @@ int main(int argc, char* argv[])
         // Reopen file each time to avoid lock issues when user views log.
         if (!s_logPath.empty() && now - lastLog >= std::chrono::seconds(5))
         {
-            FILE* fp = nullptr;
-#ifdef PLATFORM_WINDOWS
-            fopen_s(&fp, s_logPath.c_str(), "a");
-#else
-            fp = fopen(s_logPath.c_str(), "a");
-#endif
-            if (fp)
-            {
-                fprintf(fp, "CPU: load=%.1f%% temp=%.0fC fan=%dRPM power=%.1fW/%.0fW TDP\n",
-                        cpu.loadPercent, cpu.temperature, cpu.fanRpm, cpu.powerWatts, cpu.tdpWatts);
-                for (size_t i = 0; i < gpus.size(); ++i)
-                {
-                    const auto& g = gpus[i];
-                    fprintf(fp, "GPU%d: load=%.1f%% temp=%.0fC fan=%dRPM pwr=%.1fW\n",
-                            (int)i, g.loadPercent, g.temperature, g.fanRpm, g.powerWatts);
-                }
-                fclose(fp);
-                lastLog = now;
-            }
+            LogJsonlSnapshot(s_logPath, cpu, ram, gpus);
+            lastLog = now;
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
