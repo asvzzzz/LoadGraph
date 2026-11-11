@@ -107,13 +107,21 @@ static int GetConsoleWidth()
 #endif
 
 // ============================================================================
-// OutputFrame — writes frame atomically. ANSI clear+home on both platforms.
-// On Windows, VT processing must be enabled before calling this.
+// OutputFrame — clears screen then writes frame atomically.
+// Windows: Win32 API clear + WriteConsoleA (VT enabled for ANSI colors).
+// Linux:   ANSI \x1b[H\x1b[2J + fputs.
 // ============================================================================
 static void OutputFrame(const std::string& frame)
 {
+#ifdef PLATFORM_WINDOWS
+    // WriteConsoleA does NOT process ANSI sequences even with VT enabled.
+    // Use fputs(stdout) so the console driver processes \x1b[H\x1b[2J etc.
     fputs("\x1b[H\x1b[2J", stdout);
     fputs(frame.c_str(), stdout);
+#else
+    fputs("\x1b[H\x1b[2J", stdout);
+    fputs(frame.c_str(), stdout);
+#endif
     fflush(stdout);
 }
 
@@ -231,7 +239,7 @@ static std::string BuildFrame(const CpuMetrics& cpu, const RamMetrics& ram,
                 double tempPct = std::min(100.0, g.temperature);
                 const char* tc = (g.temperature > 80.0) ? "\x1b[31m" :
                                  (g.temperature > 65.0) ? "\x1b[33m" : cCpuTemp.c_str();
-                out += "\n    Temp       ";
+                out += "\n    Temp      ";
                 out += tc;
                 int tFilled = static_cast<int>(std::round(tempPct / 100.0 * barCols));
                 if (tFilled < 0) tFilled = 0;
