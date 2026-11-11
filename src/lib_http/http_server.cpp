@@ -183,9 +183,6 @@ static void HttpLoop(int port, const AppConfig& cfg)
         closesocket(srv); WSACleanup(); return;
     }
 
-    printf("HTTP server listening on port %d\nOpen http://localhost:%d in your browser\n", port, port);
-    fflush(stdout);
-
     DWORD rcvTimeout = 5000;
     DWORD sndTimeout = 5000;
 
@@ -300,9 +297,6 @@ static void HttpLoop(int port, const AppConfig& cfg)
     { fprintf(stderr, "HTTP: bind() failed port=%d\n", port); close(srv); return; }
     if (listen(srv, 4) < 0)
     { fprintf(stderr, "HTTP: listen() failed\n"); close(srv); return; }
-
-    printf("HTTP server listening on port %d\nOpen http://localhost:%d in your browser\n", port, port);
-    fflush(stdout);
 
     while (true)
     {
