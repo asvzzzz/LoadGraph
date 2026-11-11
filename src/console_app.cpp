@@ -442,18 +442,6 @@ static std::string BuildFrame(const CpuMetrics& cpu, const RamMetrics& ram,
                 snprintf(tmp, sizeof(tmp), "%5.1f W", g.powerWatts);
                 out += cGpuPwr + std::string(tmp) + cReset;
             }
-
-            // GPU load classification — shown as colored tag
-            {
-                std::string loadType = ClassifyGpuLoad(g.loadPercent, g.temperature, g.powerWatts, g.fanPercent);
-                const char* typeColor = "\x1b[90m";  // dim gray by default
-                if (loadType == "compute") typeColor = "\x1b[31m";      // red for heavy compute
-                else if (loadType == "sustained") typeColor = "\x1b[33m"; // yellow for sustained
-                else if (loadType == "idle") typeColor = "\x1b[90m";    // gray for idle
-                else typeColor = "\x1b[36m";                             // cyan for light/mixed
-
-                out += "\n" + std::string(typeColor) + " [" + loadType + "]" + cReset;
-            }
         }
     }
 
