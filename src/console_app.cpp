@@ -284,58 +284,54 @@ static std::vector<WinLine> BuildFrameWin(const CpuMetrics& cpu, const RamMetric
 }
 
 // ============================================================================
-// OutputFrame — double-buffered render to eliminate flicker.
-// Writes full frame to offscreen buffer, then atomically swaps it into view.
+// OutputFrame — single atomic render: clear + write all at once via WriteConsoleOutput.
+// No double buffering, no buffer swaps — just one clear and one full-frame write.
 // ============================================================================
 static void OutputFrameWin(const std::vector<WinLine>& lines)
 {
-    HANDLE hMain = GetConsoleOutputHandle();
-    if (hMain == INVALID_HANDLE_VALUE) return;
+    HANDLE hOut = GetConsoleOutputHandle();
+    if (hOut == INVALID_HANDLE_VALUE) return;
 
-    // Static offscreen buffer — created once, reused every frame.
-    static HANDLE hBuf = INVALID_HANDLE_VALUE;
-    if (hBuf == INVALID_HANDLE_VALUE)
-    {
-        hBuf = CreateConsoleScreenBuffer(
-            GENERIC_READ | GENERIC_WRITE,
-            0, nullptr, CONSOLE_TEXTMODE_BUFFER, nullptr);
-    }
-    if (hBuf == INVALID_HANDLE_VALUE) return;
-
-    // Get main buffer info for sizing.
     CONSOLE_SCREEN_BUFFER_INFO info;
-    GetConsoleScreenBufferInfo(hMain, &info);
-    SHORT bufRows = static_cast<SHORT>(std::max(static_cast<int>(lines.size() + 1), info.srWindow.Bottom + 1));
-    COORD bufSize = { info.dwSize.X, bufRows };
-    SetConsoleScreenBufferSize(hBuf, bufSize);
+    if (!GetConsoleScreenBufferInfo(hOut, &info)) return;
 
-    // Clear offscreen buffer with default attributes.
-    COORD zero   = { 0, 0 };
-    DWORD written = 0;
-    const DWORD totalCells = static_cast<DWORD>(bufSize.X) * static_cast<DWORD>(bufRows);
-    FillConsoleOutputAttribute(hBuf, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE,
-                               totalCells, zero, &written);
-    FillConsoleOutputCharacterA(hBuf, ' ', totalCells, zero, &written);
+    // Build the full character and attribute buffers.
+    SHORT cols = info.srWindow.Right - info.srWindow.Left + 1;
+    SHORT rows = static_cast<SHORT>(lines.size());
+    COORD bufSize = { cols, rows };
 
-    // Write each line into the offscreen buffer.
+    std::vector<CHAR_INFO> charInfo(rows * cols);
+    // Fill with spaces and default attribute.
+    CHAR fillChar = ' ';
+    WORD defaultAttr = FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE;
+    for (SHORT r = 0; r < rows; ++r)
+    {
+        for (SHORT c = 0; c < cols; ++c)
+        {
+            charInfo[r * cols + c].Char.AsciiChar = ' ';
+            charInfo[r * cols + c].Attributes = defaultAttr;
+        }
+    }
+
+    // Place each line into the buffer at the correct row.
     for (size_t row = 0; row < lines.size(); ++row)
     {
         std::string text = lines[row].text;
         if (!text.empty() && text[0] == '\n') text.erase(text.begin());
         if (text.empty()) continue;
 
-        COORD pos = { 0, static_cast<SHORT>(row) };
-        DWORD charLen = static_cast<DWORD>(text.size());
-        WriteConsoleOutputCharacterA(hBuf, text.c_str(), charLen, pos, &written);
-        FillConsoleOutputAttribute(hBuf, lines[row].attrs, charLen, pos, &written);
+        WORD attrs = lines[row].attrs;
+        for (size_t c = 0; c < text.size() && static_cast<SHORT>(c) < cols; ++c)
+        {
+            charInfo[static_cast<DWORD>(row) * cols + c].Char.AsciiChar = text[c];
+            charInfo[static_cast<DWORD>(row) * cols + c].Attributes = attrs;
+        }
     }
 
-    // Atomically swap: offscreen becomes visible, main becomes offscreen.
-    SetConsoleActiveScreenBuffer(hBuf);
-    // Swap handles so next frame writes to the buffer that was just made active.
-    HANDLE hTmp = hBuf;
-    hBuf = hMain;
-    hMain = hTmp;
+    // Write the entire buffer in one call — fully atomic, no flicker.
+    COORD srcCoord = { 0, 0 };
+    SMALL_RECT writeRect = { 0, 0, static_cast<SHORT>(cols - 1), static_cast<SHORT>(rows - 1) };
+    WriteConsoleOutputA(hOut, charInfo.data(), bufSize, srcCoord, &writeRect);
 }
 #endif
 
