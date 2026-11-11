@@ -67,99 +67,40 @@ static std::string FormatUptime(uint64_t ms)
 }
 
 // ============================================================================
-// ASCII waveform (scrolling history, like an oscilloscope).
-// Uses Unicode block characters: ░▒▓█ for 4 levels of height.
-// Each column represents one sample; `history` holds the last N values [0,100].
+// Progress bar — simple horizontal bar showing a percentage value.
+// Uses Unicode block characters: ░ (empty) and █ (filled).
+// Width is specified in terminal columns.
 // ============================================================================
-template <typename T>
-class RingBuffer
-{
-    std::vector<T> buf_;
-    size_t head_ = 0, count_ = 0;
-public:
-    explicit RingBuffer(size_t cap) : buf_(cap, T{}) {}
-    void Push(const T& v) { buf_[head_] = v; head_ = (head_ + 1) % buf_.size(); if (count_ < buf_.size()) ++count_; }
-    size_t Size() const { return count_; }
-    T Get(size_t i) const // i=0 is oldest
-    { if (count_ == 0) return T{}; size_t idx = (head_ + buf_.size() - count_ + i) % buf_.size(); return buf_[idx]; }
-};
+static const char* const kBarEmpty  = "\xe2\x96\x91";   // U+2591 light shade
+static const char* const kBarFull   = "\xe2\x96\x88";   // U+2588 full block
 
-static RingBuffer<double> g_cpuHist(60), g_ramHist(60);
-
-// Controls whether DrawWave uses Unicode block chars or ASCII fallback.
-// Set in main() after confirming console CP is UTF-8; overridable via env var.
-static bool g_useUtf8Blocks = true;
-
-// UTF-8 block-char table — CP is already set to CP_UTF8 via SetConsoleOutputCP.
-// printf with these literals renders correctly in any real console.
-// ASCII fallback (LOADGRAPH_ASCII_BARS=1) always works, even on raster fonts
-// and when stdout is redirected to a pipe.
-static const char* const kUtf8Blocks[] = {
-    " ",      // level 0 — empty / dim
-    "\xe2\x96\x91",   // U+2591 light shade
-    "\xe2\x96\x92",   // U+2592 medium shade
-    "\xe2\x96\x93",   // U+2593 dark shade
-    "\xe2\x96\x88"    // U+2588 full block
-};
-
-// Render a waveform row: `label` on left, values from `hist`, width columns.
-// ttyplot-style: Unicode block chars (U+2591-U+2588) with per-cell color.
-static void DrawWave(const char* label, const RingBuffer<double>& hist, int cols
+// Render a progress bar: `label` on left, value% as filled/empty blocks, width cols.
+static void DrawProgress(const char* label, double percent, int cols
 #ifdef PLATFORM_WINDOWS
-    , ConsoleColor cellColor = 0   // 0 = use cc.label
+    , ConsoleColor fillColor = 0
 #else
-    , const std::string& cellColor = std::string()   // empty = use cc.label
+    , const std::string& fillColor = std::string()
 #endif
 )
 {
+    percent = std::max(0.0, std::min(100.0, percent));
+    const int filled = static_cast<int>(std::round(percent / 100.0 * cols));
+
 #ifdef PLATFORM_WINDOWS
     const ConsoleColors& cc = GetConsoleColors();
-    if (cellColor == 0) cellColor = cc.label;
-    SetConsoleColor(cellColor);
-    printf("%-12s", label);
-
-    const int steps = (int)hist.Size();
-    for (int c = 0; c < cols; ++c)
-    {
-        const int hi = steps - cols + c;
-        double v = (hi >= 0) ? hist.Get(static_cast<size_t>(hi)) : 0.0;
-        v = std::max(0.0, std::min(100.0, v));
-        int lv = static_cast<int>(v / 100.0 * 4.0 + 0.5); // 0..4
-        lv = std::max(0, std::min(4, lv));
-
-        if (lv == 0)
-        {
-            SetConsoleColor(cc.dim);
-            putchar(' ');   // empty cell: dim gray space, always visible
-        }
-        else
-        {
-            SetConsoleColor(cellColor);
-            if (g_useUtf8Blocks)
-                fputs(kUtf8Blocks[lv], stdout);
-            else
-                putchar(" .oO@"[lv]);  // ASCII fallback: 4 levels
-        }
-    }
-    SetConsoleColor(cc.value);
-    putchar('\n');
-#else // PLATFORM_LINUX — ANSI + UTF-8 via printf
+    ConsoleColor col = (fillColor != 0) ? fillColor : cc.label;
+    SetConsoleColor(col);
+    printf("%-12s[", label);
+    for (int i = 0; i < filled;   ++i) SetConsoleColor(col),     fputs(kBarFull,  stdout);
+    for (int i = filled; i < cols; ++i) SetConsoleColor(cc.dim), fputs(kBarEmpty, stdout);
+    printf("]\n");
+#else // PLATFORM_LINUX — ANSI + UTF-8
     const ConsoleColors& cc = GetConsoleColors();
-    const std::string& col = cellColor.empty() ? cc.label : cellColor;
-    printf("%s%-12s%s", col.c_str(), label, cc.reset.c_str());
-
-    const int steps = (int)hist.Size();
-    for (int c = 0; c < cols; ++c)
-    {
-        const int hi = steps - cols + c;
-        double v = (hi >= 0) ? hist.Get(static_cast<size_t>(hi)) : 0.0;
-        v = std::max(0.0, std::min(100.0, v));
-        int lv = static_cast<int>(v / 100.0 * 4.0 + 0.5);
-        lv = std::max(0, std::min(4, lv));
-        if (lv == 0) fputs("\x1b[90m ", stdout);
-        else         fputs(kUtf8Blocks[lv], stdout);
-    }
-    printf("%s\n", cc.reset.c_str());
+    const std::string& col = fillColor.empty() ? cc.label : fillColor;
+    printf("%s%-12s[%s", col.c_str(), label, col.c_str());
+    for (int i = 0; i < filled;   ++i) fputs(kBarFull,  stdout);
+    for (int i = filled; i < cols; ++i) { fputs("\x1b[90m", stdout); fputs(kBarEmpty, stdout); }
+    printf("%s]\n", cc.reset.c_str());
 #endif
 }
 
@@ -213,18 +154,14 @@ static void Render(const CpuMetrics& cpu, const RamMetrics& ram,
     SetConsoleColor(cc.value);
     printf("%s\n", FormatUptime(cpu.uptimeMs).c_str());
 
-    // Push current samples into history rings.
-    g_cpuHist.Push(cpu.loadPercent);
-    g_ramHist.Push(ram.loadPercent);
-
-    const int kW = 40; // waveform width in chars
+    const int kBarW = 40;
 
     // CPU section
     SetConsoleColor(FOREGROUND_INTENSITY);
     printf("\n  CPU Load     ");
     SetConsoleColor(cc.cpu_load);
     printf("%5.1f%%\n", cpu.loadPercent);
-    DrawWave("", g_cpuHist, kW, cc.cpu_load);
+    DrawProgress("", cpu.loadPercent, kBarW, cc.cpu_load);
 
     if (cpu.powerWatts > 0.0)
     {
@@ -239,7 +176,7 @@ static void Render(const CpuMetrics& cpu, const RamMetrics& ram,
     printf("\n  RAM Usage    ");
     SetConsoleColor(cc.ram);
     printf("%5.1f%%\n", ram.loadPercent);
-    DrawWave("", g_ramHist, kW, cc.ram);
+    DrawProgress("", ram.loadPercent, kBarW, cc.ram);
     SetConsoleColor(cc.dim);
     printf("           %4.1f GB / %4.1f GB\n",
            static_cast<double>(ram.totalBytes - ram.freeBytes) / (1024.0*1024*1024),
@@ -312,16 +249,12 @@ static void Render(const CpuMetrics& cpu, const RamMetrics& ram,
         printf(" %sCPU (N/A)%s", cc.dim.c_str(), cc.reset.c_str());
     printf(" %s| Uptime: %s%s\n", cc.dim.c_str(), cc.value.c_str(), FormatUptime(cpu.uptimeMs).c_str());
 
-    // Push current samples into history rings.
-    g_cpuHist.Push(cpu.loadPercent);
-    g_ramHist.Push(ram.loadPercent);
-
-    const int kW = 40; // waveform width in chars
+    const int kBarW = 40;
 
     // CPU section
     printf("\n%s  CPU Load     %s%5.1f%%%s\n",
            cc.bold.c_str(), cc.cpu_load.c_str(), cpu.loadPercent, cc.reset.c_str());
-    DrawWave("", g_cpuHist, kW, cc.cpu_load);
+    DrawProgress("", cpu.loadPercent, kBarW, cc.cpu_load);
 
     if (cpu.powerWatts > 0.0)
         printf("  CPU Power    %s%5.1f W / %s%5.0f W TDP%s\n",
@@ -331,7 +264,7 @@ static void Render(const CpuMetrics& cpu, const RamMetrics& ram,
     // RAM section
     printf("%s  RAM Usage    %s%5.1f%%%s\n",
            cc.bold.c_str(), cc.ram.c_str(), ram.loadPercent, cc.reset.c_str());
-    DrawWave("", g_ramHist, kW, cc.ram);
+    DrawProgress("", ram.loadPercent, kBarW, cc.ram);
     printf("%s           %4.1f GB / %4.1f GB%s\n",
            cc.dim.c_str(),
            static_cast<double>(ram.totalBytes - ram.freeBytes) / (1024.0*1024*1024),
@@ -429,14 +362,6 @@ int main(int argc, char* argv[])
         fprintf(stderr, "WARN: SetConsoleOutputCP failed err=%lu\n", GetLastError());
     if (!SetConsoleCP(CP_UTF8))
         fprintf(stderr, "WARN: SetConsoleCP failed err=%lu\n", GetLastError());
-
-    // UTF-8 block chars only when CP is confirmed UTF-8; otherwise use ASCII.
-    g_useUtf8Blocks = (GetConsoleOutputCP() == CP_UTF8);
-    {
-        const char* asciiEnv = getenv("LOADGRAPH_ASCII_BARS");
-        if (asciiEnv && asciiEnv[0] != '\0' && asciiEnv[0] != '0')
-            g_useUtf8Blocks = false;
-    }
 
     // Apply colors from config.
     ApplyColors(cfg);
