@@ -193,8 +193,20 @@ static std::string BuildFrame(const CpuMetrics& cpu, const RamMetrics& ram,
     }
 #endif
 
-    // Header removed per request — start directly with metrics.
-    out += "Uptime: " + FormatUptime(cpu.uptimeMs) + "\n";
+    // Header
+    out += cBold + cTitle + " LoadGraph Console" + cReset;
+#ifdef PLATFORM_WINDOWS
+    if (!cpuNameUtf8.empty())
+        out += " " + AnsiColor(cfg.cpu_name_color.c_str()) + cpuNameUtf8 + cReset;
+    else
+        out += " " + cDim + " CPU (N/A)" + cReset;
+#else
+    if (cpu.cpuName[0] != '\0')
+        out += " " + AnsiColor(cfg.cpu_name_color.c_str()) + std::string(cpu.cpuName) + cReset;
+    else
+        out += " " + cDim + " CPU (N/A)" + cReset;
+#endif
+    out += " " + cDim + "| Uptime: " + cReset + FormatUptime(cpu.uptimeMs) + "\n";
 
     // CPU Load — bar + value
     {
@@ -209,7 +221,7 @@ static std::string BuildFrame(const CpuMetrics& cpu, const RamMetrics& ram,
     {
         double pwrPct = (cpu.tdpWatts > 0.0) ? (cpu.powerWatts / cpu.tdpWatts * 100.0) : 0.0;
         const std::string bar = BuildProgress("CPU Power", pwrPct, barCols);
-        out += "\n" + cCpuLoad + bar + " " + cReset;
+        out += "\n" + AnsiColor(cfg.cpu_power_color.c_str()) + bar + " " + cReset;
         snprintf(tmp, sizeof(tmp), "%5.1f W / %5.0f W TDP", cpu.powerWatts, cpu.tdpWatts);
         out += cDim + std::string(tmp) + cReset;
     }
