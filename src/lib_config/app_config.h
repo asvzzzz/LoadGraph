@@ -19,7 +19,7 @@ struct AppConfig
     std::string gpu_load_color   = "e91e63";
     std::string gpu_temp_color   = "00bcd4";
     std::string gpu_vram_color   = "AEB4E1";
-    std::string gpu_name_color   = "e91e63";  // GPU title labels
+    std::string gpu_name_color   = "76B900";  // GPU title labels (green, matches web dashboard)
     std::string gpu_fan_color    = "3154E1";
     std::string gpu_power_color  = "ffc107";
     std::string total_power_color = "ff5722";
