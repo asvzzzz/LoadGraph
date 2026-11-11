@@ -112,6 +112,7 @@ static int GetConsoleWidth()
 
 // ============================================================================
 // Windows console color helpers — map hex RGB to Win32 WORD attributes.
+// Finds the dominant chromatic channel and maps to the nearest palette color.
 // ============================================================================
 #ifdef PLATFORM_WINDOWS
 static WORD HexToColor(const char* hex)
@@ -119,21 +120,26 @@ static WORD HexToColor(const char* hex)
     unsigned r = 0, g = 0, b = 0;
     if (hex && strlen(hex) >= 6)
         sscanf(hex, "%2x%2x%2x", &r, &g, &b);
-    // Map to nearest Win32 console color.
-    // Priority: match brightness and dominant hue.
-    bool bright = (r > 0x7F || g > 0x7F || b > 0x7F);
+    // Determine dominant chromatic channel.
     WORD attrs = 0;
-    if      (r > 150 && g < 100 && b < 100)       attrs = FOREGROUND_RED;
-    else if (r < 100 && g > 150 && b < 100)       attrs = FOREGROUND_GREEN;
-    else if (r < 100 && g < 100 && b > 150)       attrs = FOREGROUND_BLUE;
-    else if (r > 150 && g > 150 && b < 100)       attrs = FOREGROUND_GREEN | FOREGROUND_RED;
-    else if (r > 150 && g < 100 && b > 150)       attrs = FOREGROUND_RED | FOREGROUND_BLUE;
-    else if (r < 100 && g > 150 && b > 150)       attrs = FOREGROUND_GREEN | FOREGROUND_BLUE;
-    else if (r > 150 && g > 150 && b > 150)       attrs = FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE;
-    else if (r > 150 && g > 100 && b < 100)       attrs = FOREGROUND_RED | FOREGROUND_GREEN;
-    else if (r < 100 && g > 150 && b < 100)       attrs = FOREGROUND_GREEN;
-    else                                          attrs = FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE; // white
-    if (bright) attrs |= FOREGROUND_INTENSITY;
+    unsigned maxC = r;
+    if (g > maxC) maxC = g;
+    if (b > maxC) maxC = b;
+    // If all channels are similar (gray/white), use white.
+    unsigned minC = r;
+    if (g < minC) minC = g;
+    if (b < minC) minC = b;
+    bool gray = (maxC - minC < 40);
+    if (gray)
+    {
+        attrs = FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE;
+    }
+    else if (r >= g && r >= b)       attrs = FOREGROUND_RED;
+    else if (g >= r && g >= b)       attrs = FOREGROUND_GREEN;
+    else                             attrs = FOREGROUND_BLUE;
+    // Brightness: if any channel is > 127, add intensity.
+    if (r > 127 || g > 127 || b > 127)
+        attrs |= FOREGROUND_INTENSITY;
     return attrs;
 }
 
@@ -278,43 +284,58 @@ static std::vector<WinLine> BuildFrameWin(const CpuMetrics& cpu, const RamMetric
 }
 
 // ============================================================================
-// OutputFrame — clears screen then writes frame atomically using Win32 API.
-// Cursor positioned manually per line; no reliance on newline processing.
+// OutputFrame — double-buffered render to eliminate flicker.
+// Writes full frame to offscreen buffer, then atomically swaps it into view.
 // ============================================================================
 static void OutputFrameWin(const std::vector<WinLine>& lines)
 {
-    HANDLE hOut = GetConsoleOutputHandle();
-    if (hOut == INVALID_HANDLE_VALUE) return;
+    HANDLE hMain = GetConsoleOutputHandle();
+    if (hMain == INVALID_HANDLE_VALUE) return;
 
-    // Clear entire visible area.
-    CONSOLE_SCREEN_BUFFER_INFO info;
-    if (GetConsoleScreenBufferInfo(hOut, &info))
+    // Static offscreen buffer — created once, reused every frame.
+    static HANDLE hBuf = INVALID_HANDLE_VALUE;
+    if (hBuf == INVALID_HANDLE_VALUE)
     {
-        COORD zero   = { 0, 0 };
-        DWORD written = 0;
-        const DWORD cells = static_cast<DWORD>(info.dwSize.X) *
-                            static_cast<DWORD>(info.srWindow.Bottom + 1);
-        FillConsoleOutputAttribute(hOut, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE,
-                                   cells, zero, &written);
-        FillConsoleOutputCharacterA(hOut, ' ', cells, zero, &written);
+        hBuf = CreateConsoleScreenBuffer(
+            GENERIC_READ | GENERIC_WRITE,
+            0, nullptr, CONSOLE_TEXTMODE_BUFFER, nullptr);
     }
+    if (hBuf == INVALID_HANDLE_VALUE) return;
 
-    // Write each line at its row position. Strip leading '\n' if present.
-    SHORT row = 0;
-    for (const auto& ln : lines)
+    // Get main buffer info for sizing.
+    CONSOLE_SCREEN_BUFFER_INFO info;
+    GetConsoleScreenBufferInfo(hMain, &info);
+    SHORT bufRows = static_cast<SHORT>(std::max(static_cast<int>(lines.size() + 1), info.srWindow.Bottom + 1));
+    COORD bufSize = { info.dwSize.X, bufRows };
+    SetConsoleScreenBufferSize(hBuf, bufSize);
+
+    // Clear offscreen buffer with default attributes.
+    COORD zero   = { 0, 0 };
+    DWORD written = 0;
+    const DWORD totalCells = static_cast<DWORD>(bufSize.X) * static_cast<DWORD>(bufRows);
+    FillConsoleOutputAttribute(hBuf, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE,
+                               totalCells, zero, &written);
+    FillConsoleOutputCharacterA(hBuf, ' ', totalCells, zero, &written);
+
+    // Write each line into the offscreen buffer.
+    for (size_t row = 0; row < lines.size(); ++row)
     {
-        std::string text = ln.text;
+        std::string text = lines[row].text;
         if (!text.empty() && text[0] == '\n') text.erase(text.begin());
         if (text.empty()) continue;
 
-        COORD pos = { 0, row++ };
-        SetConsoleCursorPosition(hOut, pos);
-        SetConsoleTextAttribute(hOut, ln.attrs);
-        DWORD written = 0;
-        WriteConsoleA(hOut, text.c_str(), static_cast<DWORD>(text.size()), &written, nullptr);
+        COORD pos = { 0, static_cast<SHORT>(row) };
+        DWORD charLen = static_cast<DWORD>(text.size());
+        WriteConsoleOutputCharacterA(hBuf, text.c_str(), charLen, pos, &written);
+        FillConsoleOutputAttribute(hBuf, lines[row].attrs, charLen, pos, &written);
     }
-    // Reset to default color.
-    SetConsoleTextAttribute(hOut, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
+
+    // Atomically swap: offscreen becomes visible, main becomes offscreen.
+    SetConsoleActiveScreenBuffer(hBuf);
+    // Swap handles so next frame writes to the buffer that was just made active.
+    HANDLE hTmp = hBuf;
+    hBuf = hMain;
+    hMain = hTmp;
 }
 #endif
 
