@@ -438,7 +438,8 @@ int main(int argc, char* argv[])
     // Bar width: ~60% of available columns, min 20, max 60.
     const int barCols = std::min(60, std::max(20, (consW - 18) * 60 / 100));
 
-    static FILE* s_logFp = nullptr;
+    // Log path stored for reopen-on-each-write pattern (avoids file lock).
+    static std::string s_logPath;
     if (cfg.log_file)
     {
         char logPath[1024] = "loadgraph.log";
@@ -448,15 +449,17 @@ int main(int argc, char* argv[])
             strncat_s(logPath, sizeof(logPath), "\\loadgraph.log", 14);
         else
             strncpy_s(logPath, sizeof(logPath), "loadgraph.log", _TRUNCATE);
-        fopen_s(&s_logFp, logPath, "a");
 #else
-        s_logFp = fopen("loadgraph.log", "a");
-#endif
-        if (s_logFp)
+        // On Linux use home directory for config compatibility.
+        const char* home = getenv("HOME");
+        if (home && strlen(home) > 0)
         {
-            fprintf(s_logFp, "console: logging enabled file=%s\n", logPath);
-            fflush(s_logFp);
+            snprintf(logPath, sizeof(logPath), "%s/.config/loadgraph/loadgraph.log", home);
         }
+#endif
+        s_logPath = logPath;
+        fprintf(stdout, "console: logging enabled file=%s\n", logPath);
+        fflush(stdout);
     }
 
     auto lastLog = std::chrono::steady_clock::now();
@@ -524,18 +527,28 @@ int main(int argc, char* argv[])
         }
 
         // Log metrics every 5 seconds if logging is enabled.
-        if (s_logFp && now - lastLog >= std::chrono::seconds(5))
+        // Reopen file each time to avoid lock issues when user views log.
+        if (!s_logPath.empty() && now - lastLog >= std::chrono::seconds(5))
         {
-            fprintf(s_logFp, "CPU: load=%.1f%% temp=%.0fC fan=%dRPM power=%.1fW/%.0fW TDP\n",
-                    cpu.loadPercent, cpu.temperature, cpu.fanRpm, cpu.powerWatts, cpu.tdpWatts);
-            for (size_t i = 0; i < gpus.size(); ++i)
+            FILE* fp = nullptr;
+#ifdef PLATFORM_WINDOWS
+            fopen_s(&fp, s_logPath.c_str(), "a");
+#else
+            fp = fopen(s_logPath.c_str(), "a");
+#endif
+            if (fp)
             {
-                const auto& g = gpus[i];
-                fprintf(s_logFp, "GPU%d: load=%.1f%% temp=%.0fC fan=%dRPM pwr=%.1fW\n",
-                        (int)i, g.loadPercent, g.temperature, g.fanRpm, g.powerWatts);
+                fprintf(fp, "CPU: load=%.1f%% temp=%.0fC fan=%dRPM power=%.1fW/%.0fW TDP\n",
+                        cpu.loadPercent, cpu.temperature, cpu.fanRpm, cpu.powerWatts, cpu.tdpWatts);
+                for (size_t i = 0; i < gpus.size(); ++i)
+                {
+                    const auto& g = gpus[i];
+                    fprintf(fp, "GPU%d: load=%.1f%% temp=%.0fC fan=%dRPM pwr=%.1fW\n",
+                            (int)i, g.loadPercent, g.temperature, g.fanRpm, g.powerWatts);
+                }
+                fclose(fp);
+                lastLog = now;
             }
-            fflush(s_logFp);
-            lastLog = now;
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
@@ -599,18 +612,28 @@ int main(int argc, char* argv[])
         }
 
         // Log metrics every 5 seconds if logging is enabled.
-        if (s_logFp && now - lastLog >= std::chrono::seconds(5))
+        // Reopen file each time to avoid lock issues when user views log.
+        if (!s_logPath.empty() && now - lastLog >= std::chrono::seconds(5))
         {
-            fprintf(s_logFp, "CPU: load=%.1f%% temp=%.0fC fan=%dRPM power=%.1fW/%.0fW TDP\n",
-                    cpu.loadPercent, cpu.temperature, cpu.fanRpm, cpu.powerWatts, cpu.tdpWatts);
-            for (size_t i = 0; i < gpus.size(); ++i)
+            FILE* fp = nullptr;
+#ifdef PLATFORM_WINDOWS
+            fopen_s(&fp, s_logPath.c_str(), "a");
+#else
+            fp = fopen(s_logPath.c_str(), "a");
+#endif
+            if (fp)
             {
-                const auto& g = gpus[i];
-                fprintf(s_logFp, "GPU%d: load=%.1f%% temp=%.0fC fan=%dRPM pwr=%.1fW\n",
-                        (int)i, g.loadPercent, g.temperature, g.fanRpm, g.powerWatts);
+                fprintf(fp, "CPU: load=%.1f%% temp=%.0fC fan=%dRPM power=%.1fW/%.0fW TDP\n",
+                        cpu.loadPercent, cpu.temperature, cpu.fanRpm, cpu.powerWatts, cpu.tdpWatts);
+                for (size_t i = 0; i < gpus.size(); ++i)
+                {
+                    const auto& g = gpus[i];
+                    fprintf(fp, "GPU%d: load=%.1f%% temp=%.0fC fan=%dRPM pwr=%.1fW\n",
+                            (int)i, g.loadPercent, g.temperature, g.fanRpm, g.powerWatts);
+                }
+                fclose(fp);
+                lastLog = now;
             }
-            fflush(s_logFp);
-            lastLog = now;
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
@@ -625,6 +648,5 @@ int main(int argc, char* argv[])
     printf("\n%s  Goodbye.%s\n", ccc.dim.c_str(), ccc.reset.c_str());
 #endif
 
-    if (s_logFp) { fclose(s_logFp); s_logFp = nullptr; }
     return 0;
 }
