@@ -110,57 +110,223 @@ static int GetConsoleWidth()
 }
 #endif
 
-// Convert UTF-8 frame string to UTF-16 for WriteConsoleW (VT-aware on Windows).
+// ============================================================================
+// Windows console color helpers — map hex RGB to Win32 WORD attributes.
+// ============================================================================
 #ifdef PLATFORM_WINDOWS
-static std::wstring Utf8ToUtf16(const std::string& utf8)
+static WORD HexToColor(const char* hex)
 {
-    if (utf8.empty()) return {};
-    int len = MultiByteToWideChar(CP_UTF8, 0, utf8.c_str(), -1, nullptr, 0);
-    if (len <= 0) return {};
-    std::wstring wstr;
-    wstr.resize(len - 1);
-    MultiByteToWideChar(CP_UTF8, 0, utf8.c_str(), -1, &wstr[0], len);
-    return wstr;
+    unsigned r = 0, g = 0, b = 0;
+    if (hex && strlen(hex) >= 6)
+        sscanf(hex, "%2x%2x%2x", &r, &g, &b);
+    // Map to nearest Win32 console color.
+    // Priority: match brightness and dominant hue.
+    bool bright = (r > 0x7F || g > 0x7F || b > 0x7F);
+    WORD attrs = 0;
+    if      (r > 150 && g < 100 && b < 100)       attrs = FOREGROUND_RED;
+    else if (r < 100 && g > 150 && b < 100)       attrs = FOREGROUND_GREEN;
+    else if (r < 100 && g < 100 && b > 150)       attrs = FOREGROUND_BLUE;
+    else if (r > 150 && g > 150 && b < 100)       attrs = FOREGROUND_GREEN | FOREGROUND_RED;
+    else if (r > 150 && g < 100 && b > 150)       attrs = FOREGROUND_RED | FOREGROUND_BLUE;
+    else if (r < 100 && g > 150 && b > 150)       attrs = FOREGROUND_GREEN | FOREGROUND_BLUE;
+    else if (r > 150 && g > 150 && b > 150)       attrs = FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE;
+    else if (r > 150 && g > 100 && b < 100)       attrs = FOREGROUND_RED | FOREGROUND_GREEN;
+    else if (r < 100 && g > 150 && b < 100)       attrs = FOREGROUND_GREEN;
+    else                                          attrs = FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE; // white
+    if (bright) attrs |= FOREGROUND_INTENSITY;
+    return attrs;
+}
+
+// Build the Windows frame as a vector of (text, color_attributes).
+struct WinLine { std::string text; WORD attrs; };
+static std::vector<WinLine> BuildFrameWin(const CpuMetrics& cpu, const RamMetrics& ram,
+                                          const std::vector<GpuMetrics>& gpus, int barCols)
+{
+    char tmp[64];
+    std::vector<WinLine> lines;
+
+    // Convert CPU name to UTF-8.
+    std::string cpuNameUtf8;
+    if (cpu.cpuName[0] != '\0')
+    {
+        int len = WideCharToMultiByte(CP_UTF8, 0, cpu.cpuName, -1, nullptr, 0, nullptr, nullptr);
+        if (len > 1)
+        {
+            cpuNameUtf8.resize(len - 1);
+            WideCharToMultiByte(CP_UTF8, 0, cpu.cpuName, -1, &cpuNameUtf8[0], len, nullptr, nullptr);
+        }
+    }
+
+    // Colors from config.
+    const ConsoleColors& cc = GetConsoleColors();
+    WORD wTitle   = HexToColor("e91e63");  // pink bold
+    WORD wCpuLoad = HexToColor("76b900");  // green
+    WORD wCpuTemp = HexToColor("00bcd4");  // cyan
+    WORD wRam     = HexToColor("aeb4e1");  // light blue
+    WORD wGpuLoad = HexToColor("e91e63");  // pink
+    WORD wGpuVram = HexToColor("aeb4e1");  // light blue
+    WORD wGpuFan  = HexToColor("3154e1");  // blue
+    WORD wGpuPwr  = HexToColor("ffc107");  // yellow
+    WORD wDim     = 0;  // inherit current color for dim text
+
+    HANDLE hOut = GetConsoleOutputHandle();
+
+    auto addLine = [&](const std::string& text, WORD attrs) {
+        lines.push_back({text, attrs});
+    };
+    auto addPlain = [&](const std::string& text) {
+        lines.push_back({text, 0});
+    };
+
+    // Header
+    {
+        std::string hdr = " LoadGraph Console";
+        if (!cpuNameUtf8.empty()) hdr += " " + cpuNameUtf8;
+        else hdr += " CPU (N/A)";
+        hdr += " | Uptime: " + FormatUptime(cpu.uptimeMs);
+        addLine(hdr, wTitle);
+    }
+
+    // CPU Load — bar + value
+    {
+        std::string line = BuildProgress("CPU Load", cpu.loadPercent, barCols);
+        snprintf(tmp, sizeof(tmp), " %5.1f%%", cpu.loadPercent);
+        addLine(line + tmp, wCpuLoad);
+    }
+
+    // CPU Power — bar (percent of TDP) + value
+    if (cpu.powerWatts > 0.0)
+    {
+        double pwrPct = (cpu.tdpWatts > 0.0) ? (cpu.powerWatts / cpu.tdpWatts * 100.0) : 0.0;
+        std::string line = BuildProgress("CPU Power", pwrPct, barCols);
+        snprintf(tmp, sizeof(tmp), " %5.1f W / %5.0f W TDP", cpu.powerWatts, cpu.tdpWatts);
+        addLine(line + tmp, wCpuLoad);
+    }
+
+    // RAM Usage — bar + value
+    {
+        std::string line = BuildProgress("RAM Usage", ram.loadPercent, barCols);
+        snprintf(tmp, sizeof(tmp), " %5.1f%%", ram.loadPercent);
+        addLine(line + tmp, wRam);
+        double ramUsedGb = static_cast<double>(ram.totalBytes - ram.freeBytes) / (1024.0*1024*1024);
+        double ramTotGb  = static_cast<double>(ram.totalBytes) / (1024.0*1024*1024);
+        snprintf(tmp, sizeof(tmp), "           %4.1f GB / %4.1f GB", ramUsedGb, ramTotGb);
+        addPlain(std::string(tmp));
+    }
+
+    // GPU section
+    if (!gpus.empty())
+    {
+        addLine("  GPU", wTitle);
+        for (size_t i = 0; i < gpus.size(); ++i)
+        {
+            const GpuMetrics& g = gpus[i];
+            addPlain("\n  --- GPU " + std::to_string(i) + ": " + g.name + " ---");
+
+            if (g.loadPercent >= 0.0)
+            {
+                std::string line = BuildProgress("Load", g.loadPercent, barCols);
+                snprintf(tmp, sizeof(tmp), " %5.1f%%", g.loadPercent);
+                addLine(line + tmp, wGpuLoad);
+            }
+            if (g.temperature >= 0.0)
+            {
+                double tempPct = std::min(100.0, g.temperature);
+                WORD tColor = wCpuTemp;
+                if (g.temperature > 80.0)      tColor = FOREGROUND_RED | FOREGROUND_INTENSITY;
+                else if (g.temperature > 65.0) tColor = FOREGROUND_GREEN | FOREGROUND_RED | FOREGROUND_INTENSITY; // yellow
+                std::string line = BuildProgress("Temp", g.temperature, barCols);
+                snprintf(tmp, sizeof(tmp), " %4.0f C", g.temperature);
+                addLine(line + tmp, tColor);
+            }
+            if (g.vramTotalBytes > 0)
+            {
+                double vpct = g.vramUsedBytes * 100.0 / g.vramTotalBytes;
+                std::string line = BuildProgress("VRAM", vpct, barCols);
+                snprintf(tmp, sizeof(tmp), " %5.1f%%", vpct);
+                addLine(line + tmp, wGpuVram);
+                double usedGb = static_cast<double>(g.vramUsedBytes) / (1024.0*1024*1024);
+                double totGb  = static_cast<double>(g.vramTotalBytes) / (1024.0*1024*1024);
+                snprintf(tmp, sizeof(tmp), " %4.1f GB / %4.1f GB", usedGb, totGb);
+                addPlain(std::string(tmp));
+            }
+            if (g.fanPercent >= 0.0)
+            {
+                std::string line = BuildProgress("Fan", g.fanPercent, barCols);
+                snprintf(tmp, sizeof(tmp), " %5.0f%%", g.fanPercent);
+                addLine(line + tmp, wGpuFan);
+            }
+            else if (g.fanRpm > 0)
+            {
+                std::string line = BuildProgress("Fan", static_cast<double>(g.fanRpm), barCols);
+                snprintf(tmp, sizeof(tmp), " %5d RPM", g.fanRpm);
+                addLine(line + tmp, wGpuFan);
+            }
+            if (g.powerWatts > 0.0)
+            {
+                double pwrMax = (g.powerLimitWatts > 0.0) ? g.powerLimitWatts : 400.0;
+                double pwrPct = (pwrMax > 0.0) ? (g.powerWatts / pwrMax * 100.0) : 0.0;
+                std::string line = BuildProgress("Power", pwrPct, barCols);
+                snprintf(tmp, sizeof(tmp), " %5.1f W", g.powerWatts);
+                addLine(line + tmp, wGpuPwr);
+            }
+        }
+    }
+
+    addPlain("  [Q] quit");
+    return lines;
+}
+
+// ============================================================================
+// OutputFrame — clears screen then writes frame atomically using Win32 API.
+// Each line is written with its pre-computed color attribute via WriteConsoleA.
+// ============================================================================
+static void OutputFrameWin(const std::vector<WinLine>& lines)
+{
+    HANDLE hOut = GetConsoleOutputHandle();
+    if (hOut == INVALID_HANDLE_VALUE) return;
+
+    // Clear entire visible area.
+    CONSOLE_SCREEN_BUFFER_INFO info;
+    if (GetConsoleScreenBufferInfo(hOut, &info))
+    {
+        COORD zero   = { 0, 0 };
+        DWORD written = 0;
+        const DWORD cells = static_cast<DWORD>(info.dwSize.X) *
+                            static_cast<DWORD>(info.srWindow.Bottom + 1);
+        FillConsoleOutputAttribute(hOut, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE,
+                                   cells, zero, &written);
+        FillConsoleOutputCharacterA(hOut, ' ', cells, zero, &written);
+    }
+    COORD home = { 0, 0 };
+    SetConsoleCursorPosition(hOut, home);
+
+    // Write each line with its color. WriteConsoleA handles '\n' automatically.
+    for (const auto& ln : lines)
+    {
+        if (!ln.text.empty())
+        {
+            SetConsoleTextAttribute(hOut, ln.attrs);
+            DWORD written = 0;
+            WriteConsoleA(hOut, ln.text.c_str(), static_cast<DWORD>(ln.text.size()), &written, nullptr);
+        }
+    }
+    // Reset to default color.
+    SetConsoleTextAttribute(hOut, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
 }
 #endif
 
 // ============================================================================
-// OutputFrame — clears screen then writes frame atomically.
-// Windows: Win32 clear + WriteConsoleW (VT processes ANSI in UTF-16).
-// Linux:   ANSI \x1b[H\x1b[2J + fputs.
+// OutputFrame — Linux uses ANSI; Windows frame is rendered separately.
 // ============================================================================
 static void OutputFrame(const std::string& frame)
 {
 #ifdef PLATFORM_WINDOWS
-    // Clear screen via Win32 (reliable, no dependency on ANSI processing for clear).
-    HANDLE hOut = GetConsoleOutputHandle();
-    if (hOut != INVALID_HANDLE_VALUE)
-    {
-        CONSOLE_SCREEN_BUFFER_INFO info;
-        if (GetConsoleScreenBufferInfo(hOut, &info))
-        {
-            COORD zero   = { 0, 0 };
-            DWORD written = 0;
-            const DWORD cells = static_cast<DWORD>(info.dwSize.X) *
-                                static_cast<DWORD>(info.srWindow.Bottom + 1);
-            FillConsoleOutputAttribute(hOut, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE,
-                                       cells, zero, &written);
-            FillConsoleOutputCharacterA(hOut, ' ', cells, zero, &written);
-            SetConsoleCursorPosition(hOut, zero);
-        }
-    }
-    // Write frame via WriteConsoleW — VT driver processes ANSI sequences in UTF-16.
-    std::wstring wframe = Utf8ToUtf16(frame);
-    if (!wframe.empty() && hOut != INVALID_HANDLE_VALUE)
-    {
-        DWORD written = 0;
-        WriteConsoleW(hOut, wframe.c_str(), static_cast<DWORD>(wframe.size()), &written, nullptr);
-    }
+    (void)frame;  // unused on Windows
 #else
     fputs("\x1b[H\x1b[2J", stdout);
     fputs(frame.c_str(), stdout);
 #endif
-    fflush(stdout);
 }
 
 // Build a 24-bit ANSI foreground sequence from a hex color string (no '#').
@@ -174,59 +340,36 @@ static std::string AnsiColor(const char* hex)
 }
 
 // ============================================================================
-// BuildFrame — assembles the entire UI into a plain-text string with ANSI colors.
-// Works on both Windows (with VT enabled) and Linux via unified color strings.
+// BuildFrame — Linux only: plain text with embedded ANSI sequences.
 // ============================================================================
+#ifdef PLATFORM_LINUX
 static std::string BuildFrame(const CpuMetrics& cpu, const RamMetrics& ram,
                               const std::vector<GpuMetrics>& gpus, int barCols)
 {
     char tmp[64];
     std::string out;
 
-#ifdef PLATFORM_WINDOWS
-    // Convert wchar_t CPU name to UTF-8 string.
-    std::string cpuNameUtf8;
-    if (cpu.cpuName[0] != '\0')
-    {
-        int len = WideCharToMultiByte(CP_UTF8, 0, cpu.cpuName, -1, nullptr, 0, nullptr, nullptr);
-        if (len > 1)
-        {
-            cpuNameUtf8.resize(len - 1);
-            WideCharToMultiByte(CP_UTF8, 0, cpu.cpuName, -1, &cpuNameUtf8[0], len, nullptr, nullptr);
-        }
-    }
-#endif
-
-    // Unified ANSI palette — built directly from hex values, works on both platforms.
+    const ConsoleColors& cc = GetConsoleColors();
     const std::string cReset   = "\x1b[0m";
     const std::string cBold    = "\x1b[1m";
     const std::string cDim     = "\x1b[90m";
-    const std::string cTitle   = AnsiColor("e91e63");   // pink  (GPU titles)
-    const std::string cCpuLoad = AnsiColor("76b900");   // green (CPU load)
-    const std::string cCpuTemp = AnsiColor("00bcd4");   // cyan  (GPU temp default)
-    const std::string cRam     = AnsiColor("aeb4e1");   // light blue
-    const std::string cGpuLoad = AnsiColor("e91e63");   // pink
-    const std::string cGpuVram = AnsiColor("aeb4e1");   // light blue
-    const std::string cGpuFan  = AnsiColor("3154e1");   // blue
-    const std::string cGpuPwr  = AnsiColor("ffc107");   // yellow
+    const std::string cTitle   = (cc.title.empty())  ? AnsiColor("e91e63") : static_cast<std::string>(cc.title);
+    const std::string cCpuLoad = (cc.cpu_load.empty())? AnsiColor("76b900") : static_cast<std::string>(cc.cpu_load);
+    const std::string cCpuTemp = (cc.cpu_temp.empty())? AnsiColor("00bcd4") : static_cast<std::string>(cc.cpu_temp);
+    const std::string cRam     = (cc.ram.empty())     ? AnsiColor("aeb4e1") : static_cast<std::string>(cc.ram);
+    const std::string cGpuLoad = (cc.gpu_load.empty())? AnsiColor("e91e63") : static_cast<std::string>(cc.gpu_load);
+    const std::string cGpuVram = (cc.gpu_vram.empty())? AnsiColor("aeb4e1") : static_cast<std::string>(cc.gpu_vram);
+    const std::string cGpuFan  = (cc.gpu_fan.empty()) ? AnsiColor("3154e1") : static_cast<std::string>(cc.gpu_fan);
+    const std::string cGpuPwr  = (cc.gpu_power.empty())? AnsiColor("ffc107"): static_cast<std::string>(cc.gpu_power);
 
-#ifdef PLATFORM_WINDOWS
-    out += cTitle + " LoadGraph Console" + cReset;
-    if (!cpuNameUtf8.empty())
-        out += " \x1b[36m" + cpuNameUtf8 + cReset;
-    else
-        out += " " + cDim + " CPU (N/A)" + cReset;
-    out += " " + cDim + "| Uptime: " + cReset + FormatUptime(cpu.uptimeMs) + "\n";
-#else
     out += cBold + cTitle + " LoadGraph Console" + cReset;
     if (cpu.cpuName[0] != '\0')
         out += " \x1b[36m" + std::string(cpu.cpuName) + cReset;
     else
         out += " " + cDim + " CPU (N/A)" + cReset;
     out += " " + cDim + "| Uptime: " + cReset + FormatUptime(cpu.uptimeMs) + "\n";
-#endif
 
-    // CPU Load — bar + value on same line
+    // CPU Load — bar + value
     {
         const std::string bar = BuildProgress("CPU Load", cpu.loadPercent, barCols);
         out += "\n" + cCpuLoad + bar + cReset;
@@ -234,7 +377,7 @@ static std::string BuildFrame(const CpuMetrics& cpu, const RamMetrics& ram,
         out += cCpuLoad + std::string(tmp) + cReset + "\n";
     }
 
-    // CPU Power — bar (percent of TDP) + value on same line
+    // CPU Power — bar (percent of TDP) + value
     if (cpu.powerWatts > 0.0)
     {
         double pwrPct = (cpu.tdpWatts > 0.0) ? (cpu.powerWatts / cpu.tdpWatts * 100.0) : 0.0;
@@ -244,7 +387,7 @@ static std::string BuildFrame(const CpuMetrics& cpu, const RamMetrics& ram,
         out += cDim + std::string(tmp) + cReset + "\n";
     }
 
-    // RAM Usage — bar + value on same line
+    // RAM Usage — bar + value
     {
         const std::string bar = BuildProgress("RAM Usage", ram.loadPercent, barCols);
         out += "\n" + cRam + bar + cReset;
@@ -311,9 +454,9 @@ static std::string BuildFrame(const CpuMetrics& cpu, const RamMetrics& ram,
             }
             else if (g.fanRpm > 0)
             {
-                out += "\n    Fan        ";
-                out += cGpuFan;
-                snprintf(tmp, sizeof(tmp), "%5d RPM", g.fanRpm);
+                const std::string bar = BuildProgress("Fan", static_cast<double>(g.fanRpm), barCols);
+                out += "\n" + cGpuFan + bar + cReset;
+                snprintf(tmp, sizeof(tmp), " %5d RPM", g.fanRpm);
                 out += std::string(tmp) + cReset;
             }
             if (g.powerWatts > 0.0)
@@ -331,6 +474,7 @@ static std::string BuildFrame(const CpuMetrics& cpu, const RamMetrics& ram,
     out += "\n" + cDim + "  [Q] quit" + cReset + "\n";
     return out;
 }
+#endif
 
 // ============================================================================
 // Quit-key polling
@@ -492,8 +636,8 @@ int main(int argc, char* argv[])
         auto now = std::chrono::steady_clock::now();
         if (now - lastRender >= std::chrono::seconds(1))
         {
-            std::string frame = BuildFrame(cpu, ram, gpus, barCols);
-            OutputFrame(frame);
+            auto lines = BuildFrameWin(cpu, ram, gpus, barCols);
+            OutputFrameWin(lines);
             lastRender = now;
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
