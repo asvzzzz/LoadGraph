@@ -166,11 +166,21 @@ namespace
 // ---------------------------------------------------------------------------
 
 // Return the path to loadgraph.cfg for the current platform.
-// Windows: looks in exe directory first (config travels with binary).
+// Both Windows and Linux use XDG style: $HOME/.config/loadgraph/loadgraph.cfg
 static std::string GetConfigPath()
 {
 #ifdef PLATFORM_WINDOWS
-    return GetExeDir() + "/loadgraph.cfg";
+    // Windows: use %USERPROFILE%\.config\loadgraph\loadgraph.cfg
+    const char* home = getenv("USERPROFILE");
+    if (!home || !home[0]) home = getenv("HOME");
+    std::string dir;
+    if (home && home[0])
+        dir = std::string(home) + "/.config";
+    else
+        dir = GetExeDir();
+    std::error_code ec;
+    std::filesystem::create_directories(dir + "/loadgraph", ec);
+    return dir + "/loadgraph/loadgraph.cfg";
 #else
     // Linux: use XDG_CONFIG_HOME/loadgraph/loadgraph.cfg
     const char* xdg = getenv("XDG_CONFIG_HOME");
