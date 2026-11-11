@@ -79,6 +79,16 @@ LoadGraphTTY [-port N]
 - **Опциональный HTTP-сервер** — передайте `-port 9115` для запуска веб-дашборда параллельно с TTY
 - **Файловый лог** — пишет `loadgraph.log` в CWD при `"log_file": true` в конфиге
 
+### Скриншоты
+
+#### Linux / WSL2
+
+![LoadGraphTTY Linux](img/lgttylin.png)
+
+#### Windows
+
+![LoadGraphTTY Windows](img/lgttywin.png)
+
 ## Требования
 
 ### Windows

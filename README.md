@@ -79,6 +79,16 @@ Features:
 - **Optional HTTP server** — pass `-port 9115` to serve the web dashboard alongside the TTY display
 - **File logging** — writes `loadgraph.log` in CWD when `"log_file": true` in config
 
+### Screenshots
+
+#### Linux / WSL2
+
+![LoadGraphTTY Linux](img/lgttylin.png)
+
+#### Windows
+
+![LoadGraphTTY Windows](img/lgttywin.png)
+
 ## Requirements
 
 ### Windows
