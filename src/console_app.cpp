@@ -151,19 +151,19 @@ static std::string BuildFrame(const CpuMetrics& cpu, const RamMetrics& ram,
 
 #ifdef PLATFORM_WINDOWS
     // On Windows we use ANSI sequences via VT, so colors are strings.
-    // GetConsoleColors returns WORD on Windows, but we need ANSI strings.
-    // Use hardcoded ANSI for Windows to avoid type mismatch.
+    // Read colors from config to match Linux behavior.
+    static AppConfig cfg = LoadAppConfig();
     const std::string cReset   = "\x1b[0m";
     const std::string cBold    = "\x1b[1m";
     const std::string cDim     = "\x1b[90m";
-    const std::string cTitle   = AnsiColor("e91e63");
-    const std::string cCpuLoad = AnsiColor("76b900");
-    const std::string cCpuTemp = AnsiColor("00bcd4");
-    const std::string cRam     = AnsiColor("aeb4e1");
-    const std::string cGpuLoad = AnsiColor("e91e63");
-    const std::string cGpuVram = AnsiColor("aeb4e1");
-    const std::string cGpuFan  = AnsiColor("3154e1");
-    const std::string cGpuPwr  = AnsiColor("ffc107");
+    const std::string cTitle   = AnsiColor(cfg.cpu_name_color.c_str());
+    const std::string cCpuLoad = AnsiColor(cfg.cpu_load_color.c_str());
+    const std::string cCpuTemp = AnsiColor(cfg.cpu_temp_color.c_str());
+    const std::string cRam     = AnsiColor(cfg.ram_color.c_str());
+    const std::string cGpuLoad = AnsiColor(cfg.gpu_load_color.c_str());
+    const std::string cGpuVram = AnsiColor(cfg.gpu_vram_color.c_str());
+    const std::string cGpuFan  = AnsiColor(cfg.gpu_fan_color.c_str());
+    const std::string cGpuPwr  = AnsiColor(cfg.gpu_power_color.c_str());
 #else
     const ConsoleColors& cc = GetConsoleColors();
     const std::string cReset   = cc.reset;
@@ -232,7 +232,7 @@ static std::string BuildFrame(const CpuMetrics& cpu, const RamMetrics& ram,
         for (size_t i = 0; i < gpus.size(); ++i)
         {
             const GpuMetrics& g = gpus[i];
-            out += "\n\n" + cBold + cTitle + " --- GPU " + std::to_string(i) + ": " + g.name + " ---" + cReset;
+            out += "\n\n" + cBold + AnsiColor(cfg.gpu_name_color.c_str()) + " --- GPU " + std::to_string(i) + ": " + g.name + " ---" + cReset;
 
             if (g.loadPercent >= 0.0)
             {
