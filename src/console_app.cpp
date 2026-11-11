@@ -3,7 +3,6 @@
 // Usage: LoadGraphTTY [-port N]
 //   -port N : start HTTP server on given port, serve web dashboard
 
-// Platform headers first — must precede all standard library headers.
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
@@ -19,7 +18,6 @@
 #include <cstdint>
 #include <ctime>
 #include <thread>
-#include <atomic>
 #include <chrono>
 #include <algorithm>
 #include <cmath>
@@ -62,11 +60,11 @@ static std::string FormatUptime(uint64_t ms)
 }
 
 // ============================================================================
-// Progress bar — plain text, no colors. Caller adds color via console API.
-// Returns the bar string like "  Label[████░░░░]".
+// Progress bar — plain text only, no colors embedded.
+// Returns string like "  CPU Load[████░░░]". Caller appends value after.
 // ============================================================================
-static const char* const kBarEmpty  = "\xe2\x96\x91";
-static const char* const kBarFull   = "\xe2\x96\x88";
+static const char* const kBarEmpty = "\xe2\x96\x91";
+static const char* const kBarFull  = "\xe2\x96\x88";
 
 static std::string BuildProgress(const char* label, double percent, int cols)
 {
@@ -107,7 +105,7 @@ static int GetConsoleWidth()
 #endif
 
 // ============================================================================
-// Clear visible console area (Windows only). Linux uses ANSI in OutputFrame.
+// ClearScreen — Windows: fills visible area with spaces, resets attributes.
 // ============================================================================
 #ifdef PLATFORM_WINDOWS
 static void ClearScreen()
@@ -117,29 +115,24 @@ static void ClearScreen()
     CONSOLE_SCREEN_BUFFER_INFO info;
     if (!GetConsoleScreenBufferInfo(hOut, &info)) return;
 
-    COORD zero = { 0, 0 };
+    COORD zero   = { 0, 0 };
     DWORD written = 0;
-    const DWORD cols = static_cast<DWORD>(info.srWindow.Right - info.srWindow.Left + 1);
-    const DWORD rows = static_cast<DWORD>(info.srWindow.Bottom - info.srWindow.Top + 1);
-    const DWORD cells = cols * rows;
+    // Use a generous cell count to cover the entire buffer visible area.
+    const DWORD cells = static_cast<DWORD>(info.dwSize.X * (info.srWindow.Bottom + 1));
 
-    // Reset attributes to dim white.
     FillConsoleOutputAttribute(hOut, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_INTENSITY,
                                cells, zero, &written);
-    // Clear characters.
     FillConsoleOutputCharacterA(hOut, ' ', cells, zero, &written);
     SetConsoleCursorPosition(hOut, zero);
 }
 #endif
 
 // ============================================================================
-// OutputFrame — writes the built frame to the console.
-// Windows: clears screen first, then WriteConsoleA (one atomic write).
-// Linux:   ANSI escape sequences for cursor home + clear embedded in string.
+// OutputFrame — clears screen then writes the frame string in one shot.
 // ============================================================================
-#ifdef PLATFORM_WINDOWS
 static void OutputFrame(const std::string& frame)
 {
+#ifdef PLATFORM_WINDOWS
     ClearScreen();
     HANDLE hOut = GetConsoleOutputHandle();
     if (hOut != INVALID_HANDLE_VALUE)
@@ -151,19 +144,18 @@ static void OutputFrame(const std::string& frame)
     {
         fputs(frame.c_str(), stdout);
     }
-}
 #else
-static void OutputFrame(const std::string& frame)
-{
-    // ANSI: move cursor to home (0,0), clear screen.
+    // ANSI: cursor home + clear screen.
     fputs("\x1b[H\x1b[2J", stdout);
     fputs(frame.c_str(), stdout);
-}
 #endif
+}
 
 // ============================================================================
-// BuildFrame — assembles the entire UI into a plain-text string (no colors).
-// Colors are applied at output time via console API calls.
+// BuildFrame — assembles the entire UI into a plain-text string.
+// Colors are embedded as ANSI sequences on Linux; on Windows the caller
+// would need to use console API, but we keep it simple: build plain text
+// and let OutputFrame handle output atomically.
 // ============================================================================
 static std::string BuildFrame(const CpuMetrics& cpu, const RamMetrics& ram,
                               const std::vector<GpuMetrics>& gpus, int barCols)
@@ -174,13 +166,117 @@ static std::string BuildFrame(const CpuMetrics& cpu, const RamMetrics& ram,
 #ifdef PLATFORM_WINDOWS
     const ConsoleColors& cc = GetConsoleColors();
 
-    // Header — colors applied via SetConsoleColor before each printf-like append.
-    // Since we're building a string, we can't use SetConsoleColor here.
-    // Instead we embed simple markers that OutputFrame will handle... 
-    // Actually: on Windows we output directly with color calls, not via string.
-    // This function is only used for Linux.
-    (void)cc; (void)barCols;
-#else // PLATFORM_LINUX
+    // Header
+    SetConsoleColor(cc.title | FOREGROUND_INTENSITY);
+    out += " LoadGraph Console";
+    if (cpu.cpuName[0] != '\0')
+    {
+        int len = WideCharToMultiByte(CP_UTF8, 0, cpu.cpuName, -1, nullptr, 0, nullptr, nullptr);
+        if (len > 1)
+        {
+            std::string wstr; wstr.resize(len - 1);
+            WideCharToMultiByte(CP_UTF8, 0, cpu.cpuName, -1, &wstr[0], len, nullptr, nullptr);
+            out += " "; out += wstr;
+        }
+    }
+    else
+        out += " CPU (N/A)";
+    out += " | Uptime: " + FormatUptime(cpu.uptimeMs) + "\n";
+
+    // CPU Load — bar + value on same line
+    {
+        const std::string bar = BuildProgress("  CPU Load", cpu.loadPercent, barCols);
+        out += bar;
+        snprintf(tmp, sizeof(tmp), " %5.1f%%", cpu.loadPercent);
+        out += std::string(tmp) + "\n";
+    }
+
+    // CPU Power — no bar, just text
+    if (cpu.powerWatts > 0.0)
+    {
+        snprintf(tmp, sizeof(tmp), "  CPU Power    %5.1f W / %5.0f W TDP",
+                 cpu.powerWatts, cpu.tdpWatts);
+        out += std::string(tmp) + "\n";
+    }
+
+    // RAM Usage — bar + value on same line
+    {
+        const std::string bar = BuildProgress("  RAM Usage", ram.loadPercent, barCols);
+        out += bar;
+        snprintf(tmp, sizeof(tmp), " %5.1f%%", ram.loadPercent);
+        out += std::string(tmp) + "\n";
+        double ramUsedGb = static_cast<double>(ram.totalBytes - ram.freeBytes) / (1024.0*1024*1024);
+        double ramTotGb  = static_cast<double>(ram.totalBytes) / (1024.0*1024*1024);
+        snprintf(tmp, sizeof(tmp), "           %4.1f GB / %4.1f GB", ramUsedGb, ramTotGb);
+        out += std::string(tmp) + "\n";
+    }
+
+    // GPU section
+    if (!gpus.empty())
+    {
+        out += "\n  GPU";
+        for (size_t i = 0; i < gpus.size(); ++i)
+        {
+            const GpuMetrics& g = gpus[i];
+            out += "\n\n  --- GPU " + std::to_string(i) + ": " + g.name + " ---";
+
+            if (g.loadPercent >= 0.0)
+            {
+                const std::string bar = BuildProgress("    Load", g.loadPercent, barCols);
+                out += "\n" + bar;
+                snprintf(tmp, sizeof(tmp), " %5.1f%%", g.loadPercent);
+                out += tmp;
+            }
+            if (g.temperature >= 0.0)
+            {
+                double tempPct = std::min(100.0, g.temperature);
+                int tfilled = static_cast<int>(std::round(tempPct / 100.0 * barCols));
+                out += "\n    [";
+                for (int ti = 0; ti < tfilled; ++ti) out += kBarFull;
+                for (int ti = tfilled; ti < barCols; ++ti) out += kBarEmpty;
+                out += "]";
+                snprintf(tmp, sizeof(tmp), " %4.0f C", g.temperature);
+                out += tmp;
+            }
+            if (g.vramTotalBytes > 0)
+            {
+                double vpct = g.vramUsedBytes * 100.0 / g.vramTotalBytes;
+                const std::string bar = BuildProgress("    VRAM", vpct, barCols);
+                out += "\n" + bar;
+                snprintf(tmp, sizeof(tmp), " %5.1f%%", vpct);
+                out += tmp;
+                double usedGb = static_cast<double>(g.vramUsedBytes) / (1024.0*1024*1024);
+                double totGb  = static_cast<double>(g.vramTotalBytes) / (1024.0*1024*1024);
+                snprintf(tmp, sizeof(tmp), " %4.1f GB / %4.1f GB", usedGb, totGb);
+                out += tmp;
+            }
+            if (g.fanPercent >= 0.0)
+            {
+                const std::string bar = BuildProgress("    Fan", g.fanPercent, barCols);
+                out += "\n" + bar;
+                snprintf(tmp, sizeof(tmp), " %5.0f%%", g.fanPercent);
+                out += tmp;
+            }
+            else if (g.fanRpm > 0)
+            {
+                out += "\n    Fan        ";
+                snprintf(tmp, sizeof(tmp), "%5d RPM", g.fanRpm);
+                out += tmp;
+            }
+            if (g.powerWatts > 0.0)
+            {
+                double pwrMax = (g.powerLimitWatts > 0.0) ? g.powerLimitWatts : 400.0;
+                double pwrPct = (pwrMax > 0.0) ? (g.powerWatts / pwrMax * 100.0) : 0.0;
+                const std::string bar = BuildProgress("    Power", pwrPct, barCols);
+                out += "\n" + bar;
+                snprintf(tmp, sizeof(tmp), " %5.1f W", g.powerWatts);
+                out += tmp;
+            }
+        }
+    }
+
+    out += "\n  [Q] quit\n";
+#else // PLATFORM_LINUX — ANSI colors embedded in string
     const ConsoleColors& cc = GetConsoleColors();
 
     out += cc.bold; out += cc.title; out += " LoadGraph Console"; out += cc.reset;
@@ -190,32 +286,34 @@ static std::string BuildFrame(const CpuMetrics& cpu, const RamMetrics& ram,
         out += " " + cc.dim + " CPU (N/A)" + cc.reset;
     out += " " + cc.dim + "| Uptime: " + cc.value + FormatUptime(cpu.uptimeMs) + cc.reset + "\n";
 
-    // CPU section
-    out += "\n" + cc.bold + "  CPU Load     " + cc.cpu_load;
-    snprintf(tmp, sizeof(tmp), "%5.1f%%", cpu.loadPercent);
-    out += tmp;
-    out += cc.reset + "\n";
-    out += BuildProgress("  CPU Load", cpu.loadPercent, barCols) + "\n";
-
-    if (cpu.powerWatts > 0.0)
+    // CPU Load — bar + value on same line
     {
-        snprintf(tmp, sizeof(tmp), "%5.1f W", cpu.powerWatts);
-        out += "  CPU Power    " + cc.value + " " + tmp
-             + " / " + cc.dim + " " + std::to_string((int)cpu.tdpWatts) + " W TDP" + cc.reset + "\n";
+        const std::string bar = BuildProgress("  CPU Load", cpu.loadPercent, barCols);
+        out += "\n" + cc.cpu_load + bar + cc.reset;
+        snprintf(tmp, sizeof(tmp), " %5.1f%%", cpu.loadPercent);
+        out += cc.cpu_load; out += tmp; out += cc.reset + "\n";
     }
 
-    // RAM section
-    out += cc.bold + "  RAM Usage    " + cc.ram;
-    snprintf(tmp, sizeof(tmp), "%5.1f%%", ram.loadPercent);
-    out += tmp;
-    out += cc.reset + "\n";
-    out += BuildProgress("  RAM Usage", ram.loadPercent, barCols) + "\n";
-    double ramUsedGb = static_cast<double>(ram.totalBytes - ram.freeBytes) / (1024.0*1024*1024);
-    double ramTotGb  = static_cast<double>(ram.totalBytes) / (1024.0*1024*1024);
-    out += cc.dim;
-    snprintf(tmp, sizeof(tmp), "           %4.1f GB / %4.1f GB", ramUsedGb, ramTotGb);
-    out += tmp;
-    out += cc.reset + "\n";
+    // CPU Power — no bar
+    if (cpu.powerWatts > 0.0)
+    {
+        snprintf(tmp, sizeof(tmp), "  CPU Power    %5.1f W / ", cpu.powerWatts);
+        out += cc.value; out += tmp;
+        snprintf(tmp, sizeof(tmp), "%5.0f W TDP", cpu.tdpWatts);
+        out += cc.dim; out += tmp; out += cc.reset + "\n";
+    }
+
+    // RAM Usage — bar + value on same line
+    {
+        const std::string bar = BuildProgress("  RAM Usage", ram.loadPercent, barCols);
+        out += cc.bold + bar + cc.reset;
+        snprintf(tmp, sizeof(tmp), " %5.1f%%", ram.loadPercent);
+        out += cc.ram; out += tmp; out += cc.reset + "\n";
+        double ramUsedGb = static_cast<double>(ram.totalBytes - ram.freeBytes) / (1024.0*1024*1024);
+        double ramTotGb  = static_cast<double>(ram.totalBytes) / (1024.0*1024*1024);
+        snprintf(tmp, sizeof(tmp), "           %4.1f GB / %4.1f GB", ramUsedGb, ramTotGb);
+        out += cc.dim + tmp + cc.reset + "\n";
+    }
 
     // GPU section
     if (!gpus.empty())
@@ -228,70 +326,58 @@ static std::string BuildFrame(const CpuMetrics& cpu, const RamMetrics& ram,
 
             if (g.loadPercent >= 0.0)
             {
-                out += "\n" + cc.bold + "    Load       " + cc.gpu_load;
-                snprintf(tmp, sizeof(tmp), "%5.1f%%", g.loadPercent);
-                out += tmp;
-                out += cc.reset + "\n";
-                out += BuildProgress("    Load", g.loadPercent, barCols) + "\n";
+                const std::string bar = BuildProgress("    Load", g.loadPercent, barCols);
+                out += "\n" + cc.gpu_load + bar + cc.reset;
+                snprintf(tmp, sizeof(tmp), " %5.1f%%", g.loadPercent);
+                out += cc.gpu_load + tmp + cc.reset;
             }
             if (g.temperature >= 0.0)
             {
-                out += "\n" + cc.bold + "    Temp       ";
                 double tempPct = std::min(100.0, g.temperature);
-                const char* tempColor = (g.temperature > 80.0) ? "\x1b[31m" :
-                                        (g.temperature > 65.0) ? "\x1b[33m" : cc.gpu_temp.c_str();
-                out += tempColor;
-                snprintf(tmp, sizeof(tmp), "%4.0f C", g.temperature);
-                out += tmp;
-                out += cc.reset + "\n";
-                // Temp bar with color
                 int tfilled = static_cast<int>(std::round(tempPct / 100.0 * barCols));
-                out += "    [";
-                out += tempColor;
+                const char* tc = (g.temperature > 80.0) ? "\x1b[31m" :
+                                 (g.temperature > 65.0) ? "\x1b[33m" : cc.gpu_temp.c_str();
+                out += "\n    ["; out += tc;
                 for (int ti = 0; ti < tfilled; ++ti) out += kBarFull;
                 out += "\x1b[90m";
                 for (int ti = tfilled; ti < barCols; ++ti) out += kBarEmpty;
-                out += cc.reset + "]\n";
+                out += cc.reset + "]";
+                snprintf(tmp, sizeof(tmp), " %4.0f C", g.temperature);
+                out += tc; out += tmp; out += cc.reset;
             }
             if (g.vramTotalBytes > 0)
             {
                 double vpct = g.vramUsedBytes * 100.0 / g.vramTotalBytes;
-                out += "\n" + cc.bold + "    VRAM       " + cc.gpu_vram;
-                snprintf(tmp, sizeof(tmp), "%5.1f%%", vpct);
-                out += tmp;
-                out += cc.reset + "\n";
-                out += BuildProgress("    VRAM", vpct, barCols) + "\n";
+                const std::string bar = BuildProgress("    VRAM", vpct, barCols);
+                out += "\n" + cc.gpu_vram + bar + cc.reset;
+                snprintf(tmp, sizeof(tmp), " %5.1f%%", vpct);
+                out += cc.gpu_vram + tmp + cc.reset;
                 double usedGb = static_cast<double>(g.vramUsedBytes) / (1024.0*1024*1024);
                 double totGb  = static_cast<double>(g.vramTotalBytes) / (1024.0*1024*1024);
-                out += cc.dim;
-                snprintf(tmp, sizeof(tmp), "           %4.1f GB / %4.1f GB", usedGb, totGb);
-                out += tmp;
-                out += cc.reset + "\n";
+                snprintf(tmp, sizeof(tmp), " %4.1f GB / %4.1f GB", usedGb, totGb);
+                out += cc.dim + tmp + cc.reset;
             }
             if (g.fanPercent >= 0.0)
             {
-                out += "\n" + cc.bold + "    Fan        " + cc.gpu_fan;
-                snprintf(tmp, sizeof(tmp), "%5.0f%%", g.fanPercent);
-                out += tmp;
-                out += cc.reset + "\n";
-                out += BuildProgress("    Fan", g.fanPercent, barCols) + "\n";
+                const std::string bar = BuildProgress("    Fan", g.fanPercent, barCols);
+                out += "\n" + cc.gpu_fan + bar + cc.reset;
+                snprintf(tmp, sizeof(tmp), " %5.0f%%", g.fanPercent);
+                out += cc.gpu_fan + tmp + cc.reset;
             }
             else if (g.fanRpm > 0)
             {
-                out += "\n" + cc.bold + "    Fan        " + cc.gpu_fan;
+                out += "\n    Fan        ";
                 snprintf(tmp, sizeof(tmp), "%5d RPM", g.fanRpm);
-                out += tmp;
-                out += cc.reset + "\n";
+                out += cc.gpu_fan + tmp + cc.reset;
             }
             if (g.powerWatts > 0.0)
             {
                 double pwrMax = (g.powerLimitWatts > 0.0) ? g.powerLimitWatts : 400.0;
                 double pwrPct = (pwrMax > 0.0) ? (g.powerWatts / pwrMax * 100.0) : 0.0;
-                out += "\n" + cc.bold + "    Power      " + cc.gpu_power;
-                snprintf(tmp, sizeof(tmp), "%5.1f W", g.powerWatts);
-                out += tmp;
-                out += cc.reset + "\n";
-                out += BuildProgress("    Power", pwrPct, barCols) + "\n";
+                const std::string bar = BuildProgress("    Power", pwrPct, barCols);
+                out += "\n" + cc.gpu_power + bar + cc.reset;
+                snprintf(tmp, sizeof(tmp), " %5.1f W", g.powerWatts);
+                out += cc.gpu_power + tmp + cc.reset;
             }
         }
     }
@@ -300,190 +386,6 @@ static std::string BuildFrame(const CpuMetrics& cpu, const RamMetrics& ram,
 #endif
     return out;
 }
-
-// ============================================================================
-// RenderWin — direct Windows console output with color (no string buffering).
-// Clears screen first, then writes each line with proper colors.
-// ============================================================================
-#ifdef PLATFORM_WINDOWS
-static void RenderWin(const CpuMetrics& cpu, const RamMetrics& ram,
-                      const std::vector<GpuMetrics>& gpus, int barCols)
-{
-    ClearScreen();
-    const ConsoleColors& cc = GetConsoleColors();
-
-    // Header
-    SetConsoleColor(cc.title | FOREGROUND_INTENSITY);
-    printf(" LoadGraph Console");
-    if (cpu.cpuName[0] != '\0')
-    {
-        SetConsoleColor(FOREGROUND_BLUE | FOREGROUND_GREEN);
-        int len = WideCharToMultiByte(CP_UTF8, 0, cpu.cpuName, -1, nullptr, 0, nullptr, nullptr);
-        if (len > 1)
-        {
-            std::string wstr; wstr.resize(len - 1);
-            WideCharToMultiByte(CP_UTF8, 0, cpu.cpuName, -1, &wstr[0], len, nullptr, nullptr);
-            printf(" %s", wstr.c_str());
-        }
-    }
-    else
-    {
-        SetConsoleColor(cc.dim);
-        printf(" CPU (N/A)");
-    }
-    SetConsoleColor(cc.dim);
-    printf(" | Uptime: ");
-    SetConsoleColor(cc.value);
-    printf("%s\n", FormatUptime(cpu.uptimeMs).c_str());
-
-    // CPU section
-    SetConsoleColor(FOREGROUND_INTENSITY);
-    printf("\n  CPU Load     ");
-    SetConsoleColor(cc.cpu_load);
-    char tmp[64];
-    snprintf(tmp, sizeof(tmp), "%5.1f%%", cpu.loadPercent);
-    printf("%s\n", tmp);
-    // Bar: plain text, color applied via console attribute on the bar chars
-    {
-        const std::string bar = BuildProgress("  CPU Load", cpu.loadPercent, barCols);
-        SetConsoleColor(cc.cpu_load);
-        fputs(bar.c_str(), stdout);
-        printf("\n");
-    }
-
-    if (cpu.powerWatts > 0.0)
-    {
-        SetConsoleColor(cc.value);
-        snprintf(tmp, sizeof(tmp), "%5.1f W", cpu.powerWatts);
-        printf("  CPU Power    %s / ", tmp);
-        SetConsoleColor(cc.dim);
-        snprintf(tmp, sizeof(tmp), "%5.0f W TDP", cpu.tdpWatts);
-        printf("%s\n", tmp);
-    }
-
-    // RAM section
-    SetConsoleColor(FOREGROUND_INTENSITY);
-    printf("\n  RAM Usage    ");
-    SetConsoleColor(cc.ram);
-    snprintf(tmp, sizeof(tmp), "%5.1f%%", ram.loadPercent);
-    printf("%s\n", tmp);
-    {
-        const std::string bar = BuildProgress("  RAM Usage", ram.loadPercent, barCols);
-        SetConsoleColor(cc.ram);
-        fputs(bar.c_str(), stdout);
-        printf("\n");
-    }
-    SetConsoleColor(cc.dim);
-    double ramUsedGb = static_cast<double>(ram.totalBytes - ram.freeBytes) / (1024.0*1024*1024);
-    double ramTotGb  = static_cast<double>(ram.totalBytes) / (1024.0*1024*1024);
-    snprintf(tmp, sizeof(tmp), "           %4.1f GB / %4.1f GB", ramUsedGb, ramTotGb);
-    printf("%s\n", tmp);
-
-    // GPU section
-    if (!gpus.empty())
-    {
-        SetConsoleColor(cc.title | FOREGROUND_INTENSITY);
-        printf("\n  GPU");
-        for (size_t i = 0; i < gpus.size(); ++i)
-        {
-            const GpuMetrics& g = gpus[i];
-            SetConsoleColor(cc.title | FOREGROUND_INTENSITY);
-            snprintf(tmp, sizeof(tmp), "\n\n  --- GPU %zu: ", i);
-            printf("%s", tmp);
-            // CPU-name-style wide char output
-            int len = WideCharToMultiByte(CP_UTF8, 0, g.name.empty() ? L"" : nullptr, 0, nullptr, 0, nullptr, nullptr);
-            // name is already std::string (UTF-8), just print it
-            printf("%s---\n", g.name.c_str());
-
-            if (g.loadPercent >= 0.0)
-            {
-                SetConsoleColor(FOREGROUND_INTENSITY);
-                printf("    Load       ");
-                SetConsoleColor(cc.gpu_load);
-                snprintf(tmp, sizeof(tmp), "%5.1f%%", g.loadPercent);
-                printf("%s\n", tmp);
-                const std::string bar = BuildProgress("    Load", g.loadPercent, barCols);
-                SetConsoleColor(cc.gpu_load);
-                fputs(bar.c_str(), stdout);
-                printf("\n");
-            }
-            if (g.temperature >= 0.0)
-            {
-                SetConsoleColor(FOREGROUND_INTENSITY);
-                printf("    Temp       ");
-                SetConsoleColor(TempAttrs(g.temperature));
-                snprintf(tmp, sizeof(tmp), "%4.0f C", g.temperature);
-                printf("%s\n", tmp);
-                // Temp bar
-                double tempPct = std::min(100.0, g.temperature);
-                int tfilled = static_cast<int>(std::round(tempPct / 100.0 * barCols));
-                SetConsoleColor(TempAttrs(g.temperature));
-                printf("    [");
-                for (int ti = 0; ti < tfilled; ++ti) fputs(kBarFull, stdout);
-                SetConsoleColor(cc.dim);
-                for (int ti = tfilled; ti < barCols; ++ti) fputs(kBarEmpty, stdout);
-                printf("]\n");
-            }
-            if (g.vramTotalBytes > 0)
-            {
-                double vpct = g.vramUsedBytes * 100.0 / g.vramTotalBytes;
-                SetConsoleColor(FOREGROUND_INTENSITY);
-                printf("    VRAM       ");
-                SetConsoleColor(cc.gpu_vram);
-                snprintf(tmp, sizeof(tmp), "%5.1f%%", vpct);
-                printf("%s\n", tmp);
-                const std::string bar = BuildProgress("    VRAM", vpct, barCols);
-                SetConsoleColor(cc.gpu_vram);
-                fputs(bar.c_str(), stdout);
-                printf("\n");
-                double usedGb = static_cast<double>(g.vramUsedBytes) / (1024.0*1024*1024);
-                double totGb  = static_cast<double>(g.vramTotalBytes) / (1024.0*1024*1024);
-                SetConsoleColor(cc.dim);
-                snprintf(tmp, sizeof(tmp), "           %4.1f GB / %4.1f GB", usedGb, totGb);
-                printf("%s\n", tmp);
-            }
-            if (g.fanPercent >= 0.0)
-            {
-                SetConsoleColor(FOREGROUND_INTENSITY);
-                printf("    Fan        ");
-                SetConsoleColor(cc.gpu_fan);
-                snprintf(tmp, sizeof(tmp), "%5.0f%%", g.fanPercent);
-                printf("%s\n", tmp);
-                const std::string bar = BuildProgress("    Fan", g.fanPercent, barCols);
-                SetConsoleColor(cc.gpu_fan);
-                fputs(bar.c_str(), stdout);
-                printf("\n");
-            }
-            else if (g.fanRpm > 0)
-            {
-                SetConsoleColor(FOREGROUND_INTENSITY);
-                printf("    Fan        ");
-                SetConsoleColor(cc.gpu_fan);
-                snprintf(tmp, sizeof(tmp), "%5d RPM", g.fanRpm);
-                printf("%s\n", tmp);
-            }
-            if (g.powerWatts > 0.0)
-            {
-                double pwrMax = (g.powerLimitWatts > 0.0) ? g.powerLimitWatts : 400.0;
-                double pwrPct = (pwrMax > 0.0) ? (g.powerWatts / pwrMax * 100.0) : 0.0;
-                SetConsoleColor(FOREGROUND_INTENSITY);
-                printf("    Power      ");
-                SetConsoleColor(cc.gpu_power);
-                snprintf(tmp, sizeof(tmp), "%5.1f W", g.powerWatts);
-                printf("%s\n", tmp);
-                const std::string bar = BuildProgress("    Power", pwrPct, barCols);
-                SetConsoleColor(cc.gpu_power);
-                fputs(bar.c_str(), stdout);
-                printf("\n");
-            }
-        }
-    }
-
-    SetConsoleColor(cc.dim);
-    printf("\n  [Q] quit");
-    SetConsoleColor(cc.value);
-}
-#endif // PLATFORM_WINDOWS
 
 // ============================================================================
 // Quit-key polling
@@ -632,7 +534,8 @@ int main(int argc, char* argv[])
         auto now = std::chrono::steady_clock::now();
         if (now - lastRender >= std::chrono::seconds(1))
         {
-            RenderWin(cpu, ram, gpus, barCols);
+            std::string frame = BuildFrame(cpu, ram, gpus, barCols);
+            OutputFrame(frame);
             lastRender = now;
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
