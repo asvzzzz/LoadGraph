@@ -191,7 +191,7 @@ static std::string BuildFrame(const CpuMetrics& cpu, const RamMetrics& ram,
 #endif
 
     // Header removed per request — start directly with metrics.
-    out += "Uptime: " + FormatUptime(cpu.uptimeMs) + "\n";
+    out += "Uptime: " + FormatUptime(cpu.uptimeMs);
 
     // CPU Load — bar + value
     {
@@ -389,7 +389,9 @@ int main(int argc, char* argv[])
 
     MetricsInit();
     if (httpActive)
+    {
         StartHttpServer(cfg);
+    }
 
     auto lastRender = std::chrono::steady_clock::now();
 
