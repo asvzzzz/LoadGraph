@@ -72,10 +72,10 @@ LoadGraphTTY [-port N]
 
 Возможности:
 
-- **Компоновка в стиле htop** — CPU Load и RAM Usage с прокручивающимся waveform-историей (60 сэмплов, 40 колонок)
+- **Компоновка в стиле htop** — CPU Load и RAM Usage с горизонтальными прогрессбарами (40 ячеек, Unicode block characters)
 - **Метрики каждой GPU** — Load, Temperature (цветовая индикация: зелёный/жёлтый/красный), VRAM, Fan, Power
 - **Цветной вывод** — читает цвета из `loadgraph.cfg`; Windows использует WinAPI console colors, Linux — ANSI-последовательности
-- **UTF-8 waveform** — Unicode block characters (`░▒▓█`) на обеих платформах; ASCII-fallback (` .oO@`) через переменную окружения `LOADGRAPH_ASCII_BARS=1`
+- **UTF-8 прогрессбары** — Unicode block characters (`░` пустая, `█` заполненная) на обеих платформах
 - **Опциональный HTTP-сервер** — передайте `-port 9115` для запуска веб-дашборда параллельно с TTY
 - **Файловый лог** — пишет `loadgraph.log` в CWD при `"log_file": true` в конфиге
 

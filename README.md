@@ -72,10 +72,10 @@ LoadGraphTTY [-port N]
 
 Features:
 
-- **HTop-like layout** — CPU Load and RAM Usage with scrolling waveform history (60 samples, 40 columns)
+- **HTop-like layout** — CPU Load and RAM Usage with horizontal progress bars (40 cells, Unicode block characters)
 - **Per-GPU metrics** — Load, Temperature (color-coded: green/yellow/red), VRAM, Fan, Power
 - **Colored output** — reads colors from `loadgraph.cfg`; Windows uses WinAPI console colors, Linux uses ANSI escape sequences
-- **UTF-8 waveforms** — Unicode block characters (`░▒▓█`) on both platforms; ASCII fallback (` .oO@`) via `LOADGRAPH_ASCII_BARS=1` env var
+- **UTF-8 progress bars** — Unicode block characters (`░` empty, `█` filled) on both platforms
 - **Optional HTTP server** — pass `-port 9115` to serve the web dashboard alongside the TTY display
 - **File logging** — writes `loadgraph.log` in CWD when `"log_file": true` in config
 
