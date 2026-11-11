@@ -274,6 +274,16 @@ static void HttpLoop(int port, const AppConfig& cfg)
     closesocket(srv); WSACleanup();
 }
 
+static bool g_httpStarted = false;
+static bool g_httpFailed  = false;
+
+bool GetHttpStatus(bool& started, bool& failed)
+{
+    started = g_httpStarted;
+    failed  = g_httpFailed;
+    return true;
+}
+
 void StartHttpServer(const AppConfig& cfg)
 {
     std::thread([cfg] { HttpLoop(cfg.http_port, cfg); }).detach();

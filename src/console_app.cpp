@@ -201,7 +201,19 @@ static std::string BuildFrame(const CpuMetrics& cpu, const RamMetrics& ram,
     cpuNameStr = (cpu.cpuName[0] != '\0') ? std::string(cpu.cpuName) : "CPU (N/A)";
 #endif
     out += cBold + AnsiColor(cfg.cpu_name_color.c_str()) + " --- CPU0: " + cpuNameStr + " ---" + cReset;
-    out += " " + cDim + "Uptime: " + cReset + FormatUptime(cpu.uptimeMs) + "\n";
+    // HTTP status
+    {
+        bool httpStarted = false, httpFailed = false;
+        GetHttpStatus(httpStarted, httpFailed);
+        std::string httpTag;
+        if (cfg.http_enabled)
+            httpTag = httpFailed ? "HTTP failed" : (httpStarted ? "HTTP Server" : "HTTP starting");
+        else
+            httpTag = "HTTP offline";
+        out += " " + cDim + "Uptime: " + cReset + FormatUptime(cpu.uptimeMs);
+        out += " " + cDim + "| " + cReset + (httpFailed ? "\x1b[31m" : "\x1b[32m") + httpTag + cReset;
+    }
+    out += "\n";
 
     // CPU Load — bar + value
     {

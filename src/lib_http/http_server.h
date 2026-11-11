@@ -13,4 +13,7 @@
 // No-op on non-Windows platforms (Linux build stub is in http_server.cpp).
 void StartHttpServer(const AppConfig& cfg);
 
+// Returns current HTTP server status. started=true if server bound successfully, failed=true if bind failed.
+bool GetHttpStatus(bool& started, bool& failed);
+
 #endif // HTTP_SERVER_H
