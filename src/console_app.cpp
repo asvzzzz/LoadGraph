@@ -150,6 +150,9 @@ static std::string BuildFrame(const CpuMetrics& cpu, const RamMetrics& ram,
     std::string out;
 
 #ifdef PLATFORM_WINDOWS
+    // On Windows we use ANSI sequences via VT, so colors are strings.
+    // GetConsoleColors returns WORD on Windows, but we need ANSI strings.
+    // Use hardcoded ANSI for Windows to avoid type mismatch.
     const std::string cReset   = "\x1b[0m";
     const std::string cBold    = "\x1b[1m";
     const std::string cDim     = "\x1b[90m";
@@ -191,7 +194,7 @@ static std::string BuildFrame(const CpuMetrics& cpu, const RamMetrics& ram,
 #endif
 
     // Header removed per request — start directly with metrics.
-    out += "Uptime: " + FormatUptime(cpu.uptimeMs);
+    out += "Uptime: " + FormatUptime(cpu.uptimeMs) + "\n";
 
     // CPU Load — bar + value
     {
