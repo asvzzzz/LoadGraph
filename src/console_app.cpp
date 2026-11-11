@@ -203,7 +203,7 @@ static std::string BuildFrame(const CpuMetrics& cpu, const RamMetrics& ram,
         const std::string bar = BuildProgress("CPU Load", cpu.loadPercent, barCols);
         out += "\n" + cCpuLoad + bar + " " + cReset;
         snprintf(tmp, sizeof(tmp), "%5.1f%%", cpu.loadPercent);
-        out += cCpuLoad + std::string(tmp) + cReset + "\n";
+        out += cCpuLoad + std::string(tmp) + cReset;
     }
 
     // CPU Power — bar (percent of TDP) + value
@@ -213,7 +213,7 @@ static std::string BuildFrame(const CpuMetrics& cpu, const RamMetrics& ram,
         const std::string bar = BuildProgress("CPU Power", pwrPct, barCols);
         out += "\n" + cCpuLoad + bar + " " + cReset;
         snprintf(tmp, sizeof(tmp), "%5.1f W / %5.0f W TDP", cpu.powerWatts, cpu.tdpWatts);
-        out += cDim + std::string(tmp) + cReset + "\n";
+        out += cDim + std::string(tmp) + cReset;
     }
 
     // RAM Usage — bar + value
@@ -221,11 +221,11 @@ static std::string BuildFrame(const CpuMetrics& cpu, const RamMetrics& ram,
         const std::string bar = BuildProgress("RAM Usage", ram.loadPercent, barCols);
         out += "\n" + cRam + bar + " " + cReset;
         snprintf(tmp, sizeof(tmp), "%5.1f%%", ram.loadPercent);
-        out += cRam + std::string(tmp) + cReset + "\n";
+        out += cRam + std::string(tmp) + cReset;
         double ramUsedGb = static_cast<double>(ram.totalBytes - ram.freeBytes) / (1024.0*1024*1024);
         double ramTotGb  = static_cast<double>(ram.totalBytes) / (1024.0*1024*1024);
         snprintf(tmp, sizeof(tmp), "%4.1f GB / %4.1f GB", ramUsedGb, ramTotGb);
-        out += cDim + std::string(tmp) + cReset + "\n";
+        out += cDim + std::string(tmp) + cReset;
     }
 
     // GPU section
@@ -242,7 +242,7 @@ static std::string BuildFrame(const CpuMetrics& cpu, const RamMetrics& ram,
                 const std::string bar = BuildProgress("Load", g.loadPercent, barCols);
                 out += "\n" + cGpuLoad + bar + " " + cReset;
                 snprintf(tmp, sizeof(tmp), "%5.1f%%", g.loadPercent);
-                out += cGpuLoad + std::string(tmp) + cReset + "\n";
+                out += cGpuLoad + std::string(tmp) + cReset;
             }
             if (g.temperature >= 0.0)
             {
@@ -252,7 +252,7 @@ static std::string BuildFrame(const CpuMetrics& cpu, const RamMetrics& ram,
                 const std::string bar = BuildProgress("Temp", tempPct, barCols);
                 out += "\n" + std::string(tc) + bar + " " + cReset;
                 snprintf(tmp, sizeof(tmp), "%4.0f C", g.temperature);
-                out += std::string(tc) + std::string(tmp) + cReset + "\n";
+                out += std::string(tc) + std::string(tmp) + cReset;
             }
             if (g.vramTotalBytes > 0)
             {
@@ -260,25 +260,25 @@ static std::string BuildFrame(const CpuMetrics& cpu, const RamMetrics& ram,
                 const std::string bar = BuildProgress("VRAM", vpct, barCols);
                 out += "\n" + cGpuVram + bar + " " + cReset;
                 snprintf(tmp, sizeof(tmp), "%5.1f%%", vpct);
-                out += cGpuVram + std::string(tmp) + cReset + "\n";
+                out += cGpuVram + std::string(tmp) + cReset;
                 double usedGb = static_cast<double>(g.vramUsedBytes) / (1024.0*1024*1024);
                 double totGb  = static_cast<double>(g.vramTotalBytes) / (1024.0*1024*1024);
                 snprintf(tmp, sizeof(tmp), "%4.1f GB / %4.1f GB", usedGb, totGb);
-                out += cDim + std::string(tmp) + cReset + "\n";
+                out += cDim + std::string(tmp) + cReset;
             }
             if (g.fanPercent >= 0.0)
             {
                 const std::string bar = BuildProgress("Fan", g.fanPercent, barCols);
                 out += "\n" + cGpuFan + bar + " " + cReset;
                 snprintf(tmp, sizeof(tmp), "%5.0f%%", g.fanPercent);
-                out += cGpuFan + std::string(tmp) + cReset + "\n";
+                out += cGpuFan + std::string(tmp) + cReset;
             }
             else if (g.fanRpm > 0)
             {
                 const std::string bar = BuildProgress("Fan", static_cast<double>(g.fanRpm), barCols);
                 out += "\n" + cGpuFan + bar + " " + cReset;
                 snprintf(tmp, sizeof(tmp), "%5d RPM", g.fanRpm);
-                out += cGpuFan + std::string(tmp) + cReset + "\n";
+                out += cGpuFan + std::string(tmp) + cReset;
             }
             if (g.powerWatts > 0.0)
             {
@@ -287,12 +287,12 @@ static std::string BuildFrame(const CpuMetrics& cpu, const RamMetrics& ram,
                 const std::string bar = BuildProgress("Power", pwrPct, barCols);
                 out += "\n" + cGpuPwr + bar + " " + cReset;
                 snprintf(tmp, sizeof(tmp), "%5.1f W", g.powerWatts);
-                out += cGpuPwr + std::string(tmp) + cReset + "\n";
+                out += cGpuPwr + std::string(tmp) + cReset;
             }
         }
     }
 
-    out += "\n" + cDim + "  [Q] quit" + cReset + "\n";
+    out += "\n\n" + cDim + "  [Q] quit" + cReset;
     return out;
 }
 
