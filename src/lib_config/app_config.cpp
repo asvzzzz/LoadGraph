@@ -280,6 +280,20 @@ AppConfig LoadAppConfig()
             }
             cfg.log_file = v;
         }
+        else if (key == "superio_fan")
+        {
+            bool v = false;
+            SkipSpaces(p);
+            if (strncmp(p, "true", 4) == 0)       { p += 4;  v = true;  }
+            else if (strncmp(p, "false", 5) == 0) { p += 5;  v = false; }
+            else if (*p == '"')
+            {
+                std::string sv;
+                if (ReadJsonString(p, sv))
+                    v = (sv == "true");
+            }
+            cfg.superio_fan = v;
+        }
         else if (key == "window_x")
         {
             double v = 0.0;
@@ -481,6 +495,7 @@ void SaveAppConfig(const AppConfig& cfg)
     out += "  \"http_port\": "   + EmitJsonNumber((double)cfg.http_port)   + ",\n";
     out += "  \"http_enabled\": " + std::string(cfg.http_enabled ? "true" : "false") + ",\n";
     out += "  \"log_file\": "    + std::string(cfg.log_file     ? "true"  : "false") + ",\n";
+    out += "  \"superio_fan\": "  + std::string(cfg.superio_fan  ? "true"  : "false") + ",\n";
     out += "  \"window_x\": "    + EmitJsonNumber((double)cfg.window_x)     + ",\n";
     out += "  \"window_y\": "    + EmitJsonNumber((double)cfg.window_y)     + ",\n";
     out += "  \"window_w\": "    + EmitJsonNumber((double)cfg.window_w)     + ",\n";
