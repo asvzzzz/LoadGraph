@@ -60,6 +60,25 @@ Works on both Windows and Linux. The dashboard auto-refreshes every second via p
 
 ![Web Dashboard](img/loadgraph_http.png)
 
+## Console Application (LoadGraphTTY)
+
+A terminal-only monitoring tool — zero wxWidgets dependency, runs in any UTF-8-capable terminal.
+
+```
+LoadGraphTTY [-port N]
+  -port N   Start built-in HTTP server on port N (serves the web dashboard)
+  -h        Show help
+```
+
+Features:
+
+- **HTop-like layout** — CPU Load and RAM Usage with scrolling waveform history (60 samples, 40 columns)
+- **Per-GPU metrics** — Load, Temperature (color-coded: green/yellow/red), VRAM, Fan, Power
+- **Colored output** — reads colors from `loadgraph.cfg`; Windows uses WinAPI console colors, Linux uses ANSI escape sequences
+- **UTF-8 waveforms** — Unicode block characters (`░▒▓█`) on both platforms; ASCII fallback (` .oO@`) via `LOADGRAPH_ASCII_BARS=1` env var
+- **Optional HTTP server** — pass `-port 9115` to serve the web dashboard alongside the TTY display
+- **File logging** — writes `loadgraph.log` in CWD when `"log_file": true` in config
+
 ## Requirements
 
 ### Windows
@@ -171,6 +190,7 @@ All settings are stored in a single `loadgraph.cfg` JSON file:
 src/
   main.cpp                  # entry point, platform guards, SIGSEGV handler (Linux),
                             # --install-driver elevated helper mode, crash.log placement
+  console_app.cpp           # LoadGraphTTY — htop-like terminal UI + optional HTTP server
   main_frame.{h,cpp}        # window: header + proportionally stretched graph rows, View menu toggle
   graph_panel.{h,cpp}       # custom wxPanel, rendering via wxGraphicsContext
   metrics_collector.{h,cpp} # base class: poll thread, 1000 ms interval, condition_variable stop

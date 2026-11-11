@@ -60,6 +60,25 @@ LoadGraph решает эту проблему: **все метрики всех
 
 ![Веб-дашборд](img/loadgraph_http.png)
 
+## Консольное приложение (LoadGraphTTY)
+
+Утилита для терминала — нулевая зависимость от wxWidgets, работает в любом UTF-8-терминале.
+
+```
+LoadGraphTTY [-port N]
+  -port N   Запустить встроенный HTTP-сервер на порту N (отдаёт веб-дашборд)
+  -h        Показать справку
+```
+
+Возможности:
+
+- **Компоновка в стиле htop** — CPU Load и RAM Usage с прокручивающимся waveform-историей (60 сэмплов, 40 колонок)
+- **Метрики каждой GPU** — Load, Temperature (цветовая индикация: зелёный/жёлтый/красный), VRAM, Fan, Power
+- **Цветной вывод** — читает цвета из `loadgraph.cfg`; Windows использует WinAPI console colors, Linux — ANSI-последовательности
+- **UTF-8 waveform** — Unicode block characters (`░▒▓█`) на обеих платформах; ASCII-fallback (` .oO@`) через переменную окружения `LOADGRAPH_ASCII_BARS=1`
+- **Опциональный HTTP-сервер** — передайте `-port 9115` для запуска веб-дашборда параллельно с TTY
+- **Файловый лог** — пишет `loadgraph.log` в CWD при `"log_file": true` в конфиге
+
 ## Требования
 
 ### Windows
@@ -171,6 +190,7 @@ WX_CONFIG=/opt/wx/3.2/bin/wx-config cmake ..
 src/
   main.cpp                  # точка входа, платформенные guards, обработчик SIGSEGV (Linux),
                             # режим elevated helper (--install-driver), размещение crash.log
+  console_app.cpp           # LoadGraphTTY — htop-like терминальный UI + опциональный HTTP-сервер
   main_frame.{h,cpp}        # окно: заголовок + пропорционально растянутые строки графиков,
                             # переключение через меню View
   graph_panel.{h,cpp}       # пользовательский wxPanel, отрисовка через wxGraphicsContext
