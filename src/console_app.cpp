@@ -238,6 +238,27 @@ static std::string BuildFrame(const CpuMetrics& cpu, const RamMetrics& ram,
         out += cCpuLoad + std::string(tmp) + cReset;
     }
 
+    // CPU Temperature — bar + value (only when driver provides data)
+    if (cpu.temperature >= 0.0)
+    {
+        double tempPct = std::min(100.0, cpu.temperature);
+        const char* tc = (cpu.temperature > 80.0) ? "\x1b[31m" :
+                         (cpu.temperature > 65.0) ? "\x1b[33m" : cCpuTemp.c_str();
+        const std::string bar = BuildProgress("CPU Temp", tempPct, barCols);
+        out += "\n" + std::string(tc) + bar + " " + cReset;
+        snprintf(tmp, sizeof(tmp), "%4.0f C", cpu.temperature);
+        out += std::string(tc) + std::string(tmp) + cReset;
+    }
+
+    // CPU Fan — bar + value (only when sensor provides data)
+    if (cpu.fanRpm > 0)
+    {
+        const std::string bar = BuildProgress("CPU Fan", static_cast<double>(cpu.fanRpm), barCols);
+        out += "\n" + cCpuTemp + bar + " " + cReset;
+        snprintf(tmp, sizeof(tmp), "%5d RPM", cpu.fanRpm);
+        out += cCpuTemp + std::string(tmp) + cReset;
+    }
+
     // CPU Power — bar (percent of TDP) + value
     if (cpu.powerWatts > 0.0)
     {
@@ -438,6 +459,8 @@ int main(int argc, char* argv[])
         }
     }
 
+    auto lastLog = std::chrono::steady_clock::now();
+
     bool httpActive = cfg.http_enabled || cliPort >= 0;
 
 #ifdef PLATFORM_WINDOWS
@@ -499,6 +522,21 @@ int main(int argc, char* argv[])
             OutputFrame(frame);
             lastRender = now;
         }
+
+        // Log metrics every 5 seconds if logging is enabled.
+        if (s_logFp && now - lastLog >= std::chrono::seconds(5))
+        {
+            fprintf(s_logFp, "CPU: load=%.1f%% temp=%.0fC fan=%dRPM power=%.1fW/%.0fW TDP\n",
+                    cpu.loadPercent, cpu.temperature, cpu.fanRpm, cpu.powerWatts, cpu.tdpWatts);
+            for (size_t i = 0; i < gpus.size(); ++i)
+            {
+                const auto& g = gpus[i];
+                fprintf(s_logFp, "GPU%d: load=%.1f%% temp=%.0fC fan=%dRPM pwr=%.1fW\n",
+                        (int)i, g.loadPercent, g.temperature, g.fanRpm, g.powerWatts);
+            }
+            fflush(s_logFp);
+            lastLog = now;
+        }
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
 #else // PLATFORM_LINUX
@@ -558,6 +596,21 @@ int main(int argc, char* argv[])
             std::string frame = BuildFrame(cpu, ram, gpus, barCols);
             OutputFrame(frame);
             lastRender = now;
+        }
+
+        // Log metrics every 5 seconds if logging is enabled.
+        if (s_logFp && now - lastLog >= std::chrono::seconds(5))
+        {
+            fprintf(s_logFp, "CPU: load=%.1f%% temp=%.0fC fan=%dRPM power=%.1fW/%.0fW TDP\n",
+                    cpu.loadPercent, cpu.temperature, cpu.fanRpm, cpu.powerWatts, cpu.tdpWatts);
+            for (size_t i = 0; i < gpus.size(); ++i)
+            {
+                const auto& g = gpus[i];
+                fprintf(s_logFp, "GPU%d: load=%.1f%% temp=%.0fC fan=%dRPM pwr=%.1fW\n",
+                        (int)i, g.loadPercent, g.temperature, g.fanRpm, g.powerWatts);
+            }
+            fflush(s_logFp);
+            lastLog = now;
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
