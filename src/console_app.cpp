@@ -193,20 +193,15 @@ static std::string BuildFrame(const CpuMetrics& cpu, const RamMetrics& ram,
     }
 #endif
 
-    // Header
-    out += cBold + cTitle + " LoadGraph Console" + cReset;
+    // Header — same style as GPU header.
+    std::string cpuNameStr;
 #ifdef PLATFORM_WINDOWS
-    if (!cpuNameUtf8.empty())
-        out += " " + AnsiColor(cfg.cpu_name_color.c_str()) + cpuNameUtf8 + cReset;
-    else
-        out += " " + cDim + " CPU (N/A)" + cReset;
+    cpuNameStr = cpuNameUtf8.empty() ? "CPU (N/A)" : cpuNameUtf8;
 #else
-    if (cpu.cpuName[0] != '\0')
-        out += " " + AnsiColor(cfg.cpu_name_color.c_str()) + std::string(cpu.cpuName) + cReset;
-    else
-        out += " " + cDim + " CPU (N/A)" + cReset;
+    cpuNameStr = (cpu.cpuName[0] != '\0') ? std::string(cpu.cpuName) : "CPU (N/A)";
 #endif
-    out += " " + cDim + "| Uptime: " + cReset + FormatUptime(cpu.uptimeMs) + "\n";
+    out += cBold + AnsiColor(cfg.cpu_name_color.c_str()) + " --- CPU0: " + cpuNameStr + " ---" + cReset;
+    out += " " + cDim + "Uptime: " + cReset + FormatUptime(cpu.uptimeMs) + "\n";
 
     // CPU Load — bar + value
     {
