@@ -340,6 +340,8 @@ AppConfig LoadAppConfig()
                 else if (ck == "gpu_fan")      cfg.gpu_fan_color      = cv;
                 else if (ck == "gpu_power")    cfg.gpu_power_color    = cv;
                 else if (ck == "total_power")  cfg.total_power_color  = cv;
+                else if (ck == "cpu_name")     cfg.cpu_name_color     = cv;
+                else if (ck == "gpu_name")     cfg.gpu_name_color     = cv;
             }
             if (*p == '}') ++p;
         }
@@ -483,7 +485,9 @@ void SaveAppConfig(const AppConfig& cfg)
     out += "    \"gpu_vram\":     " + EmitJsonString(cfg.gpu_vram_color)      + ",\n";
     out += "    \"gpu_fan\":      " + EmitJsonString(cfg.gpu_fan_color)       + ",\n";
     out += "    \"gpu_power\":    " + EmitJsonString(cfg.gpu_power_color)     + ",\n";
-    out += "    \"total_power\":  " + EmitJsonString(cfg.total_power_color)   + "\n";
+    out += "    \"total_power\":  " + EmitJsonString(cfg.total_power_color)   + ",\n";
+    out += "    \"cpu_name\":     " + EmitJsonString(cfg.cpu_name_color)      + ",\n";
+    out += "    \"gpu_name\":     " + EmitJsonString(cfg.gpu_name_color)      + "\n";
     out += "  },\n";
     out += "  \"backgrounds\": {\n";
     out += "    \"page\":       " + EmitJsonString(cfg.page_bg_color)       + ",\n";
