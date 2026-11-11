@@ -279,7 +279,7 @@ static std::vector<WinLine> BuildFrameWin(const CpuMetrics& cpu, const RamMetric
 
 // ============================================================================
 // OutputFrame — clears screen then writes frame atomically using Win32 API.
-// Each line is written with its pre-computed color attribute via WriteConsoleA.
+// Cursor positioned manually per line; no reliance on newline processing.
 // ============================================================================
 static void OutputFrameWin(const std::vector<WinLine>& lines)
 {
@@ -298,18 +298,20 @@ static void OutputFrameWin(const std::vector<WinLine>& lines)
                                    cells, zero, &written);
         FillConsoleOutputCharacterA(hOut, ' ', cells, zero, &written);
     }
-    COORD home = { 0, 0 };
-    SetConsoleCursorPosition(hOut, home);
 
-    // Write each line with its color. WriteConsoleA handles '\n' automatically.
+    // Write each line at its row position. Strip leading '\n' if present.
+    SHORT row = 0;
     for (const auto& ln : lines)
     {
-        if (!ln.text.empty())
-        {
-            SetConsoleTextAttribute(hOut, ln.attrs);
-            DWORD written = 0;
-            WriteConsoleA(hOut, ln.text.c_str(), static_cast<DWORD>(ln.text.size()), &written, nullptr);
-        }
+        std::string text = ln.text;
+        if (!text.empty() && text[0] == '\n') text.erase(text.begin());
+        if (text.empty()) continue;
+
+        COORD pos = { 0, row++ };
+        SetConsoleCursorPosition(hOut, pos);
+        SetConsoleTextAttribute(hOut, ln.attrs);
+        DWORD written = 0;
+        WriteConsoleA(hOut, text.c_str(), static_cast<DWORD>(text.size()), &written, nullptr);
     }
     // Reset to default color.
     SetConsoleTextAttribute(hOut, FOREGROUND_RED | FOREGROUND_GREEN | FOREGROUND_BLUE);
