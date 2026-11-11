@@ -114,13 +114,19 @@ static int GetConsoleWidth()
 
 // ============================================================================
 // OutputFrame — unified ANSI output on both platforms.
-// Clear screen atomically to avoid leftover characters from previous frame.
-// VT processing on Windows handles ANSI sequences.
+// Windows: VT enabled, write frame atomically without full clear to avoid flicker.
+// Linux:   clear screen then write.
 // ============================================================================
 static void OutputFrame(const std::string& frame)
 {
+#ifdef PLATFORM_WINDOWS
+    // Move cursor home and overwrite. No 2J clear = no flicker/growth.
+    fputs("\x1b[H", stdout);
+    fputs(frame.c_str(), stdout);
+#else
     fputs("\x1b[H\x1b[2J", stdout);
     fputs(frame.c_str(), stdout);
+#endif
     fflush(stdout);
 }
 
@@ -184,19 +190,8 @@ static std::string BuildFrame(const CpuMetrics& cpu, const RamMetrics& ram,
     }
 #endif
 
-    out += cBold + cTitle + " LoadGraph Console" + cReset;
-#ifdef PLATFORM_WINDOWS
-    if (!cpuNameUtf8.empty())
-        out += " \x1b[36m" + cpuNameUtf8 + cReset;
-    else
-        out += " " + cDim + " CPU (N/A)" + cReset;
-#else
-    if (cpu.cpuName[0] != '\0')
-        out += " \x1b[36m" + std::string(cpu.cpuName) + cReset;
-    else
-        out += " " + cDim + " CPU (N/A)" + cReset;
-#endif
-    out += " " + cDim + "| Uptime: " + cReset + FormatUptime(cpu.uptimeMs) + "\n";
+    // Header removed per request — start directly with metrics.
+    out += "Uptime: " + FormatUptime(cpu.uptimeMs) + "\n";
 
     // CPU Load — bar + value
     {
@@ -213,7 +208,7 @@ static std::string BuildFrame(const CpuMetrics& cpu, const RamMetrics& ram,
         const std::string bar = BuildProgress("CPU Power", pwrPct, barCols);
         out += "\n" + cCpuLoad + bar + " " + cReset;
         snprintf(tmp, sizeof(tmp), "%5.1f W / %5.0f W TDP", cpu.powerWatts, cpu.tdpWatts);
-        out += cDim + std::string(tmp) + cReset;
+        out += cCpuLoad + std::string(tmp) + cReset;
     }
 
     // RAM Usage — bar + value
@@ -231,11 +226,10 @@ static std::string BuildFrame(const CpuMetrics& cpu, const RamMetrics& ram,
     // GPU section
     if (!gpus.empty())
     {
-        out += "\n" + cBold + cTitle + "  GPU" + cReset;
         for (size_t i = 0; i < gpus.size(); ++i)
         {
             const GpuMetrics& g = gpus[i];
-            out += "\n\n  --- GPU " + std::to_string(i) + ": " + g.name + " ---";
+            out += "\n\n" + cBold + cTitle + " --- GPU " + std::to_string(i) + ": " + g.name + " ---" + cReset;
 
             if (g.loadPercent >= 0.0)
             {
