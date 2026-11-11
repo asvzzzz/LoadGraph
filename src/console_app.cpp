@@ -120,7 +120,8 @@ static int GetConsoleWidth()
 static void OutputFrame(const std::string& frame)
 {
 #ifdef PLATFORM_WINDOWS
-    // No screen clear — just overwrite. VT processes ANSI color codes.
+    // Move cursor to home, write frame atomically. No 2J clear = no flicker.
+    fputs("\x1b[H", stdout);
     fputs(frame.c_str(), stdout);
 #else
     fputs("\x1b[H\x1b[2J", stdout);
