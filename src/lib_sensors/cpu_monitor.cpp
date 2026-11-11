@@ -3,6 +3,7 @@
 #include "ring0_msr.h"
 #include "power_table.h"
 #include "logger.h"
+#include "app_config.h"
 
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -389,11 +390,12 @@ void CpuMonitor::Collect()
     // try reading the hardware monitoring chip directly. Guarded by m_wmiTried
     // so we only attempt after WMI has been tried at least once.
     // Disabled by default — direct port I/O can affect unknown LPC devices.
-    // Enable via environment variable: LOADGRAPH_SUPERIO_FAN=1
-    static bool s_superioEnabled = ([]() -> bool {
-        const char* v = getenv("LOADGRAPH_SUPERIO_FAN");
-        return (v != nullptr && v[0] != '0' && v[0] != 'f' && v[0] != 'F');
-    })();
+    // Enable via config: superio_fan = true in loadgraph.cfg
+    static bool s_superioEnabled = []() -> bool {
+        extern AppConfig LoadAppConfig();
+        static const AppConfig cfg = LoadAppConfig();
+        return cfg.superio_fan;
+    }();
     if (s_superioEnabled && fan < 0 && Ring0Msr::IsOpen() && !m_fanIoTried)
     {
         m_fanIoTried = true;

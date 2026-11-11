@@ -44,6 +44,9 @@
 #include "metrics_api.h"
 #include "http_server.h"
 #include "console_colors.h"
+#ifdef PLATFORM_WINDOWS
+#include "msr_sensor.h"
+#endif
 
 // ============================================================================
 // Helpers
@@ -200,7 +203,16 @@ static std::string BuildFrame(const CpuMetrics& cpu, const RamMetrics& ram,
 #else
     cpuNameStr = (cpu.cpuName[0] != '\0') ? std::string(cpu.cpuName) : "CPU (N/A)";
 #endif
+#ifdef PLATFORM_WINDOWS
     out += cBold + AnsiColor(cfg.cpu_name_color.c_str()) + " --- CPU0: " + cpuNameStr + " ---" + cReset;
+#else
+    out += cBold + cTitle + " LoadGraph Console" + cReset;
+    if (cpu.cpuName[0] != '\0')
+        out += " \x1b[36m" + std::string(cpu.cpuName) + cReset;
+    else
+        out += " " + cDim + " CPU (N/A)" + cReset;
+#endif
+#ifdef PLATFORM_WINDOWS
     // HTTP status
     {
         bool httpStarted = false, httpFailed = false;
@@ -214,6 +226,9 @@ static std::string BuildFrame(const CpuMetrics& cpu, const RamMetrics& ram,
         out += " " + cDim + "| " + cReset + (httpFailed ? "\x1b[31m" : "\x1b[32m") + httpTag + cReset;
     }
     out += "\n";
+#else
+    out += " " + cDim + "| Uptime: " + cReset + FormatUptime(cpu.uptimeMs) + "\n";
+#endif
 
     // CPU Load — bar + value
     {
@@ -228,7 +243,11 @@ static std::string BuildFrame(const CpuMetrics& cpu, const RamMetrics& ram,
     {
         double pwrPct = (cpu.tdpWatts > 0.0) ? (cpu.powerWatts / cpu.tdpWatts * 100.0) : 0.0;
         const std::string bar = BuildProgress("CPU Power", pwrPct, barCols);
+#ifdef PLATFORM_WINDOWS
         out += "\n" + AnsiColor(cfg.cpu_power_color.c_str()) + bar + " " + cReset;
+#else
+        out += "\n" + cCpuLoad + bar + " " + cReset;
+#endif
         snprintf(tmp, sizeof(tmp), "%5.1f W / %5.0f W TDP", cpu.powerWatts, cpu.tdpWatts);
         out += cDim + std::string(tmp) + cReset;
     }
@@ -251,7 +270,11 @@ static std::string BuildFrame(const CpuMetrics& cpu, const RamMetrics& ram,
         for (size_t i = 0; i < gpus.size(); ++i)
         {
             const GpuMetrics& g = gpus[i];
+#ifdef PLATFORM_WINDOWS
             out += "\n\n" + cBold + AnsiColor(cfg.gpu_name_color.c_str()) + " --- GPU " + std::to_string(i) + ": " + g.name + " ---" + cReset;
+#else
+            out += "\n\n" + cBold + cTitle + "  GPU" + cReset;
+#endif
 
             if (g.loadPercent >= 0.0)
             {
@@ -416,6 +439,12 @@ int main(int argc, char* argv[])
     }
 
     bool httpActive = cfg.http_enabled || cliPort >= 0;
+
+#ifdef PLATFORM_WINDOWS
+    // Initialize MSR driver for CPU temperature (same as GUI).
+    MsrSensor::InitDriver(nullptr);
+    MsrSensor::EnsureDriver(nullptr);
+#endif
 
     MetricsInit();
     if (httpActive)
