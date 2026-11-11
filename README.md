@@ -40,13 +40,25 @@ LoadGraph solves this: **all metrics for all GPUs are visible at once in a singl
 
 ### Windows
 
-![Windows](lgwin.png)
+![Windows](img/lgwin.png)
 
 ### Linux / WSL2
 
 Works on native Linux and inside WSL2 thanks to the GPU-PV bridge (NVML exposed at `/usr/lib/wsl/lib/libnvidia-ml.so.1`). NVAPI is Windows-only; Linux uses NVML exclusively.
 
-![Linux](lglin.png)
+![Linux](img/lglin.png)
+
+### Web Dashboard (HTTP Server)
+
+Enable with `"http_enabled": true` in `loadgraph.cfg`. The server starts on the configured port (default `9115`) in a detached thread:
+
+- **`GET /`** — responsive HTML dashboard with live charts, mirrors the GUI layout. No dependencies — pure vanilla JS + Canvas.
+- **`GET /api/metrics`** — JSON endpoint exposing all current metrics (CPU load/temp/power, RAM, per-GPU stats, storage).
+- **`GET /favicon.ico`** — embedded favicon.
+
+Works on both Windows and Linux. The dashboard auto-refreshes every second via polling.
+
+![Web Dashboard](img/loadgraph_http.png)
 
 ## Requirements
 
@@ -174,6 +186,7 @@ src/
   theme.{h,cpp}             # Windows — Registry AppsUseLightTheme, dark palette cache
   theme_linux.cpp           # Linux — GTK_THEME, XDG_CURRENT_DESKTOP, gsettings 30 s cache
   app_config.h/cpp          # AppConfig struct + JSON parser/emitter for loadgraph.cfg
+  http_server.{h,cpp}       # cross-platform HTTP server + web dashboard HTML
   logger.{h,cpp}            # file logger (loadgraph.log in CWD; stderr fallback on fopen fail)
   platform.h                # PLATFORM_WINDOWS / PLATFORM_LINUX, ReadFileToString, mkdir -p helper
 ```

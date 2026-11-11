@@ -40,13 +40,25 @@ LoadGraph решает эту проблему: **все метрики всех
 
 ### Windows
 
-![Windows](lgwin.png)
+![Windows](img/lgwin.png)
 
 ### Linux / WSL2
 
 Работает на нативном Linux и внутри WSL2 благодаря GPU-PV bridge (NVML доступен по `/usr/lib/wsl/lib/libnvidia-ml.so.1`). NVAPI — только для Windows; на Linux используется исключительно NVML.
 
-![Linux](lglin.png)
+![Linux](img/lglin.png)
+
+### Веб-дашборд (HTTP-сервер)
+
+Включите `"http_enabled": true` в `loadgraph.cfg`. Сервер запускается на заданном порту (по умолчанию `9115`) в отдельном потоке:
+
+- **`GET /`** — адаптивный HTML-дашборд с живыми графиками, повторяет компоновку GUI. Чистый vanilla JS + Canvas, без зависимостей.
+- **`GET /api/metrics`** — JSON-эндпоинт со всеми текущими метриками (CPU загрузка/температура/мощность, RAM, данные по каждой GPU, накопители).
+- **`GET /favicon.ico`** — встроенный фавикон.
+
+Работает на Windows и Linux. Дашборд обновляется каждую секунду через polling.
+
+![Веб-дашборд](img/loadgraph_http.png)
 
 ## Требования
 
@@ -177,6 +189,7 @@ src/
   theme.{h,cpp}             # Windows — Registry AppsUseLightTheme, кэш тёмной палитры
   theme_linux.cpp           # Linux — GTK_THEME, XDG_CURRENT_DESKTOP, кэш gsettings на 30 с
   app_config.h/cpp          # структура AppConfig + парсер/эмиттер JSON для loadgraph.cfg
+  http_server.{h,cpp}       # кроссплатформенный HTTP-сервер + HTML веб-дашборд
   logger.{h,cpp}            # файловый логгер (loadgraph.log в CWD; fallback в stderr при ошибке fopen)
   platform.h                # PLATFORM_WINDOWS / PLATFORM_LINUX, ReadFileToString, помощник mkdir -p
 ```
