@@ -29,6 +29,8 @@ struct GpuMetrics
     double      powerLimitWatts = -1.0;  // Maximum GPU power limit in watts, -1.0 = N/A
 };
 
+struct AmdMonitor; // Forward declaration, defined in amd_monitor.h
+
 // Collects GPU metrics for all GPUs (NVIDIA via NVML/NVAPI, AMD via ADL).
 // Primary source: NVML (nvml.dll on Windows, libnvidia-ml.so on Linux).
 // Fallback: NVAPI (nvapi64.dll on Windows) — Windows only.
@@ -144,6 +146,14 @@ private:
     std::vector<GpuMetrics> m_metrics;
     bool                    m_available     = false; // NVAPI available (Win) or last probe result
     bool                    m_nvvmAvailable = false; // NVML available
+
+#ifdef PLATFORM_WINDOWS
+    // AMD GPU monitor — lifetime managed with GpuMonitor to avoid repeated DLL load/unload.
+    struct AmdMonitor* m_amdMonitor = nullptr;
+#else
+    // Linux: AMD SMI support (via amd-smi command or libamd_smi).
+    struct AmdMonitor* m_amdMonitor = nullptr;
+#endif
 };
 
 #endif // GPU_MONITOR_H

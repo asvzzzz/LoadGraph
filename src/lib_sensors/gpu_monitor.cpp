@@ -132,6 +132,7 @@ struct NvmlMemory
 using FnNvAPI_QueryInterface = void* (__cdecl*)(unsigned int interfaceId);
 
 GpuMonitor::GpuMonitor()
+    : m_amdMonitor(nullptr)
 {
     // Try NVML first — it is the primary metrics source.
     m_nvvmAvailable = LoadNvml();
@@ -152,12 +153,19 @@ GpuMonitor::GpuMonitor()
     else
         LOGI("NVAPI load FAILED.");
 
+    // Initialize AMD monitor once — lifetime managed with GpuMonitor.
+    m_amdMonitor = new AmdMonitor();
+    if (m_amdMonitor && m_amdMonitor->IsAvailable())
+        LOGI("AMD GPU monitor initialized.");
+
     if (!m_nvvmAvailable && !m_available)
         LOGI("No GPU metrics source available.");
 }
 
 GpuMonitor::~GpuMonitor()
 {
+    delete m_amdMonitor;
+    m_amdMonitor = nullptr;
     FreeNvml();
     FreeNvApi();
 }
@@ -187,10 +195,9 @@ void GpuMonitor::Collect()
     }
 
     // Merge AMD GPU metrics (if any).
-    AmdMonitor amd;
-    if (amd.IsAvailable())
+    if (m_amdMonitor && m_amdMonitor->IsAvailable())
     {
-        auto amdMetrics = amd.GetMetrics();
+        auto amdMetrics = m_amdMonitor->GetMetrics();
         std::lock_guard<std::mutex> lock(m_mutex);
         m_metrics.insert(m_metrics.end(),
                         std::make_move_iterator(amdMetrics.begin()),
