@@ -1,4 +1,5 @@
 #include "gpu_monitor.h"
+#include "amd_monitor.h"
 #include "power_table.h"
 #include "platform.h"
 #include "logger.h"
@@ -36,6 +37,7 @@ struct NvmlMemory
 // ----------------------------------------------------------------------------
 
 GpuMonitor::GpuMonitor()
+    : m_amdMonitor(nullptr)
 {
     // NVML is cross-platform and IS available under WSL2/Linux: NVIDIA ships
     // /usr/lib/wsl/lib/libnvidia-ml.so.1 and nvidia-smi works there. NVAPI is
@@ -45,10 +47,17 @@ GpuMonitor::GpuMonitor()
         LOGI("NVML loaded OK - GPU metrics will be collected (Linux/WSL).");
     else
         LOGI("NVML not available on this system - GPU graphs hidden.");
+
+    // Initialize AMD monitor once — lifetime managed with GpuMonitor.
+    m_amdMonitor = new AmdMonitor();
+    if (m_amdMonitor && m_amdMonitor->IsAvailable())
+        LOGI("AMD GPU monitor initialized (Linux).");
 }
 
 GpuMonitor::~GpuMonitor()
 {
+    delete m_amdMonitor;
+    m_amdMonitor = nullptr;
     FreeNvml();
 }
 
@@ -65,8 +74,19 @@ bool GpuMonitor::IsAvailable() const
 
 void GpuMonitor::Collect()
 {
+    // Primary source: NVML.
     if (m_nvvmAvailable)
         CollectNvml();
+
+    // Merge AMD GPU metrics (if any).
+    if (m_amdMonitor && m_amdMonitor->IsAvailable())
+    {
+        auto amdMetrics = m_amdMonitor->GetMetrics();
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_metrics.insert(m_metrics.end(),
+                        std::make_move_iterator(amdMetrics.begin()),
+                        std::make_move_iterator(amdMetrics.end()));
+    }
 }
 
 // Dynamically load libnvidia-ml.so and resolve entry points.

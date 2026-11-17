@@ -90,8 +90,7 @@ AmdMonitor::AmdMonitor() : m_available(false)
 #ifdef PLATFORM_WINDOWS
     LoadAdl();
 #else
-    // Linux: could probe for amd-smi or libamd_smi
-    m_available = false;
+    m_available = LoadAmdSmi();
 #endif
 }
 
@@ -99,6 +98,8 @@ AmdMonitor::~AmdMonitor()
 {
 #ifdef PLATFORM_WINDOWS
     FreeAdl();
+#else
+    FreeAmdSmi();
 #endif
 }
 
@@ -115,7 +116,9 @@ std::vector<GpuMetrics> AmdMonitor::GetMetrics()
         CollectAdl(result);
     }
 #else
-    // Linux AMD SMI support would go here
+    if (m_available) {
+        CollectAmdSmi(result);
+    }
 #endif
     return result;
 }
@@ -279,9 +282,12 @@ void AmdMonitor::CollectAdl(std::vector<GpuMetrics>& out)
         ADLMemoryInfo memInfo{};
         memInfo.iSize = sizeof(ADLMemoryInfo);
         if (m_fnGetMemoryInfo && m_fnGetMemoryInfo(m_hAdl, i, &memInfo) == ADL_OK) {
-            // Convert KB to bytes.
+            // Convert KB to bytes. Guard against unsigned underflow.
             gm.vramTotalBytes = static_cast<uint64_t>(memInfo.uVramSize) * 1024ULL;
-            gm.vramUsedBytes = static_cast<uint64_t>(memInfo.uVramSize - memInfo.uVramFree) * 1024ULL;
+            const uint64_t freeKB = (memInfo.uVramFree <= memInfo.uVramSize)
+                ? static_cast<uint64_t>(memInfo.uVramFree) : 0;
+            gm.vramUsedBytes = (gm.vramTotalBytes >= freeKB * 1024ULL)
+                ? (gm.vramTotalBytes - freeKB * 1024ULL) : 0;
             if (gm.vramTotalBytes > 0) {
                 gm.vramLoadPercent = static_cast<double>(gm.vramUsedBytes) / 
                                    static_cast<double>(gm.vramTotalBytes) * 100.0;
@@ -335,49 +341,36 @@ void AmdMonitor::CollectAdl(std::vector<GpuMetrics>& out)
 
 bool AmdMonitor::LoadAmdSmi()
 {
-    // Check if amd-smi is available.
-    const char* cmd = "which amd-smi";
-    int result = system(cmd);
-    if (result != 0) {
-        LOGI("AMD: amd-smi not found, checking for rocm-smi...");
-        // Fallback to rocm-smi if available.
-        const char* cmd2 = "which rocm-smi";
-        result = system(cmd2);
-        if (result != 0) {
-            LOGI("AMD: Neither amd-smi nor rocm-smi found.");
-            return false;
-        }
-    }
-    
-    // Test if we can get GPU count.
+    // Test if we can get GPU count using amd-smi or rocm-smi.
+    // Try amd-smi first, then fallback to rocm-smi.
     FILE* pipe = popen("amd-smi query --gpu-count 2>/dev/null || rocm-smi --query-gpu=count --format=json 2>/dev/null", "r");
     if (!pipe) {
-        LOGI("AMD: Failed to open pipe to amd-smi.");
+        LOGI("AMD: Failed to open pipe to amd-smi/rocm-smi.");
         return false;
     }
-    
+
     char buffer[256] = {};
     std::string result_str;
     while (fgets(buffer, sizeof(buffer), pipe) != nullptr) {
         result_str += buffer;
     }
     pclose(pipe);
-    
+
     // Parse GPU count.
     int gpuCount = 0;
     try {
         gpuCount = std::stoi(result_str);
     } catch (...) {
-        LOGI("AMD: Failed to parse GPU count from amd-smi.");
+        LOGI("AMD: Failed to parse GPU count from amd-smi output.");
         return false;
     }
-    
+
     if (gpuCount <= 0) {
-        LOGI("AMD: No AMD GPUs found.");
+        LOGI("AMD: No AMD GPUs found (count=%d).", gpuCount);
         return false;
     }
-    
-    LOGI("AMD: Found %d AMD GPU(s) via amd-smi.", gpuCount);
+
+    LOGI("AMD: Found %d AMD GPU(s) via amd-smi/rocm-smi.", gpuCount);
     m_available = true;
     return true;
 }
