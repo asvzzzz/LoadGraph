@@ -175,8 +175,6 @@ bool GpuMonitor::IsAvailable() const
 
 void GpuMonitor::Collect()
 {
-    std::vector<GpuMetrics> localMetrics;
-
     // Primary source: NVML.
     if (m_nvvmAvailable)
     {
@@ -189,20 +187,14 @@ void GpuMonitor::Collect()
     }
 
     // Merge AMD GPU metrics (if any).
+    AmdMonitor amd;
+    if (amd.IsAvailable())
     {
-        AmdMonitor amd;
-        if (amd.IsAvailable())
-        {
-            auto amdMetrics = amd.GetMetrics();
-            localMetrics.insert(localMetrics.end(),
-                               std::make_move_iterator(amdMetrics.begin()),
-                               std::make_move_iterator(amdMetrics.end()));
-        }
-    }
-
-    {
+        auto amdMetrics = amd.GetMetrics();
         std::lock_guard<std::mutex> lock(m_mutex);
-        m_metrics = std::move(localMetrics);
+        m_metrics.insert(m_metrics.end(),
+                        std::make_move_iterator(amdMetrics.begin()),
+                        std::make_move_iterator(amdMetrics.end()));
     }
 }
 
