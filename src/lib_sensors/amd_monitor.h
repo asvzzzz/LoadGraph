@@ -60,6 +60,7 @@ private:
     FnADL_Adapter_GetAdapterInfo m_fnGetAdapterInfo = nullptr;
     FnADL_Overdrive6_GetMemoryInfo m_fnGetMemoryInfo = nullptr;
     FnADL_Overdrive6_GetCurrentClocks m_fnGetCurrentClocks = nullptr;
+    FnADL_Overdrive6_GetPowerControlInformation m_fnGetPowerInfo = nullptr;
 #else
     // Linux: AMD SMI support (via amd-smi command or libamd_smi).
     bool LoadAmdSmi();

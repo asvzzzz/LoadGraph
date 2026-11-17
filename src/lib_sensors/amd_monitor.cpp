@@ -72,6 +72,18 @@ struct ADLClocksInfo {
     unsigned int uMemoryClock;
 };
 
+// ADLPowerInformation - power metrics (simplified).
+// Units: Power in 0.001W (milliwatts), Energy in 0.01mWh
+struct ADLPowerInformation {
+    int iSize;
+    int iPowerControlType;      // Type of power control
+    unsigned int uCurrentPower;     // Current power in milliwatts
+    unsigned int uAveragePower;     // Average power
+    unsigned int uMaxPower;         // Max/power limit in milliwatts
+    unsigned int uMinPower;         // Min power
+    unsigned int uSampleTime;       // Sample time in seconds
+};
+
 // AMD Monitor Implementation
 AmdMonitor::AmdMonitor() : m_available(false)
 {
@@ -146,6 +158,8 @@ bool AmdMonitor::LoadAdl()
         GetProcAddress(m_hAdl, "ADL_Overdrive6_GetMemoryInfo"));
     m_fnGetCurrentClocks = reinterpret_cast<FnADL_Overdrive6_GetCurrentClocks>(
         GetProcAddress(m_hAdl, "ADL_Overdrive6_GetCurrentClocks"));
+    m_fnGetPowerInfo = reinterpret_cast<FnADL_Overdrive6_GetPowerControlInformation>(
+        GetProcAddress(m_hAdl, "ADL_Overdrive6_GetPowerControlInformation"));
     
     // Check if we got all required functions.
     if (!m_fnAdlCreate || !m_fnAdlDestroy || !m_fnGetActivity) {
@@ -194,6 +208,7 @@ void AmdMonitor::FreeAdl()
     m_fnGetAdapterInfo = nullptr;
     m_fnGetMemoryInfo = nullptr;
     m_fnGetCurrentClocks = nullptr;
+    m_fnGetPowerInfo = nullptr;
     m_available = false;
 }
 
@@ -283,6 +298,22 @@ void AmdMonitor::CollectAdl(std::vector<GpuMetrics>& out)
             gm.vramFreqMhz = static_cast<double>(clocks.uMemoryClock);
         }
         
+        // Get power information.
+        if (m_fnGetPowerInfo) {
+            ADLPowerInformation powerInfo{};
+            powerInfo.iSize = sizeof(ADLPowerInformation);
+            powerInfo.iPowerControlType = 0;  // Request current power
+            if (m_fnGetPowerInfo(m_hAdl, i, 0, &powerInfo) == ADL_OK) {
+                // Convert milliwatts to watts.
+                gm.powerWatts = static_cast<double>(powerInfo.uCurrentPower) / 1000.0;
+                if (powerInfo.uMaxPower > 0) {
+                    gm.powerLimitWatts = static_cast<double>(powerInfo.uMaxPower) / 1000.0;
+                }
+                LOGI("AMD: GPU %d Power: current=%.1fW, limit=%.1fW",
+                     i, gm.powerWatts, gm.powerLimitWatts);
+            }
+        }
+        
         out.push_back(gm);
     }
     
@@ -290,23 +321,65 @@ void AmdMonitor::CollectAdl(std::vector<GpuMetrics>& out)
 }
 #endif
 
-// Linux implementation placeholder.
+// ============================================================================
+// Linux implementation using amd-smi command-line tool.
+// ============================================================================
 #ifdef PLATFORM_LINUX
+
+#include <cstdio>
+#include <cstring>
+#include <cstdlib>
+#include <sstream>
+#include <algorithm>
+#include <fstream>
+
 bool AmdMonitor::LoadAmdSmi()
 {
     // Check if amd-smi is available.
     const char* cmd = "which amd-smi";
     int result = system(cmd);
     if (result != 0) {
-        LOGI("AMD: amd-smi not found, skipping AMD GPU support.");
+        LOGI("AMD: amd-smi not found, checking for rocm-smi...");
+        // Fallback to rocm-smi if available.
+        const char* cmd2 = "which rocm-smi";
+        result = system(cmd2);
+        if (result != 0) {
+            LOGI("AMD: Neither amd-smi nor rocm-smi found.");
+            return false;
+        }
+    }
+    
+    // Test if we can get GPU count.
+    FILE* pipe = popen("amd-smi query --gpu-count 2>/dev/null || rocm-smi --query-gpu=count --format=json 2>/dev/null", "r");
+    if (!pipe) {
+        LOGI("AMD: Failed to open pipe to amd-smi.");
         return false;
     }
     
-    // Parse amd-smi output to get metrics.
-    // This would involve spawning a process and parsing text output.
-    // Implementation left for future enhancement.
-    m_available = false;
-    return false;
+    char buffer[256] = {};
+    std::string result_str;
+    while (fgets(buffer, sizeof(buffer), pipe) != nullptr) {
+        result_str += buffer;
+    }
+    pclose(pipe);
+    
+    // Parse GPU count.
+    int gpuCount = 0;
+    try {
+        gpuCount = std::stoi(result_str);
+    } catch (...) {
+        LOGI("AMD: Failed to parse GPU count from amd-smi.");
+        return false;
+    }
+    
+    if (gpuCount <= 0) {
+        LOGI("AMD: No AMD GPUs found.");
+        return false;
+    }
+    
+    LOGI("AMD: Found %d AMD GPU(s) via amd-smi.", gpuCount);
+    m_available = true;
+    return true;
 }
 
 void AmdMonitor::FreeAmdSmi()
@@ -314,9 +387,133 @@ void AmdMonitor::FreeAmdSmi()
     m_available = false;
 }
 
+static std::string ExecAmdSmi(const std::string& query)
+{
+    std::string cmd = "amd-smi " + query + " 2>/dev/null || rocm-smi " + query + " 2>/dev/null";
+    FILE* pipe = popen(cmd.c_str(), "r");
+    if (!pipe) return "";
+    
+    char buffer[1024] = {};
+    std::string result;
+    while (fgets(buffer, sizeof(buffer), pipe) != nullptr) {
+        result += buffer;
+    }
+    pclose(pipe);
+    
+    // Trim whitespace.
+    result.erase(0, result.find_first_not_of(" \t\n\r"));
+    result.erase(result.find_last_not_of(" \t\n\r") + 1);
+    return result;
+}
+
+static std::vector<std::string> SplitLines(const std::string& text)
+{
+    std::vector<std::string> lines;
+    std::istringstream stream(text);
+    std::string line;
+    while (std::getline(stream, line)) {
+        if (!line.empty()) lines.push_back(line);
+    }
+    return lines;
+}
+
 void AmdMonitor::CollectAmdSmi(std::vector<GpuMetrics>& out)
 {
-    // Placeholder for Linux AMD SMI implementation.
+    if (!m_available) return;
+    
+    // Query GPU count.
+    std::string countStr = ExecAmdSmi("query --gpu-count");
+    int gpuCount = 0;
+    try {
+        gpuCount = std::stoi(countStr);
+    } catch (...) {
+        LOGI("AMD: Failed to parse GPU count.");
+        return;
+    }
+    
     out.clear();
+    out.reserve(gpuCount);
+    
+    for (int i = 0; i < gpuCount; ++i) {
+        GpuMetrics gm{};
+        
+        // Get GPU name.
+        std::string nameCmd = "query --gpu=" + std::to_string(i) + " --property=name";
+        gm.name = ExecAmdSmi(nameCmd);
+        if (gm.name.empty()) {
+            gm.name = "AMD Radeon GPU " + std::to_string(i);
+        }
+        
+        // Get GPU load.
+        std::string loadStr = ExecAmdSmi("query --gpu=" + std::to_string(i) + " --property=percentage.gpu");
+        try {
+            gm.loadPercent = std::stod(loadStr);
+        } catch (...) {
+            gm.loadPercent = 0.0;
+        }
+        
+        // Get temperature.
+        std::string tempStr = ExecAmdSmi("query --gpu=" + std::to_string(i) + " --property=temperature.gpu");
+        try {
+            gm.temperature = std::stod(tempStr);
+        } catch (...) {
+            gm.temperature = -1.0;
+        }
+        
+        // Get fan speed (RPM).
+        std::string fanStr = ExecAmdSmi("query --gpu=" + std::to_string(i) + " --property=fan.speed");
+        try {
+            int fanRpm = std::stoi(fanStr);
+            if (fanRpm > 0) {
+                gm.fanRpm = fanRpm;
+            }
+        } catch (...) {
+            // Try percentage.
+            std::string fanPctStr = ExecAmdSmi("query --gpu=" + std::to_string(i) + " --property=fan.speed.percentage");
+            try {
+                gm.fanPercent = std::stod(fanPctStr);
+            } catch (...) {}
+        }
+        
+        // Get power.
+        std::string powerStr = ExecAmdSmi("query --gpu=" + std::to_string(i) + " --property=power.average");
+        try {
+            gm.powerWatts = std::stod(powerStr);
+        } catch (...) {
+            gm.powerWatts = -1.0;
+        }
+        
+        // Get VRAM.
+        std::string vramTotalStr = ExecAmdSmi("query --gpu=" + std::to_string(i) + " --property=memory.total");
+        std::string vramUsedStr = ExecAmdSmi("query --gpu=" + std::to_string(i) + " --property=memory.used");
+        try {
+            // Values are in KB, convert to bytes.
+            gm.vramTotalBytes = static_cast<uint64_t>(std::stoull(vramTotalStr)) * 1024ULL;
+            gm.vramUsedBytes = static_cast<uint64_t>(std::stoull(vramUsedStr)) * 1024ULL;
+            if (gm.vramTotalBytes > 0) {
+                gm.vramLoadPercent = static_cast<double>(gm.vramUsedBytes) / 
+                                   static_cast<double>(gm.vramTotalBytes) * 100.0;
+            }
+        } catch (...) {
+            LOGI("AMD: Failed to parse VRAM for GPU %d.", i);
+        }
+        
+        // Get clocks.
+        std::string clkStr = ExecAmdSmi("query --gpu=" + std::to_string(i) + " --property=clock.throttle.current");
+        // Parse clock throttle data (format: "0 1 2 ...") - get the current active clock.
+        auto parts = SplitLines(clkStr);
+        if (!parts.empty()) {
+            try {
+                gm.gpuFreqMhz = std::stod(parts[0]);
+            } catch (...) {}
+        }
+        
+        out.push_back(gm);
+        LOGI("AMD: GPU %d: %s, load=%.1f%%, temp=%.0fC, power=%.1fW",
+             i, gm.name.c_str(), gm.loadPercent, gm.temperature, gm.powerWatts);
+    }
+    
+    LOGI("AMD: Collected metrics for %d adapter(s) via amd-smi.", static_cast<int>(out.size()));
 }
-#endif
+
+#endif // PLATFORM_LINUX
