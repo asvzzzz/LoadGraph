@@ -175,18 +175,35 @@ bool GpuMonitor::IsAvailable() const
 
 void GpuMonitor::Collect()
 {
+    std::vector<GpuMetrics> localMetrics;
+
     // Primary source: NVML.
     if (m_nvvmAvailable)
     {
         CollectNvml();
-        return;
+    }
+    else if (m_available)
+    {
+        // Fallback: NVAPI.
+        CollectNvApi();
     }
 
-    // Fallback: NVAPI.
-    if (!m_available)
-        return;
+    // Merge AMD GPU metrics (if any).
+    {
+        AmdMonitor amd;
+        if (amd.IsAvailable())
+        {
+            auto amdMetrics = amd.GetMetrics();
+            localMetrics.insert(localMetrics.end(),
+                               std::make_move_iterator(amdMetrics.begin()),
+                               std::make_move_iterator(amdMetrics.end()));
+        }
+    }
 
-    CollectNvApi();
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_metrics = std::move(localMetrics);
+    }
 }
 
 void GpuMonitor::CollectNvApi()
