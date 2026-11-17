@@ -550,10 +550,10 @@ void MainFrame::BuildViewMenu(wxMenuBar* menuBar, const std::map<std::string, bo
 		Bind(wxEVT_MENU, &MainFrame::OnViewToggle, this, id);
 	};
 
-	if (m_viewToggles.count("cpu_load"))  addToggle("cpu_load",  "Load");
-	if (m_viewToggles.count("ram"))       addToggle("ram",       "RAM");
-	if (m_viewToggles.count("cpu_power")) addToggle("cpu_power", "Power");
-	if (m_viewToggles.count("cpu_temp"))  addToggle("cpu_temp",  "Temp");
+	if (m_viewToggles.count("cpu_load"))  addToggle("cpu_load",  "CPU Load");
+	if (m_viewToggles.count("ram"))       addToggle("ram",       "System RAM");
+	if (m_viewToggles.count("cpu_power")) addToggle("cpu_power", "CPU Power");
+	if (m_viewToggles.count("cpu_temp"))  addToggle("cpu_temp",  "CPU Temp");
 	if (m_viewToggles.count("fan"))       addToggle("fan",       "Fan");
 
 	const bool anyGpu = !m_gpuGroupToggles.empty();
