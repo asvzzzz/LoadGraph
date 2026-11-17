@@ -46,6 +46,8 @@ private:
     using FnADL_Adapter_NumberOfAdapters = int (*)(int* adapterCount);
     using FnADL_Adapter_GetAdapterInfo = int (*)(void* pAdlContext, int iAdapterIndex, void* lpInfo);
     using FnADL_Overdrive6_GetPowerControlInformation = int (*)(void* pAdlContext, int iAdapterIndex, int iPowerControlType, void* lpPowerControlInformation);
+    using FnADL_Overdrive6_GetMemoryInfo = int (*)(void* pAdlContext, int iAdapterIndex, void* lpMemoryInfo);
+    using FnADL_Overdrive6_GetCurrentClocks = int (*)(void* pAdlContext, int iAdapterIndex, void* lpClocks);
 
     HMODULE m_hAdl = nullptr;
     FnADL_Main_Control_Create m_fnAdlCreate = nullptr;
@@ -56,6 +58,8 @@ private:
     FnADL_Overdrive6_GetFanSpeed m_fnGetFanSpeed = nullptr;
     FnADL_Adapter_NumberOfAdapters m_fnGetAdapterCount = nullptr;
     FnADL_Adapter_GetAdapterInfo m_fnGetAdapterInfo = nullptr;
+    FnADL_Overdrive6_GetMemoryInfo m_fnGetMemoryInfo = nullptr;
+    FnADL_Overdrive6_GetCurrentClocks m_fnGetCurrentClocks = nullptr;
 #else
     // Linux: AMD SMI support (via amd-smi command or libamd_smi).
     bool LoadAmdSmi();

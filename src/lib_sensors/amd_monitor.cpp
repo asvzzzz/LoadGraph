@@ -33,6 +33,45 @@ struct ADLFanSpeedValue {
     int iTargetSpeed;
 };
 
+// ADLAdapterInfo - contains adapter name and hardware info.
+// Layout from https://gpuopen-librariesandsdks.github.io/adl/structAdapterInfo.html
+struct ADLAdapterInfo {
+    int iSize;                   // Size of structure
+    int iAdapterIndex;           // ADL index handle
+    char strUDID[256];          // Unique device ID
+    int iBusNumber;             // BUS number
+    int iDeviceNumber;          // Driver number
+    int iFunctionNumber;        // Function number
+    int iVendorID;              // Vendor ID (0x1002 for AMD)
+    char strAdapterName[256];   // Adapter name (e.g., "Radeon RX 6800")
+    char strDisplayName[256];   // Display name (e.g., "\\.\Display1")
+    int iPresent;               // 1 if present
+    int iExist;                 // 1 if exists
+    char strDriverPath[256];   // Driver registry path
+    char strDriverPathExt[256];// Extended driver path
+    char strPNPString[256];    // PNP string from Windows
+    int iOSDisplayIndex;       // iOS display index
+};
+
+// ADLMemoryInfo - VRAM information (simplified).
+struct ADLMemoryInfo {
+    int iSize;
+    int iVendorId;
+    int iDeviceId;
+    // VRAM in KB
+    unsigned int uVramSize;
+    unsigned int uVramFree;
+    // VRAM used = vramSize - vramFree
+};
+
+// ADLClocksInfo - current clock frequencies.
+struct ADLClocksInfo {
+    int iSize;
+    // Clock speeds in MHz
+    unsigned int uEngineClock;
+    unsigned int uMemoryClock;
+};
+
 // AMD Monitor Implementation
 AmdMonitor::AmdMonitor() : m_available(false)
 {
@@ -103,6 +142,10 @@ bool AmdMonitor::LoadAdl()
         GetProcAddress(m_hAdl, "ADL_Adapter_NumberOfAdapters"));
     m_fnGetAdapterInfo = reinterpret_cast<FnADL_Adapter_GetAdapterInfo>(
         GetProcAddress(m_hAdl, "ADL_Adapter_GetAdapterInfo"));
+    m_fnGetMemoryInfo = reinterpret_cast<FnADL_Overdrive6_GetMemoryInfo>(
+        GetProcAddress(m_hAdl, "ADL_Overdrive6_GetMemoryInfo"));
+    m_fnGetCurrentClocks = reinterpret_cast<FnADL_Overdrive6_GetCurrentClocks>(
+        GetProcAddress(m_hAdl, "ADL_Overdrive6_GetCurrentClocks"));
     
     // Check if we got all required functions.
     if (!m_fnAdlCreate || !m_fnAdlDestroy || !m_fnGetActivity) {
@@ -149,6 +192,8 @@ void AmdMonitor::FreeAdl()
     m_fnGetFanSpeed = nullptr;
     m_fnGetAdapterCount = nullptr;
     m_fnGetAdapterInfo = nullptr;
+    m_fnGetMemoryInfo = nullptr;
+    m_fnGetCurrentClocks = nullptr;
     m_available = false;
 }
 
@@ -167,14 +212,21 @@ void AmdMonitor::CollectAdl(std::vector<GpuMetrics>& out)
         GpuMetrics gm{};
         
         // Get adapter info (includes name).
-        void* pInfo = nullptr;
-        if (m_fnGetAdapterInfo(m_hAdl, i, &pInfo) == ADL_OK && pInfo) {
-            // Extract name from ADLAdapterInfo structure.
-            // Layout: iAdapterIndex, strAdapterName, strHardwareInfo, etc.
-            // We'll use a simple approach here.
-            char name[256] = {};
-            snprintf(name, sizeof(name), "AMD Radeon GPU %d", i);
-            gm.name = name;
+        ADLAdapterInfo adapterInfo{};
+        adapterInfo.iSize = sizeof(ADLAdapterInfo);
+        if (m_fnGetAdapterInfo(m_hAdl, i, &adapterInfo) == ADL_OK) {
+            // Use strAdapterName if available, otherwise fallback.
+            if (adapterInfo.strAdapterName[0] != '\0') {
+                gm.name = adapterInfo.strAdapterName;
+            } else {
+                snprintf(adapterInfo.strAdapterName, sizeof(adapterInfo.strAdapterName),
+                        "AMD Radeon GPU %d", i);
+                gm.name = adapterInfo.strAdapterName;
+            }
+            LOGI("AMD: Adapter %d: %s (VendorID=0x%X)", 
+                 i, gm.name.c_str(), adapterInfo.iVendorID);
+        } else {
+            gm.name = "AMD Radeon GPU " + std::to_string(i);
         }
         
         // Get GPU utilization.
@@ -208,8 +260,28 @@ void AmdMonitor::CollectAdl(std::vector<GpuMetrics>& out)
             }
         }
         
-        // Note: VRAM, power, and clock info require additional ADL calls.
-        // These are left as -1/0 for now and can be added later.
+        // Get VRAM info.
+        ADLMemoryInfo memInfo{};
+        memInfo.iSize = sizeof(ADLMemoryInfo);
+        if (m_fnGetMemoryInfo && m_fnGetMemoryInfo(m_hAdl, i, &memInfo) == ADL_OK) {
+            // Convert KB to bytes.
+            gm.vramTotalBytes = static_cast<uint64_t>(memInfo.uVramSize) * 1024ULL;
+            gm.vramUsedBytes = static_cast<uint64_t>(memInfo.uVramSize - memInfo.uVramFree) * 1024ULL;
+            if (gm.vramTotalBytes > 0) {
+                gm.vramLoadPercent = static_cast<double>(gm.vramUsedBytes) / 
+                                   static_cast<double>(gm.vramTotalBytes) * 100.0;
+            }
+            LOGI("AMD: GPU %d VRAM: total=%u KB, free=%u KB", 
+                 i, memInfo.uVramSize, memInfo.uVramFree);
+        }
+        
+        // Get current clocks.
+        ADLClocksInfo clocks{};
+        clocks.iSize = sizeof(ADLClocksInfo);
+        if (m_fnGetCurrentClocks && m_fnGetCurrentClocks(m_hAdl, i, &clocks) == ADL_OK) {
+            gm.gpuFreqMhz = static_cast<double>(clocks.uEngineClock);
+            gm.vramFreqMhz = static_cast<double>(clocks.uMemoryClock);
+        }
         
         out.push_back(gm);
     }
