@@ -167,6 +167,8 @@ set(SENSORS_SOURCES
     src/lib_sensors/cpu_monitor.cpp
     src/lib_sensors/gpu_monitor.h
     src/lib_sensors/gpu_monitor.cpp
+    src/lib_sensors/amd_monitor.h
+    src/lib_sensors/amd_monitor.cpp
     src/lib_sensors/ram_monitor.h
     src/lib_sensors/ram_monitor.cpp
     src/lib_sensors/storage_monitor.h

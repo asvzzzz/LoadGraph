@@ -2,9 +2,11 @@
 #include <winsock2.h>
 #endif
 #include "gpu_monitor.h"
+#include "amd_monitor.h"
 #include "power_table.h"
 #include "logger.h"
 #include <cstdio>
+#include <algorithm>
 
 // NVAPI function IDs (publicly documented).
 static const unsigned int NVAPI_INITIALIZE_ID                = 0x0150E828;

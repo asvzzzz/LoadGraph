@@ -29,10 +29,11 @@ struct GpuMetrics
     double      powerLimitWatts = -1.0;  // Maximum GPU power limit in watts, -1.0 = N/A
 };
 
-// Collects GPU metrics for all Nvidia GPUs.
+// Collects GPU metrics for all GPUs (NVIDIA via NVML/NVAPI, AMD via ADL).
 // Primary source: NVML (nvml.dll on Windows, libnvidia-ml.so on Linux).
 // Fallback: NVAPI (nvapi64.dll on Windows) — Windows only.
-// Dynamically loads the library — falls back to empty list if unavailable.
+// AMD support: ADL (atiadlxx.dll on Windows).
+// Dynamically loads libraries — falls back to empty list if unavailable.
 class GpuMonitor : public MetricsCollector
 {
 public:
