@@ -32,7 +32,7 @@ if(DEFINED ENV{WXSTATIC_ROOT})
         gtk-3 gdk-3 pangocairo-1.0 atk-1.0 cairo-gobject cairo
         gdk_pixbuf-2.0 gio-2.0 Xtst pangoft2-1.0 pango-1.0
         gobject-2.0 glib-2.0 harfbuzz fontconfig freetype
-        jbig expat pcre2-32 png jpeg lzma z X11 SM xkbcommon gthread-2.0 m dl pthread
+        jbig expat pcre2-32 png jpeg tiff lzma z X11 SM xkbcommon gthread-2.0 m dl pthread
     )
     set(wxWidgets_LINK_OPTIONS "-pthread")
 
