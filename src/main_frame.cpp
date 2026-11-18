@@ -7,6 +7,8 @@
 #include "app_config.h"
 #include <wx/display.h>
 #include <wx/dcbuffer.h>
+#include <wx/graphics.h>
+#include <wx/dcgraph.h>
 
 #include <algorithm>
 #include <cmath>
@@ -233,7 +235,8 @@ void MainFrame::RealizeUI()
 	else                   cpuLabel += "  (N/A)";
 #endif
 	wxStaticText* cpuT = new wxStaticText(m_header, wxID_ANY, cpuLabel);
-	wxFont cpuFont(11, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_BOLD);
+	// Consolas to match the dashboard font (Consolas, monospace).
+	const wxFont cpuFont(wxFontInfo(wxSize(0, 15)).FaceName("Consolas").Bold());
 	cpuT->SetFont(cpuFont);
 	// Reserve space for the uptime label so it is never clipped at minimum
 	// width. The CPU label ellipsizes instead of pushing uptime off-screen.
@@ -413,8 +416,10 @@ void MainFrame::BuildGpuSection(wxBoxSizer* container, wxWindow* parent)
 
 		// Title label as a direct child of the container (proportion=0, no stretch).
 		wxStaticText* gpuTitleLabel = new wxStaticText(parent, wxID_ANY, gpuTitle);
+		// 13 px bold Consolas, like the dashboard .gpu-title rule.
 		gpuTitleLabel->SetFont(
-			wxFont(11, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_BOLD));
+			wxFont(wxFontInfo(wxSize(0, 13)).FaceName("Consolas").Bold()));
+		gpuTitleLabel->SetBackgroundColour(HexColor(m_cfg.section_bg_color));
 		gpuTitleLabel->SetForegroundColour(HexColor(m_cfg.gpu_name_color));
 		m_customColoredLabels.push_back({ gpuTitleLabel, HexColor(m_cfg.gpu_name_color) });
 		m_gpuBoxes.push_back(gpuTitleLabel);
@@ -523,7 +528,6 @@ void MainFrame::BuildTotalPowerRow(wxBoxSizer* container, wxWindow* parent)
 	m_totalPowerGraph = new GraphPanel(parent, "Total Power", "W");
 	m_totalPowerGraph->SetYRange(0.0, 1000.0);
 	m_totalPowerGraph->SetYMode(GraphYMode::Watts);
-	m_totalPowerGraph->SetTickCount(5);
 	m_totalPowerGraph->SetColor(HexColor(m_cfg.total_power_color));
 	m_totalPowerGraph->SetBgColor(HexColor(m_cfg.chart_bg_color));
 	container->Add(m_totalPowerGraph, 1, wxEXPAND | wxLEFT | wxRIGHT, 5);
@@ -913,11 +917,18 @@ void MainFrame::OnContentPaint(wxPaintEvent&)
 	}
 #endif
 
-	const wxColour frameCol(200, 200, 200);
-	dc.SetPen(wxPen(frameCol, 1));
-	dc.SetBrush(*wxTRANSPARENT_BRUSH);
-	for (const SectionBox& sb : m_sectionBoxes)
-		dc.DrawRectangle(sb.rect);
+	// Section cards: filled rounded rectangles in the section background color,
+	// matching the dashboard ".section { background:#16213e; border-radius:8px }".
+	{
+		wxGCDC gdc(dc);
+		if (gdc.GetGraphicsContext())
+		{
+			gdc.SetBrush(wxBrush(HexColor(m_cfg.section_bg_color)));
+			gdc.SetPen(*wxTRANSPARENT_PEN);
+			for (const SectionBox& sb : m_sectionBoxes)
+				gdc.DrawRoundedRectangle(sb.rect.x, sb.rect.y, sb.rect.width, sb.rect.height, 8.0);
+		}
+	}
 
 	// No evt.Skip(): with wxBG_STYLE_PAINT the default handler must not run,
 	// otherwise the buffered content may be overwritten by the erase logic.
@@ -945,8 +956,25 @@ void MainFrame::ApplyTheme()
 	{
 		if (!b) continue;
 		b->SetForegroundColour(text);
+		b->SetBackgroundColour(section);
 		b->Refresh();
 	}
+
+	// Re-apply chart canvas / section colors for every graph panel: the panel
+	// canvas uses the chart background while the title row blends into the
+	// section card, exactly like the web dashboard cells.
+	const wxColour chartBg = HexColor(m_cfg.chart_bg_color);
+	auto stylePanel = [&](GraphPanel* p)
+	{
+		if (!p) return;
+		p->SetBgColor(chartBg);
+		p->SetSectionColor(section);
+	};
+	for (const auto& kv : m_viewToggles)
+		stylePanel(kv.second);
+	for (const GpuGroupToggle& g : m_gpuGroupToggles)
+		for (GraphPanel* p : g.panels)
+			stylePanel(p);
 
 	// Re-apply custom config colors for labels that must keep them across theme switches.
 	for (const auto& cl : m_customColoredLabels)

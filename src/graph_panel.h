@@ -9,18 +9,19 @@
 // Number of data points stored in the rolling buffer.
 static const int kGraphHistorySize = 60;
 
-// Y-axis tick spacing mode — controls how axis labels are computed so they
-// always land on round numbers regardless of panel height.
+// Value formatting mode — controls how the header readout is formatted so it
+// matches the web dashboard (load "26.5%", temp "52 C", RAM "13.8 GB").
 enum class GraphYMode { Auto, Percent, Gigabytes, Celsius, Watts };
 
-// Custom panel that draws a single time-series chart in Windows 11 Task Manager style.
-// The area under the line is filled. A red color is used once the last value
+// Custom panel that draws a single time-series chart in the web-dashboard
+// style: rounded chart canvas, 4-level horizontal grid only, gradient fill
+// under a 2 px anti-aliased line. A red palette is used once the last value
 // exceeds the configured alarm threshold (e.g. temperature > 80 C).
 class GraphPanel : public wxPanel
 {
 public:
-    // title — label shown above the chart (e.g. "CPU 0 Load").
-    // yLabel — text for the Y-axis (e.g. "%", "C", "MHz").
+    // title — label shown above the chart (e.g. "Load").
+    // yLabel — unit suffix for the header readout (e.g. "%", "C", "W").
     GraphPanel(wxWindow* parent, const wxString& title, const wxString& yLabel);
 
     // Append a new data point. Older points are discarded to keep history at kGraphHistorySize.
@@ -33,14 +34,8 @@ public:
     // Call before the first points are added.
     void SetYRange(double minVal, double maxVal);
 
-    // Switch the Y axis back to automatic data-driven scaling.
+    // Switch the Y axis back to automatic data-driven scaling (0..max).
     void ResetYRange();
-
-    // Override the adaptive tick count used in OnPaint. When set (> 0) the
-    // graph always draws exactly this many horizontal grid labels regardless
-    // of panel height (useful for Total Power where we want a fixed 4-tick
-    // layout with a ceiling-rounded Y max). Default -1 = auto-adaptive.
-    void SetTickCount(int count);
 
     // Draw the line red once the last value is strictly greater than threshold.
     // Pass a negative value to disable the alarm coloring.
@@ -50,14 +45,17 @@ public:
     // graphs keep the default blue; GPU graphs switch to purple here.
     void SetPurple(bool on);
 
-    // Use a custom color for the line and fill. Overrides purple/blue logic.
+    // Use a custom color for the line and gradient fill. Overrides purple/blue logic.
     void SetColor(const wxColour& color);
 
-    // Set the panel background color (replaces theme-based card bg).
+    // Set the chart canvas background color (replaces theme-based card bg).
     void SetBgColor(const wxColour& color);
 
-    // Set Y-axis tick spacing mode. Controls how axis labels are computed so
-    // that they always land on round numbers regardless of panel height.
+    // Set the color painted behind the title row and around the canvas —
+    // should match the section card color so the panel blends into its card.
+    void SetSectionColor(const wxColour& color);
+
+    // Set the value formatting mode.
     void SetYMode(GraphYMode mode);
     wxString FormatValue(double val) const;
 
@@ -68,10 +66,6 @@ protected:
     wxDECLARE_EVENT_TABLE();
 
 private:
-    // Compute adaptive Y-axis tick values for the given mode and range.
-    std::vector<double> ComputeYTicks(double minVal, double maxVal,
-                                      int count, GraphYMode mode) const;
-
     // Blend a foreground color over a background color (manual alpha).
     static wxColour Blend(const wxColour& fg, const wxColour& bg, double alpha);
 
@@ -95,15 +89,16 @@ private:
     wxColour m_color;
     bool     m_hasColor = false;
 
-    // Custom background color override (false = use theme card bg).
+    // Chart canvas background color override (false = use theme card bg).
     wxColour m_bgColor;
     bool     m_hasBg = false;
 
-    // Y-axis tick spacing mode. Controls how the axis labels are computed.
-    GraphYMode m_yMode = GraphYMode::Auto;
+    // Section card background behind the title row (false = theme card bg).
+    wxColour m_sectionColor;
+    bool     m_hasSectionBg = false;
 
-    // Explicit tick count override (-1 = auto).
-    int m_tickCount = -1;
+    // Value formatting mode.
+    GraphYMode m_yMode = GraphYMode::Auto;
 };
 
 #endif // GRAPH_PANEL_H

@@ -2,8 +2,9 @@
 #include "logger.h"
 #include "theme.h"
 #include <wx/dcbuffer.h>
+#include <wx/graphics.h>
+#include <wx/dcgraph.h>
 #include <algorithm>
-#include <array>
 #include <cmath>
 
 wxBEGIN_EVENT_TABLE(GraphPanel, wxPanel)
@@ -52,12 +53,6 @@ void GraphPanel::ResetYRange()
     m_fixedRange = false;
 }
 
-void GraphPanel::SetTickCount(int count)
-{
-    // Zero or negative disables the override (falls back to auto).
-    m_tickCount = (count > 0) ? count : -1;
-}
-
 void GraphPanel::SetAlarmThreshold(double threshold)
 {
     m_alarmThreshold = threshold;
@@ -76,14 +71,21 @@ void GraphPanel::SetColor(const wxColour& color)
     m_hasColor = true;
 }
 
-// Set the panel background color.
+// Set the chart canvas background color.
 void GraphPanel::SetBgColor(const wxColour& color)
 {
     m_bgColor = color;
     m_hasBg = true;
 }
 
-// Select Y-axis tick spacing mode.
+// Set the section card color painted behind the title row.
+void GraphPanel::SetSectionColor(const wxColour& color)
+{
+    m_sectionColor = color;
+    m_hasSectionBg = true;
+}
+
+// Select the header readout formatting mode.
 void GraphPanel::SetYMode(GraphYMode mode)
 {
     m_yMode = mode;
@@ -111,33 +113,37 @@ wxColour GraphPanel::Blend(const wxColour& fg, const wxColour& bg, double alpha)
 
 void GraphPanel::OnPaint(wxPaintEvent& /*evt*/)
 {
-    wxAutoBufferedPaintDC dc(this);
-    const wxColour cardBg = m_hasBg ? m_bgColor : Theme::Card();
+    // Buffered paint DC + graphics context: anti-aliased lines, gradients and
+    // rounded corners, matching the web dashboard rendering.
+    wxAutoBufferedPaintDC pdc(this);
+    wxGCDC gdc(pdc);
+    wxGraphicsContext* gcp = gdc.GetGraphicsContext();
+    if (!gcp)
+    {
+        // Graphics context unavailable (should not happen with
+        // wxUSE_GRAPHICS_CONTEXT=1): fill with the section color and stop so
+        // the panel never shows uninitialized pixels.
+        gdc.SetBackground(wxBrush(m_hasSectionBg ? m_sectionColor : Theme::Card()));
+        gdc.Clear();
+        return;
+    }
+    wxGraphicsContext& gc = *gcp;
+
+    const wxColour sectionCol = m_hasSectionBg ? m_sectionColor : Theme::Card();
+    const wxColour chartBg    = m_hasBg ? m_bgColor : Theme::Card();
 
     // Explicitly fill the entire panel background to eliminate resize artifacts.
-    dc.SetBackground(wxBrush(cardBg));
-    dc.Clear();
+    gdc.SetBackground(wxBrush(sectionCol));
+    gdc.Clear();
 
     // Update cached size if it was not set yet (e.g. before first OnSize).
     m_clientSize = GetClientSize();
-    if (m_clientSize.GetWidth() <= 0 || m_clientSize.GetHeight() <= 0)
+    const int panelW = m_clientSize.GetWidth();
+    const int panelH = m_clientSize.GetHeight();
+    if (panelW <= 0 || panelH <= 0)
         return;
 
-    // Compact vertical margins so the panel can be short after a resize.
-    // Title needs ~17 px at the top, the bottom margin shrinks with the panel.
-    const int panelH   = m_clientSize.GetHeight();
-    const int marginTop    = std::min(24, std::max(17, panelH / 3));
-    const int marginBottom = std::min(16, std::max(8, panelH / 6));
-    const int marginLeft   = 52;
-    const int marginRight  = 44;
-
-    const double plotLeft   = static_cast<double>(marginLeft);
-    const double plotRight  = static_cast<double>(m_clientSize.GetWidth()  - marginRight);
-    const double plotTop    = static_cast<double>(marginTop);
-    const double plotBottom = static_cast<double>(m_clientSize.GetHeight() - marginBottom);
-    const double plotWidth  = plotRight - plotLeft;
-    const double plotHeight = plotBottom - plotTop;
-
+    // ---- Title row: gray label + bold white value (web .val-row style) ----
     // Last valid value drives both the alarm state and the header readout.
     double lastValue = -1.0;
     for (auto it = m_data.rbegin(); it != m_data.rend(); ++it)
@@ -145,286 +151,150 @@ void GraphPanel::OnPaint(wxPaintEvent& /*evt*/)
         if (*it >= 0.0) { lastValue = *it; break; }
     }
 
-    // Active alarm: last value above the threshold -> red palette.
+    // Active alarm: last value above the threshold -> red palette (like the
+    // dashboard tempColor() helper).
     const bool alarm = (m_alarmThreshold >= 0.0) && (lastValue > m_alarmThreshold);
-    // Purple for GPU, blue for CPU / RAM; red when alarmed; custom color if set.
+
+    {
+        const wxFont labelFont(wxFontInfo(wxSize(0, 13)).FaceName("Consolas"));
+        const wxFont valFont(wxFontInfo(wxSize(0, 13)).FaceName("Consolas").Bold());
+
+        gdc.SetFont(labelFont);
+        gdc.SetTextForeground(wxColour(170, 170, 170));  // #aaaaaa like the dashboard
+        gdc.DrawText(m_title, 8, 3);
+        const wxSize titleExtent = gdc.GetTextExtent(m_title);
+
+        gdc.SetFont(valFont);
+        if (lastValue >= 0.0)
+        {
+            // Unit suffix: "%" is glued to the number, other units use a space
+            // (dashboard renders "26.5%" but "100.6 GB").
+            const wxString sep   = (m_yLabel == "%") ? wxString() : wxString(" ");
+            const wxString value = FormatValue(lastValue) + sep + m_yLabel;
+            gdc.SetTextForeground(alarm ? wxColour(255, 0, 0) : wxColour(255, 255, 255));
+            gdc.DrawText(value, 8 + titleExtent.GetWidth() + 6, 3);
+        }
+        else
+        {
+            gdc.SetTextForeground(wxColour(170, 170, 170));
+            gdc.DrawText("--", 8 + titleExtent.GetWidth() + 6, 3);
+        }
+    }
+
+    // ---- Chart canvas: rounded rect filling the full panel width ----
+    // Matches "canvas.chart { background: #0f3460; border-radius: 4px }".
+    const double canvasLeft   = 0.0;
+    const double canvasTop    = 21.0;
+    const double canvasRight  = static_cast<double>(panelW);
+    const double canvasBottom = static_cast<double>(panelH);
+    const double canvasW = canvasRight  - canvasLeft;
+    const double canvasH = canvasBottom - canvasTop;
+    if (canvasW <= 0.0 || canvasH <= 0.0)
+        return;
+
+    gc.SetBrush(wxBrush(chartBg));
+    gc.SetPen(*wxTRANSPARENT_PEN);
+    gc.DrawRoundedRectangle(canvasLeft, canvasTop, canvasW, canvasH, 4.0);
+
+    // ---- Grid: horizontal lines only, white at 7% over the canvas bg ----
+    // Dashboard draws 5 lines (4 divisions); the boundary lines coincide with
+    // the canvas edges, so only the 3 interior levels are painted here.
+    {
+        const wxColour gridCol = Blend(wxColour(255, 255, 255), chartBg, 0.07);
+        gc.SetPen(wxPen(gridCol, 1));
+        for (int i = 1; i <= 3; ++i)
+        {
+            const double y = canvasBottom - canvasH * static_cast<double>(i) / 4.0;
+            gc.StrokeLine(canvasLeft, y, canvasRight, y);
+        }
+    }
+
+    if (m_data.size() < 2)
+        return; // Dashboard: grid stays visible until at least 2 points exist.
+
+    // ---- Determine Y axis range: fixed range or 0..max (dashboard scale) ----
+    double yMin = 0.0, yMax = 0.0;
+    if (m_fixedRange)
+    {
+        yMin = m_fixedMin;
+        yMax = m_fixedMax;
+    }
+    else
+    {
+        const double maxVal = *std::max_element(m_data.begin(), m_data.end());
+        yMin = 0.0;
+        yMax = (maxVal > 1.0) ? maxVal * 1.1 : 1.0;
+    }
+    const double ySpan = (yMax - yMin) > 0.0 ? (yMax - yMin) : 1.0;
+
+    // Pixel mapping, clamped so an out-of-range spike cannot escape the canvas.
+    auto yToPx = [&](double v) {
+        double y = canvasBottom - canvasH * (v - yMin) / ySpan;
+        return std::clamp(y, canvasTop, canvasBottom);
+    };
+
+    const double xStep = canvasW / static_cast<double>(kGraphHistorySize - 1);
+
+    // Line color: red on alarm, custom color otherwise, purple/blue fallback.
     wxColour lineColor;
     if (alarm)
-        lineColor = wxColour(220, 60, 50);
+        lineColor = wxColour(255, 0, 0);
     else if (m_hasColor)
         lineColor = m_color;
     else if (m_purple)
         lineColor = wxColour(168, 85, 247);   // purple
     else
-        lineColor = wxColour(59, 130, 246);  // blue
-    const wxColour fillColor   = Blend(lineColor, cardBg, 0.22);
+        lineColor = wxColour(59, 130, 246);   // blue
 
-    // ---- Draw title + current value (e.g. "CPU Load  10%") ----
+    // ---- Filled area with vertical gradient (color CC -> color 22) ----
+    // Mirrors the dashboard createLinearGradientBrush over the full canvas
+    // height: 80% opacity at the top, ~13% at the bottom.
     {
-        wxFont titleFont(11, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_BOLD);
-        dc.SetFont(titleFont);
-        dc.SetTextForeground(Theme::Text());
-        dc.DrawText(m_title, plotLeft, 2.0);
+        wxGraphicsPath area = gc.CreatePath();
+        area.MoveToPoint(canvasLeft, canvasBottom);
+        for (size_t i = 0; i < m_data.size(); ++i)
+            area.AddLineToPoint(canvasLeft + xStep * static_cast<double>(i),
+                                yToPx(m_data[i]));
+        area.AddLineToPoint(canvasLeft + xStep * static_cast<double>(m_data.size() - 1),
+                            canvasBottom);
+        area.CloseSubpath();
 
-        if (lastValue >= 0.0)
-        {
-            const wxString valText = FormatValue(lastValue) + m_yLabel;
-            wxSize tsTitle = dc.GetTextExtent(m_title);
-            wxFont valFont(11, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_BOLD);
-            dc.SetFont(valFont);
-            dc.SetTextForeground(lineColor);
-            dc.DrawText(valText, plotLeft + tsTitle.GetWidth() + 10.0, 2.0);
-        }
+        wxColour top(lineColor.Red(),   lineColor.Green(), lineColor.Blue(), 0xCC);
+        wxColour bottom(lineColor.Red(), lineColor.Green(), lineColor.Blue(), 0x22);
+        gc.SetBrush(gc.CreateLinearGradientBrush(canvasLeft, canvasTop,
+                                                 canvasLeft, canvasBottom,
+                                                 top, bottom));
+        gc.SetPen(*wxTRANSPARENT_PEN);
+        gc.FillPath(area);
     }
 
-    if (plotWidth <= 0 || plotHeight <= 0)
-        return;
-
-    // ---- Determine Y axis range ----
-    double yMin = 0.0, yMax = 0.0;
-    bool   hasValidData = false;
-    if (m_fixedRange)
+    // ---- The line itself, 2 px anti-aliased, on top of the fill ----
     {
-        yMin = m_fixedMin;
-        yMax = m_fixedMax;
-        hasValidData = std::any_of(m_data.begin(), m_data.end(),
-                                   [](double v) { return v >= 0.0; });
-    }
-    else
-    {
-        // Auto scale: skip negative values - they mean "N/A".
-        auto validBegin = std::find_if(m_data.begin(), m_data.end(),
-                                       [](double v) { return v >= 0.0; });
-        if (validBegin != m_data.end())
-        {
-            hasValidData = true;
-            yMin = *std::min_element(validBegin, m_data.end());
-            yMax = *std::max_element(validBegin, m_data.end());
-
-            double range = yMax - yMin;
-            if (range < 0.5) range = 10.0;
-            const double pad = range * 0.1;
-            yMin -= pad;
-            yMax += pad;
-        }
-    }
-
-    // ---- No valid data yet: show "N/A" placeholder and stop ----
-    if (!hasValidData)
-    {
-        wxFont font(10, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_NORMAL);
-        dc.SetFont(font);
-        dc.SetTextForeground(Theme::SubText());
-        const wxString na("N/A");
-        wxSize ts = dc.GetTextExtent(na);
-        dc.DrawText(na,
-                    plotLeft + (plotWidth - ts.GetWidth()) / 2.0,
-                    plotTop + (plotHeight - ts.GetHeight()) / 2.0);
-        return;
-    }
-
-    const double ySpan = (yMax - yMin) != 0.0 ? (yMax - yMin) : 1.0;
-    const auto yToPx = [&](double v) {
-        return plotBottom - plotHeight * (v - yMin) / ySpan;
-    };
-
-    // Adaptive Y-axis tick count based on available plot height — unless the
-    // caller explicitly requested a fixed number via SetTickCount().
-    int tickCount = -1;
-    if (m_tickCount > 0)
-        tickCount = m_tickCount;
-    else
-        tickCount = std::max(4, (plotHeight < 40.0) ? 1 :
-                                  (plotHeight < 80.0) ? 2 :
-                                  (plotHeight < 130.0) ? 3 :
-                                  (plotHeight < 200.0) ? 4 : 5);
-
-    // Compute nice Y-axis tick values based on mode and available height.
-    const auto yTicks = ComputeYTicks(yMin, yMax, tickCount, m_yMode);
-
-    // ---- Draw grid lines ----
-    {
-        wxPen penGrid(Theme::Grid(), 1, wxPENSTYLE_SOLID);
-        dc.SetPen(penGrid);
-        dc.SetBrush(*wxTRANSPARENT_BRUSH);
-
-        // Horizontal grid lines: always draw for each tick value including boundaries.
-        for (size_t i = 0; i < yTicks.size(); ++i)
-        {
-            double y = plotBottom - plotHeight * (yTicks[i] - yMin) / ySpan;
-            // Clamp to plot area.
-            y = std::max(plotTop, std::min(plotBottom, y));
-            dc.DrawLine(plotLeft, y, plotRight, y);
-        }
-
-        // Vertical grid lines: draw at regular intervals based on panel width.
-        // Aim for ~5-8 vertical lines depending on width.
-        const int vTickCount = std::max(2, std::min(8, static_cast<int>(plotWidth / 80.0)));
-        for (int i = 0; i <= vTickCount; ++i)
-        {
-            double x = plotLeft + plotWidth * static_cast<double>(i) /
-                                   static_cast<double>(vTickCount);
-            dc.DrawLine(x, plotTop, x, plotBottom);
-        }
-    }
-
-    // ---- Draw Y-axis labels ----
-    {
-        wxFont font(9, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_NORMAL);
-        dc.SetFont(font);
-        dc.SetTextForeground(Theme::SubText());
-
-        for (size_t i = 0; i < yTicks.size(); ++i)
-        {
-            double val = yTicks[i];
-            double y   = plotBottom - plotHeight * (val - yMin) / ySpan;
-            // Right-align Y labels: end 6 px left of the plot area.
-            wxString lbl = FormatValue(val);
-            wxSize   ts  = dc.GetTextExtent(lbl);
-            dc.DrawText(lbl, plotLeft - 6.0 - ts.GetWidth(), y - ts.GetHeight() / 2.0);
-        }
-        dc.DrawText(m_yLabel, plotRight + 8.0, plotTop);
-    }
-
-    // ---- Draw filled area + line (clipped to the plot area) ----
-    if (m_data.size() >= 2)
-    {
-        dc.SetClippingRegion(static_cast<int>(plotLeft), static_cast<int>(plotTop),
-                             static_cast<int>(plotWidth), static_cast<int>(plotHeight));
-
-        const double xStep = plotWidth /
-                             static_cast<double>(std::max(1, kGraphHistorySize - 1));
-
-        // Build the polyline in pixel coordinates.
-        std::vector<wxPoint> pts;
-        pts.reserve(m_data.size());
+        wxGraphicsPath line = gc.CreatePath();
         for (size_t i = 0; i < m_data.size(); ++i)
         {
-            const double x = plotLeft + xStep * static_cast<double>(i);
-            pts.emplace_back(static_cast<int>(x), static_cast<int>(yToPx(m_data[i])));
+            const double x = canvasLeft + xStep * static_cast<double>(i);
+            const double y = yToPx(m_data[i]);
+            if (i == 0) line.MoveToPoint(x, y);
+            else        line.AddLineToPoint(x, y);
         }
-
-        // Filled area under the line down to the plot baseline.
-        {
-            std::vector<wxPoint> poly;
-            poly.reserve(pts.size() + 2);
-            poly.emplace_back(pts.front().x, static_cast<int>(plotBottom));
-            poly.insert(poly.end(), pts.begin(), pts.end());
-            poly.emplace_back(pts.back().x, static_cast<int>(plotBottom));
-
-            dc.SetPen(*wxTRANSPARENT_PEN);
-            dc.SetBrush(wxBrush(fillColor));
-            dc.DrawPolygon(static_cast<int>(poly.size()), poly.data());
-        }
-
-        // The line itself on top of the fill.
-        {
-            wxPen penLine(lineColor, 2, wxPENSTYLE_SOLID);
-            dc.SetPen(penLine);
-            dc.SetBrush(*wxTRANSPARENT_BRUSH);
-            for (size_t i = 1; i < pts.size(); ++i)
-                dc.DrawLine(pts[i - 1], pts[i]);
-        }
-
-        dc.DestroyClippingRegion();
-    }
-
-    // ---- Draw border rectangle around plot area ----
-    {
-        wxPen penBorder(Theme::Border(), 0, wxPENSTYLE_SOLID);
-        dc.SetPen(penBorder);
-        dc.SetBrush(*wxTRANSPARENT_BRUSH);
-        dc.DrawRectangle(static_cast<int>(plotLeft), static_cast<int>(plotTop),
-                         static_cast<int>(plotWidth), static_cast<int>(plotHeight));
+        gc.SetPen(gc.CreatePen(wxGraphicsPenInfo(lineColor).Width(2.0)));
+        gc.StrokePath(line);
     }
 }
 
-std::vector<double> GraphPanel::ComputeYTicks(double minVal, double maxVal,
-                                               int count, GraphYMode mode) const
-{
-    std::vector<double> ticks;
-    if (count <= 0) return ticks;
-    if (count == 1) count = 2; // avoid division by zero in forcedStep calc
-
-    double range = maxVal - minVal;
-    if (range <= 0.0) range = 1.0;
-
-    // Target round step sizes per mode — ordered from largest to smallest.
-    // Covers common memory sizes: 1GB, 2GB, 3GB, 4GB, 8GB, 12GB, 16GB, 24GB, 32GB, 48GB, 64GB, 128GB.
-    static constexpr std::array<double, 5>  kPctSteps     = {25.0, 20.0, 10.0, 5.0, 2.0};
-    static constexpr std::array<double, 9>  kGbSteps      = {64.0, 32.0, 24.0, 16.0, 8.0, 4.0, 3.0, 2.0, 1.0};
-    static constexpr std::array<double, 5>  kCelsiusSteps = {25.0, 20.0, 10.0, 5.0, 2.0};
-    static constexpr std::array<double, 9>  kWattsSteps   = {100.0, 50.0, 40.0, 25.0, 20.0, 10.0, 5.0, 2.0, 1.0};
-    const double* steps = nullptr;
-    int stepsCount = 0;
-
-    switch (mode)
-    {
-        case GraphYMode::Percent:
-            steps = kPctSteps.data();  stepsCount = static_cast<int>(kPctSteps.size()); break;
-        case GraphYMode::Gigabytes:
-            steps = kGbSteps.data();   stepsCount = static_cast<int>(kGbSteps.size()); break;
-        case GraphYMode::Celsius:
-            steps = kCelsiusSteps.data(); stepsCount = static_cast<int>(kCelsiusSteps.size()); break;
-        case GraphYMode::Watts:
-            steps = kWattsSteps.data();  stepsCount = static_cast<int>(kWattsSteps.size()); break;
-        default: // Auto / RPM — use a generic step.
-            steps = kPctSteps.data();  stepsCount = static_cast<int>(kPctSteps.size()); break;
-    }
-
-    // Find the step that gives approximately count intervals.
-    // Choose the step whose interval count is closest to target count.
-    double step = range;
-    double bestDiff = std::numeric_limits<double>::max();
-    for (int i = 0; i < stepsCount; ++i)
-    {
-        double intervals = range / steps[i];
-        double diff = std::abs(intervals - static_cast<double>(count));
-        // Prefer steps that give between count-1 and count+1 intervals.
-        if (intervals >= static_cast<double>(count - 1) &&
-            intervals <= static_cast<double>(count + 1) &&
-            diff < bestDiff)
-        {
-            bestDiff = diff;
-            step = steps[i];
-        }
-    }
-
-    // Snap min/max to multiples of step.
-    double snapMin = std::floor(minVal / step) * step;
-    double snapMax = std::ceil(maxVal / step) * step;
-    if (snapMax <= snapMin) snapMax = snapMin + step;
-
-    for (double v = snapMin; v <= snapMax + step * 0.5; v += step)
-        ticks.push_back(v);
-
-    // Ensure we always have at least count ticks (bottom and top plus intermediates).
-    if (static_cast<int>(ticks.size()) < count)
-    {
-        // Force uniform spacing to meet the minimum tick requirement.
-        ticks.clear();
-        double forcedStep = (snapMax - snapMin) / static_cast<double>(count - 1);
-        for (int i = 0; i < count; ++i)
-            ticks.push_back(snapMin + forcedStep * i);
-    }
-
-    return ticks;
-}
-
-// Format a value for axis labels and the header readout.
+// Format a value for the header readout, matching the web dashboard precision:
+// load 26.5%, temp 52 C, RAM 13.8 GB, power 31.9 W, fan/RPM integers.
 wxString GraphPanel::FormatValue(double val) const
 {
     // Guard against NaN / Inf — static_cast of NaN to integral is UB.
     if (!std::isfinite(val)) return "N/A";
     switch (m_yMode)
     {
-        case GraphYMode::Gigabytes:
-            // One decimal place so small values like 0.2 GB are visible.
-            return wxString::Format("%.1f", val);
-        default:
-            break;
+        case GraphYMode::Gigabytes: return wxString::Format("%.1f", val);
+        case GraphYMode::Celsius:   return wxString::Format("%.0f", val);
+        case GraphYMode::Watts:     return wxString::Format("%.1f", val);
+        case GraphYMode::Percent:   return wxString::Format("%.1f", val);
+        default:                    return wxString::Format("%.0f", val); // Auto / RPM / fan %
     }
-    // Round to nearest integer to avoid floating point artifacts.
-    long rounded = static_cast<long>(std::round(val));
-    return wxString::Format("%ld", rounded);
 }
