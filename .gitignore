@@ -32,3 +32,5 @@ AGENTS.md
 
 # Static analysis output
 ccpcheck.*
+build_wsl/
+build_wsl2/

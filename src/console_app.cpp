@@ -217,8 +217,20 @@ static void OutputFrame(const std::string& frame)
 {
 #ifdef PLATFORM_WINDOWS
     // Move cursor home and overwrite. No 2J clear = no flicker/growth.
+    // Append EL (erase to EOL) after every line break: without it, cells
+    // beyond a shorter new line keep stale glyphs from previous frames
+    // (e.g. when a numeric field shrinks after a header change).
+    std::string expanded;
+    expanded.reserve(frame.size() + frame.size() / 40 + 16);
+    for (size_t i = 0; i < frame.size(); ++i)
+    {
+        char c = frame[i];
+        expanded.push_back(c);
+        if (c == '\n')
+            expanded += "\x1b[K";
+    }
     fputs("\x1b[H", stdout);
-    fputs(frame.c_str(), stdout);
+    fputs(expanded.c_str(), stdout);
 #else
     fputs("\x1b[H\x1b[2J", stdout);
     fputs(frame.c_str(), stdout);
@@ -387,7 +399,8 @@ static std::string BuildFrame(const CpuMetrics& cpu, const RamMetrics& ram,
 #ifdef PLATFORM_WINDOWS
             out += "\n\n" + cBold + AnsiColor(cfg.gpu_name_color.c_str()) + " --- GPU " + std::to_string(i) + ": " + g.name + " ---" + cReset;
 #else
-            out += "\n\n" + cBold + cTitle + "  GPU" + cReset;
+            // Same layout as Windows: index + adapter name from NVML/ADL.
+            out += "\n\n" + cBold + cTitle + " --- GPU " + std::to_string(i) + ": " + g.name + " ---" + cReset;
 #endif
 
             if (g.loadPercent >= 0.0)
