@@ -1128,6 +1128,19 @@ bool AmdMonitor::LoadSysfs()
              hasHwmonFile[2] ? 1 : 0, hasHwmonFile[3] ? 1 : 0,
              hasHwmonFile[4] ? 1 : 0, hasHwmonFile[5] ? 1 : 0,
              hasHwmonFile[6] ? 1 : 0, hasHwmonFile[7] ? 1 : 0);
+
+        // Драйвер radeon (GCN первого поколения, TeraScale) не экспортирует
+        // ни загрузку, ни видеопамять, ни мощность - объясняем причину N/A
+        // один раз при старте, чтобы логи были самодостаточными.
+        if (card.driver == "radeon" && !busy &&
+            !HasFile(card.drmPath + "/mem_info_vram_total") &&
+            !hasHwmonFile[3] && !hasHwmonFile[4])
+        {
+            LOGI("AMD: driver 'radeon' exposes only temperature, fan and clocks. "
+                 "Load, VRAM and power stay N/A. For GCN/SI cards they become "
+                 "available with the amdgpu driver (kernel params: "
+                 "radeon.si_support=0 amdgpu.si_support=1).");
+        }
     }
 
     // Одноразовый диагностический вывод первых значений.
@@ -1136,12 +1149,12 @@ bool AmdMonitor::LoadSysfs()
     for (const GpuMetrics& g : probe)
     {
         LOGI("AMD: GPU '%s': load=%.0f%%, temp=%.0fC, power=%.1f/%.1f W, "
-             "vram=%llu/%llu MB, fan=%.0f%%/%d rpm",
+             "vram=%llu/%llu MB, fan=%.0f%%/%d rpm, clocks=%.0f/%.0f MHz",
              g.name.c_str(), g.loadPercent, g.temperature, g.powerWatts,
              g.powerLimitWatts,
              static_cast<unsigned long long>(g.vramUsedBytes / (1024ULL * 1024ULL)),
              static_cast<unsigned long long>(g.vramTotalBytes / (1024ULL * 1024ULL)),
-             g.fanPercent, g.fanRpm);
+             g.fanPercent, g.fanRpm, g.gpuFreqMhz, g.vramFreqMhz);
     }
     return true;
 }
