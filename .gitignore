@@ -32,5 +32,13 @@ AGENTS.md
 
 # Static analysis output
 ccpcheck.*
+loadgraph.supp
+run_asan_test.sh
+run_debug*.sh
+run_valgrind*.sh
+run_test*.sh
+sig_test.sh
+amdsmi_probe.sh
+grep_log.sh
 build_wsl/
 build_wsl2/

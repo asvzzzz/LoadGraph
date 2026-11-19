@@ -27,11 +27,11 @@ LoadGraph solves this: **all metrics for all GPUs are visible at once in a singl
 
 - **CPU Load (%)** — overall processor utilization (`/proc/stat` delta-method on Linux, PDH `\\Processor(_Total)\\% Processor Time` on Windows)
 - **RAM Usage (GB)** — used memory with adaptive Y-axis
-- **GPU Load (%)** — per-GPU utilization (one section per detected NVIDIA card; each section contains Load, VRAM, Temperature, Fan and Power graphs)
+- **GPU Load (%)** — per-GPU utilization (one section per detected GPU; each section contains Load, VRAM, Temperature, Fan and Power graphs)
 - **VRAM (GB)** — video memory used on each card
 - **Temperature (°C)** — GPU temperature; CPU temperature on Windows via MSR (IA32_THERM_STATUS 0x19C, per-family Tjmax: 84 for Haswell-E/EP, 85 for Broadwell-EP, 100 for Skylake and newer); red alarm line above 80°C
 - **Fan (% / RPM)** — GPU fan in percent (or RPM fallback), CPU fan in RPM (when sensor is available)
-- **GPU Power (W)** — per-card power draw from NVML `nvmlDeviceGetPowerUsage`
+- **GPU Power (W)** — per-card power draw (NVIDIA: NVML `nvmlDeviceGetPowerUsage`; AMD: ADL2 Overdrive6 on Windows, hwmon `power1_average` on Linux)
 - **CPU Power (W)** — real RAPL counter on Linux, or LHM/OpenHardwareMonitor WMI sensor on Windows, or idle-floor estimate as last fallback
 - **Total Power (W)** — CPU + all GPUs summed; fixed 0..1000 W scale with 5 ticks
 - **Uptime** — system boot time displayed as `YY:MM:DD HH:MI:SS` or `<N> s` for fresh boots
@@ -44,7 +44,7 @@ LoadGraph solves this: **all metrics for all GPUs are visible at once in a singl
 
 ### Linux / WSL2
 
-Works on native Linux and inside WSL2 thanks to the GPU-PV bridge (NVML exposed at `/usr/lib/wsl/lib/libnvidia-ml.so.1`). NVAPI is Windows-only; Linux uses NVML exclusively.
+Works on native Linux and inside WSL2 thanks to the GPU-PV bridge (NVML exposed at `/usr/lib/wsl/lib/libnvidia-ml.so.1`). NVAPI is Windows-only; Linux uses NVML exclusively. AMD cards on Linux are read directly from the `amdgpu` driver — sysfs (`gpu_busy_percent`, `mem_info_vram_*`) and hwmon (`temp1_input`, `power1_average`, `fan1_input`, `freq1_input`) — without any external tools or ROCm libraries.
 
 ![Linux](img/lglin.png)
 
@@ -95,7 +95,7 @@ Features:
 
 - Visual Studio 2022 (MSVC) — required on Windows (SEH extensions and MSVC-style compiler flags are used; MinGW is not supported)
 - wxWidgets 3.2 static build (`C:/wxWidgets`). Override with: `-DWX_CONFIG_PATH=...`
-- NVIDIA driver (for GPU metrics; CPU/RAM work without a GPU)
+- NVIDIA driver (for NVIDIA GPU metrics; CPU/RAM work without a GPU). AMD GPU metrics work with any Adrenalin driver (`atiadlxx.dll` is loaded dynamically, no extra setup)
 - **CPU temperature** requires one of:
   - A WinRing0-compatible kernel driver (`.sys`) placed next to the executable — see [Driver](#driver) below
   - Or direct `rdmsr` access (works on some systems where HVCI / Memory Integrity is off and the CPU does not block user-mode MSR reads)
@@ -106,6 +106,7 @@ Features:
 - wxWidgets 3.2: `sudo apt install libwxgtk3.2-dev` (or set `$WX_CONFIG`)
 - NVIDIA driver + `libnvidia-ml` for GPU metrics (`nvidia-smi` must work)
 - WSL2: GPU-PV bridge exposes NVML automatically, no extra setup needed
+- AMD GPU: `amdgpu` driver must expose the card in `/sys/class/drm` (native Linux with the card visible; plain WSL2 does not expose AMD cards unless GPU partitioning/passthrough is configured)
 
 ## Driver
 
@@ -210,6 +211,7 @@ src/
   ram_monitor_linux.cpp     # Linux — /proc/meminfo
   gpu_monitor.{h,cpp}       # Windows — NVML primary + NVAPI fallback (GetDynamicPstates)
   gpu_monitor_linux.cpp     # Linux — dlopen libnvidia-ml.so.1 (real symbol names)
+  amd_monitor.{h,cpp}       # AMD GPU — ADL2 (dynamic atiadlxx.dll) + DXGI VRAM on Windows, amdgpu sysfs/hwmon on Linux
   ring0_msr.{h,cpp}         # WinRing0 DLL / kernel driver back-end, UAC elevation helpers
   msr_sensor.{h,cpp}        # MSR temperature reader: Tjmax decode, EnsureDriver prompt
   power_table.{h,cpp}       # Static TDP table for Intel/AMD CPUs and NVIDIA GPUs (substring match)
@@ -232,7 +234,9 @@ src/
 
 ## Known limitations
 
-- **AMD / Intel GPU** — not supported (NVML is NVIDIA-only).
+- **AMD GPU (Windows)** — metrics come from ADL2 (`atiadlxx.dll`, loaded dynamically). Load, temperature, fan and power depend on the driver exposing Overdrive6/Overdrive5 sensors; older UWP drivers may omit some of them (shown as N/A). ADL has no power-limit API in watts, so the power limit shows N/A on Windows.
+- **AMD GPU (Linux/WSL2)** — read from `amdgpu` sysfs/hwmon (`gpu_busy_percent`, `mem_info_vram_*`, `temp1_input`, `power1_average`, `fan1_input`, `freq1_input`). Requires the card to be visible to Linux: WSL2 needs GPU partitioning/passthrough, plain WSL2 exposes only the NVIDIA vGPU bridge.
+- **Intel GPU** — not supported.
 - **macOS** — not a target platform.
 - **CPU temperature on Linux** — reads `/sys/class/thermal/thermal_zone0/temp`; many desktop boards expose no thermal zone, so N/A is common.
 - **HVCI / Memory Integrity** — if enabled in Windows Security, user-mode `rdmsr` is blocked and a kernel driver is required.
