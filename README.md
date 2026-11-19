@@ -235,7 +235,7 @@ src/
 ## Known limitations
 
 - **AMD GPU (Windows)** — metrics come from ADL2 (`atiadlxx.dll`, loaded dynamically). Load, temperature, fan and power depend on the driver exposing Overdrive6/Overdrive5 sensors; older UWP drivers may omit some of them (shown as N/A). ADL has no power-limit API in watts, so the power limit shows N/A on Windows.
-- **AMD GPU (Linux/WSL2)** — read from `amdgpu` sysfs/hwmon (`gpu_busy_percent`, `mem_info_vram_*`, `temp1_input`, `power1_average`, `fan1_input`, `freq1_input`). Requires the card to be visible to Linux: WSL2 needs GPU partitioning/passthrough, plain WSL2 exposes only the NVIDIA vGPU bridge.
+- **AMD GPU (Linux/WSL2)** — read from `amdgpu` sysfs/hwmon (`gpu_busy_percent`, `mem_info_vram_*`, `temp1_input`, `power1_average`, `fan1_input`, `freq1_input`). Requires the card to be visible to Linux: WSL2 needs GPU partitioning/passthrough, plain WSL2 exposes only the NVIDIA vGPU bridge. Cards on the legacy `radeon` driver expose only hwmon temperature/fan — utilization and VRAM sensors (`gpu_busy_percent`, `mem_info_vram_*`) are amdgpu-specific and show N/A there.
 - **Intel GPU** — not supported.
 - **macOS** — not a target platform.
 - **CPU temperature on Linux** — reads `/sys/class/thermal/thermal_zone0/temp`; many desktop boards expose no thermal zone, so N/A is common.

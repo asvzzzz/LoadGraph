@@ -460,6 +460,9 @@ void AmdMonitor::CollectAdl(std::vector<GpuMetrics>& out)
 
         GpuMetrics gm{};
         gm.name = t.name;
+        // Явный N/A: если ни OD6, ни OD5 не вернули валидный iActivityPercent,
+        // GUI скрывает график загрузки вместо лживого "0%".
+        gm.loadPercent = -1.0;
 
         // Загрузка и частоты: основной источник - ADLOD6CurrentStatus
         // (часы документированы в 10 КГц), запасной - OD5 activity.
@@ -963,6 +966,9 @@ void AmdMonitor::CollectSysfs(std::vector<GpuMetrics>& out)
     for (const AmdCard& card : ScanAmdCards())
     {
         GpuMetrics gm{};
+        // Явный N/A: если сенсор загрузки отсутствует (radeon, старый amdgpu),
+        // GUI скрывает график вместо честного на вид, но лживого "0%".
+        gm.loadPercent = -1.0;
 
         // Имя модели.
         std::string name;

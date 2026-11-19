@@ -69,11 +69,21 @@ std::vector<GpuMetrics> GpuMonitor::GetMetrics()
 
 bool GpuMonitor::IsAvailable() const
 {
-    return m_nvvmAvailable;
+    // Доступность = NVIDIA (NVML) ИЛИ AMD. Иначе на системе без NVIDIA-драйвера
+    // весь GPU-блок скрывается, даже когда amdgpu-карта найдена и читается.
+    return m_nvvmAvailable || (m_amdMonitor && m_amdMonitor->IsAvailable());
 }
 
 void GpuMonitor::Collect()
 {
+    // Список перезаписывается каждый цикл целиком: без очистки AMD-вставка
+    // через insert накапливает дубли, когда NVML недоступен или не вернул
+    // ни одного устройства (Ubuntu без NVIDIA-драйвера).
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_metrics.clear();
+    }
+
     // Primary source: NVML.
     if (m_nvvmAvailable)
         CollectNvml();
