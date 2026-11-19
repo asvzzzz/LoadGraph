@@ -988,16 +988,24 @@ std::string PolishPciName(const std::string& raw)
 
 /// Имя PCI-устройства по vendor:device из pci.ids. Пусто, если базы нет.
 /// Только чтение файлов - внешних процессов не запускается.
-std::string PciIdsName(const std::string& deviceId)
+/// vendorId/deviceId в форме "0x1002"/"0x679a" (как в sysfs).
+std::string PciIdsName(const std::string& vendorId, const std::string& deviceId)
 {
     if (deviceId.compare(0, 2, "0x") != 0 || deviceId.size() < 6)
         return "";
+    if (vendorId.compare(0, 2, "0x") != 0 || vendorId.size() < 6)
+        return "";
+    std::string wantVen = vendorId.substr(2, 4);
     std::string wantDev = deviceId.substr(2);
-    for (size_t i = 0; i < wantDev.size(); ++i)
-    {
-        if (wantDev[i] >= 'A' && wantDev[i] <= 'F')
-            wantDev[i] = static_cast<char>(wantDev[i] - 'A' + 'a');
-    }
+    auto lower = [](std::string& s) {
+        for (size_t i = 0; i < s.size(); ++i)
+        {
+            if (s[i] >= 'A' && s[i] <= 'F')
+                s[i] = static_cast<char>(s[i] - 'A' + 'a');
+        }
+    };
+    lower(wantVen);
+    lower(wantDev);
 
     for (const char* idsPath : PCI_IDS_PATHS)
     {
@@ -1005,14 +1013,14 @@ std::string PciIdsName(const std::string& deviceId)
         if (!f)
             continue;
 
-        bool inAmd = false;
+        bool inVendor = false;
         std::string result;
         char line[512];
         while (fgets(line, sizeof(line), f))
         {
             if (line[0] == '\t')
             {
-                if (!inAmd)
+                if (!inVendor)
                     continue;
                 // Класс-подкласс ("C ...") и продолжения (" ...") - мимо.
                 if (line[1] == 'C' || line[1] == ' ')
@@ -1046,10 +1054,12 @@ std::string PciIdsName(const std::string& deviceId)
                 }
                 continue;
             }
-            // Строка вендора: "vvvv  Name". Секция AMD - 1002.
-            // Комментарии "#" внутри блока устройств не прерывают секцию.
+            // Строка вендора: "vvvv  Name". Секция нужного вендора
+            // (1002 AMD, 10de NVIDIA и т.д.). Комментарии "#" внутри
+            // блока устройств не прерывают секцию.
             if (line[0] != '#')
-                inAmd = (strncmp(line, "1002", 4) == 0);
+                inVendor = (strncmp(line, wantVen.c_str(), 4) == 0 &&
+                            (line[4] == ' ' || line[4] == '\t'));
         }
         fclose(f);
         if (!result.empty())
@@ -1059,6 +1069,14 @@ std::string PciIdsName(const std::string& deviceId)
 }
 
 } // namespace
+
+// Публичная точка входа для GpuMonitor (листинг NVIDIA-карт без драйвера).
+// Парсер pci.ids остается внутри файла, наружу отдан только результат.
+std::string AmdMonitor::ResolvePciName(const std::string& vendorId,
+                                       const std::string& deviceId)
+{
+    return PciIdsName(vendorId, deviceId);
+}
 
 bool AmdMonitor::LoadSysfs()
 {
@@ -1181,7 +1199,7 @@ void AmdMonitor::CollectSysfs(std::vector<GpuMetrics>& out)
             std::map<std::string, std::string>::iterator it = m_pciNameCache.find(card.device);
             if (it == m_pciNameCache.end())
             {
-                const std::string resolved = PciIdsName(card.device);
+                const std::string resolved = PciIdsName("0x1002", card.device);
                 it = m_pciNameCache.insert(std::make_pair(card.device, resolved)).first;
                 if (resolved.empty() && !card.device.empty())
                     LOGI("AMD: pci.ids has no entry for device %s.", card.device.c_str());

@@ -30,6 +30,15 @@ public:
     /// True, если ADL/amdgpu инициализирован и найдена хотя бы одна карта.
     bool IsAvailable() const;
 
+#ifndef PLATFORM_WINDOWS
+    /// Универсальный помощник (не только для AMD): имя модели PCI-устройства
+    /// по vendor:device ("0x1002", "0x679a") из системной базы pci.ids.
+    /// Используется GpuMonitor для показа NVIDIA-карт без проприетарного
+    /// драйвера, когда NVML недоступен. Пустая строка, если записи нет.
+    static std::string ResolvePciName(const std::string& vendorId,
+                                      const std::string& deviceId);
+#endif
+
 private:
 #ifdef PLATFORM_WINDOWS
     // ADL2 сигнатуры (adl_sdk.h / adapter.h / overdrive5.h / overdrive6.h).
