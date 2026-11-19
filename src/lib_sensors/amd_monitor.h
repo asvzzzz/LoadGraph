@@ -6,73 +6,88 @@
 
 #ifdef PLATFORM_WINDOWS
 #include <windows.h>
+struct IDXGIFactory1;
 #endif
 
 #include <string>
 #include <vector>
+#include <cstdint>
 
-// Forward declaration - will be defined in amd_monitor.cpp
-struct AdlContext;
-
-// AMD GPU monitor — supports Radeon cards via ADL (Windows) and AMD SMI (Linux).
-// Works alongside NVML for mixed NVIDIA/AMD systems.
+/// Мониторинт AMD GPU.
+/// Windows: ADL2 API (atiadlxx.dll грузится динамически), VRAM - через DXGI.
+/// Linux:   sysfs/hwmon драйвера amdgpu (без внешних процессов).
 class AmdMonitor
 {
 public:
     AmdMonitor();
     ~AmdMonitor();
 
-    // Get current GPU metrics for all AMD GPUs.
-    // Returns empty vector if no AMD GPUs found or library unavailable.
+    /// Собрать актуальные метрики всех AMD GPU.
+    /// Пустой вектор, если библиотека/драйвер недоступны или карт нет.
     std::vector<GpuMetrics> GetMetrics();
 
-    // Returns true if ADL/AMD SMI was successfully loaded and at least one GPU found.
+    /// True, если ADL/amdgpu инициализирован и найдена хотя бы одна карта.
     bool IsAvailable() const;
 
 private:
 #ifdef PLATFORM_WINDOWS
+    // ADL2 сигнатуры (adl_sdk.h / adapter.h / overdrive5.h / overdrive6.h).
+    // ADL_CONTEXT_HANDLE - это void*.
+    using FnAdlCreate      = int (*)(void* callback, int iEnumConnectedAdapters, void** ppContext);
+    using FnAdlDestroy     = int (*)(void* pContext);
+    using FnNumAdaptersGet = int (*)(void* pContext, int* lpNumAdapters);
+    using FnAdapterInfoGet = int (*)(void* pContext, void* lpInfo, int iInputSize);
+    using FnActiveGet      = int (*)(void* pContext, int iAdapterIndex, int* lpStatus);
+    using FnOD6StatusGet   = int (*)(void* pContext, int iAdapterIndex, void* lpCurrentStatus);
+    using FnOD5ActivityGet = int (*)(void* pContext, int iAdapterIndex, void* lpActivity);
+    using FnOD6TempGet     = int (*)(void* pContext, int iAdapterIndex, int* lpTemperature);
+    using FnOD5TempGet     = int (*)(void* pContext, int iAdapterIndex, int iThermalControllerIndex, void* lpTemperature);
+    using FnOD6FanGet      = int (*)(void* pContext, int iAdapterIndex, void* lpFanSpeedInfo);
+    using FnOD5FanInfoGet  = int (*)(void* pContext, int iAdapterIndex, int iThermalControllerIndex, void* lpFanSpeedInfo);
+    using FnOD5FanGet      = int (*)(void* pContext, int iAdapterIndex, int iThermalControllerIndex, void* lpFanSpeedValue);
+    using FnOD6PowerGet    = int (*)(void* pContext, int iAdapterIndex, int iPowerType, int* lpCurrentValue);
+    using FnMemInfo2Get    = int (*)(void* pContext, int iAdapterIndex, void* lpMemoryInfo2);
+
     bool LoadAdl();
     void FreeAdl();
     void CollectAdl(std::vector<GpuMetrics>& out);
 
-    // ADL function pointers.
-    using FnADL_Main_Control_Create = int (*)(void** ppAdlContext, int iEnumDevicesVersion);
-    using FnADL_Main_Control_Destroy = int (*)(void* pAdlContext);
-    using FnADL_Overdrive6_GetCurrentActivity = int (*)(void* pAdlContext, int iAdapterIndex, void* lpActivity);
-    using FnADL_Overdrive6_GetTemperature = int (*)(void* pAdlContext, int iAdapterIndex, int iSensorType, float* pfTemp);
-    using FnADL_Overdrive6_GetFanSpeedInfo = int (*)(void* pAdlContext, int iAdapterIndex, void* lpFanSpeedInfo);
-    using FnADL_Overdrive6_GetFanSpeed = int (*)(void* pAdlContext, int iAdapterIndex, void* lpFanSpeed);
-    using FnADL_Overdrive6_SetFanSpeed = int (*)(void* pAdlContext, int iAdapterIndex, void* lpFanSpeed);
-    using FnADL_Adapter_NumberOfAdapters = int (*)(int* adapterCount);
-    using FnADL_Adapter_GetAdapterInfo = int (*)(void* pAdlContext, int iAdapterIndex, void* lpInfo);
-    using FnADL_Overdrive6_GetPowerControlInformation = int (*)(void* pAdlContext, int iAdapterIndex, int iPowerControlType, void* lpPowerControlInformation);
-    using FnADL_Overdrive6_GetMemoryInfo = int (*)(void* pAdlContext, int iAdapterIndex, void* lpMemoryInfo);
-    using FnADL_Overdrive6_GetCurrentClocks = int (*)(void* pAdlContext, int iAdapterIndex, void* lpClocks);
+    /// VRAM по DXGI: ADL не отдает использование видеопамяти, поэтому used
+    /// берется из IDXGIAdapter3::QueryVideoMemoryInfo. Сопоставление адаптеров
+    /// идет по порядковому номеру среди AMD-адаптеров (если их количество
+    /// совпадает), иначе - по объему выделенной памяти.
+    /// Возвращает false, если DXGI недоступен или адаптер не найден.
+    bool QueryVramDXGI(unsigned amdOrdinal, uint64_t adlTotalBytes,
+                       uint64_t& totalBytes, uint64_t& usedBytes);
 
-    HMODULE m_hAdl = nullptr;
-    FnADL_Main_Control_Create m_fnAdlCreate = nullptr;
-    FnADL_Main_Control_Destroy m_fnAdlDestroy = nullptr;
-    FnADL_Overdrive6_GetCurrentActivity m_fnGetActivity = nullptr;
-    FnADL_Overdrive6_GetTemperature m_fnGetTemp = nullptr;
-    FnADL_Overdrive6_GetFanSpeedInfo m_fnGetFanSpeedInfo = nullptr;
-    FnADL_Overdrive6_GetFanSpeed m_fnGetFanSpeed = nullptr;
-    FnADL_Adapter_NumberOfAdapters m_fnGetAdapterCount = nullptr;
-    FnADL_Adapter_GetAdapterInfo m_fnGetAdapterInfo = nullptr;
-    FnADL_Overdrive6_GetMemoryInfo m_fnGetMemoryInfo = nullptr;
-    FnADL_Overdrive6_GetCurrentClocks m_fnGetCurrentClocks = nullptr;
-    FnADL_Overdrive6_GetPowerControlInformation m_fnGetPowerInfo = nullptr;
+    HMODULE          m_hAdl        = nullptr;
+    HMODULE          m_hDxgi       = nullptr;
+    void*            m_adlContext  = nullptr;   // ADL_CONTEXT_HANDLE
+    IDXGIFactory1*   m_dxgiFactory = nullptr;
+
+    FnAdlCreate      m_fnCreate       = nullptr;
+    FnAdlDestroy     m_fnDestroy      = nullptr;
+    FnNumAdaptersGet m_fnNumAdapters  = nullptr;
+    FnAdapterInfoGet m_fnAdapterInfo  = nullptr;
+    FnActiveGet      m_fnActiveGet    = nullptr;
+    FnOD6StatusGet   m_fnOD6Status    = nullptr;
+    FnOD5ActivityGet m_fnOD5Activity  = nullptr;
+    FnOD6TempGet     m_fnOD6Temp      = nullptr;
+    FnOD5TempGet     m_fnOD5Temp      = nullptr;
+    FnOD6FanGet      m_fnOD6Fan       = nullptr;
+    FnOD5FanInfoGet  m_fnOD5FanInfo   = nullptr;
+    FnOD5FanGet      m_fnOD5Fan       = nullptr;
+    FnOD6PowerGet    m_fnOD6Power     = nullptr;
+    FnMemInfo2Get    m_fnMemInfo2     = nullptr;
 #else
-    // Linux: AMD SMI support (via amd-smi command or libamd_smi).
-    bool LoadAmdSmi();
-    void FreeAmdSmi();
-    void CollectAmdSmi(std::vector<GpuMetrics>& out);
-
-    // For future libamd_smi integration.
-    bool m_amdSmiAvailable = false;
+    bool LoadSysfs();
+    void CollectSysfs(std::vector<GpuMetrics>& out);
 #endif
 
-    std::vector<GpuMetrics> m_metrics;
     bool m_available = false;
+#ifdef PLATFORM_WINDOWS
+    bool m_enumLogged = false;   // флаг одноразовой диагностики перечисления ADL
+#endif
 };
 
 #endif // AMD_MONITOR_H
