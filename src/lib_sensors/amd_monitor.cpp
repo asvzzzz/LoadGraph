@@ -832,8 +832,18 @@ std::vector<std::string> ListSubdirs(const std::string& base)
 struct AmdCard
 {
     std::string drmPath;   // /sys/class/drm/cardN/device
+    std::string cardName;  // cardN
     std::string bdf;       // PCI address like 0000:01:00.0 (may be empty)
+    std::string device;    // PCI device ID, "0xabcd"
+    std::string driver;    // имя драйвера из device/driver (radeon/amdgpu/...)
+    int cardIndex;         // числовой индекс DRM-драйвера, -1 если неизвестен
 };
+
+/// Имя драйвера DRM-карты: basename симлинка device/driver. Пусто при ошибке.
+std::string GetDriverName(const std::string& devPath)
+{
+    return LinkBaseName(devPath + "/driver");
+}
 
 /// Найти все DRM-карты AMD (vendor 0x1002) в /sys/class/drm.
 std::vector<AmdCard> ScanAmdCards()
@@ -844,7 +854,7 @@ std::vector<AmdCard> ScanAmdCards()
     for (const std::string& entry : ListSubdirs(drmRoot))
     {
         // Интересуют только карточки вида cardN (ports cardN-OutputN пропускаем).
-        if (entry.compare(0, 4, "card") != 0)
+        if (entry.compare(0, 4, "card") != 0 || entry.size() <= 4)
             continue;
         bool digitsOnly = true;
         for (size_t i = 4; i < entry.size(); ++i)
@@ -867,7 +877,19 @@ std::vector<AmdCard> ScanAmdCards()
 
         AmdCard card;
         card.drmPath = devPath;
+        card.cardName = entry;
         card.bdf = LinkBaseName(devPath);
+        card.driver = GetDriverName(devPath);
+        ReadSysfsStr(devPath + "/device", card.device);
+
+        // Числовой индекс DRM-драйвера (нужен для путей debugfs).
+        card.cardIndex = -1;
+        errno = 0;
+        char* end = nullptr;
+        long idx = strtol(entry.c_str() + 4, &end, 10);
+        if (errno == 0 && end && *end == '\0' && idx >= 0 && idx <= 64)
+            card.cardIndex = static_cast<int>(idx);
+
         cards.push_back(card);
     }
     return cards;
@@ -904,9 +926,9 @@ std::vector<std::string> FindHwmonDirsForCard(const std::string& drmPath)
         std::string name;
         if (!ReadSysfsStr(hdir + "/name", name))
             continue;
-        // Драйвер amdgpu регистрирует hwmon с именем "amdgpu"
-        // (на старых ядрах - "gfx").
-        if (name != "amdgpu" && name != "gfx")
+        // Имена hwmon-устройств драйверов: amdgpu ("amdgpu"/"gfx")
+        // и radeon ("radeon").
+        if (name != "amdgpu" && name != "gfx" && name != "radeon")
             continue;
         const std::string hReal = RealPath(hdir);
         if (hReal.size() > devReal.size() &&
@@ -931,6 +953,111 @@ bool ReadHwmonLL(const std::vector<std::string>& dirs, const char* fileName,
     return false;
 }
 
+/// Существует ли файл/каталог (для диагностики доступности сенсоров).
+bool HasFile(const std::string& path)
+{
+    return access(path.c_str(), F_OK) == 0;
+}
+
+// ---------------------------------------------------------------------------
+// Имя модели из системной базы pci.ids (когда драйвер его не отдает).
+// Формат базы: "V vvvv  Vendor Name", " dddd  Device Name" (4 hex цифры),
+// классы "C class" и строки-продолжения (" \t...") пропускаются, строки
+// комментариев "#" не прерывают секцию вендора.
+// ---------------------------------------------------------------------------
+
+/// Каталоги pci.ids в распространённых дистрибутивах.
+const char* const PCI_IDS_PATHS[] = {
+    "/usr/share/misc/pci.ids",       // Debian/Ubuntu
+    "/usr/share/hwdata/pci.ids",     // Fedora/openSUSE
+};
+
+/// "Ellesmere [Radeon RX 470/480/580/588]" -> "Radeon RX 470/480/580/588".
+std::string PolishPciName(const std::string& raw)
+{
+    const size_t lb = raw.find('[');
+    const size_t rb = raw.rfind(']');
+    if (lb != std::string::npos && rb != std::string::npos && rb > lb + 1)
+    {
+        std::string inner = Trim(raw.substr(lb + 1, rb - lb - 1));
+        if (!inner.empty())
+            return inner;
+    }
+    return Trim(raw);
+}
+
+/// Имя PCI-устройства по vendor:device из pci.ids. Пусто, если базы нет.
+/// Только чтение файлов - внешних процессов не запускается.
+std::string PciIdsName(const std::string& deviceId)
+{
+    if (deviceId.compare(0, 2, "0x") != 0 || deviceId.size() < 6)
+        return "";
+    std::string wantDev = deviceId.substr(2);
+    for (size_t i = 0; i < wantDev.size(); ++i)
+    {
+        if (wantDev[i] >= 'A' && wantDev[i] <= 'F')
+            wantDev[i] = static_cast<char>(wantDev[i] - 'A' + 'a');
+    }
+
+    for (const char* idsPath : PCI_IDS_PATHS)
+    {
+        FILE* f = fopen(idsPath, "r");
+        if (!f)
+            continue;
+
+        bool inAmd = false;
+        std::string result;
+        char line[512];
+        while (fgets(line, sizeof(line), f))
+        {
+            if (line[0] == '\t')
+            {
+                if (!inAmd)
+                    continue;
+                // Класс-подкласс ("C ...") и продолжения (" ...") - мимо.
+                if (line[1] == 'C' || line[1] == ' ')
+                    continue;
+                // Подсистемные строки ("\t\tvvvv dddd ...") - тоже мимо:
+                // ID устройства стоит сразу после одного таба.
+                if (line[2] == '\t')
+                    continue;
+                auto isHex = [](char c) {
+                    return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') ||
+                           (c >= 'A' && c <= 'F');
+                };
+                if (!isHex(line[1]) || !isHex(line[2]) || !isHex(line[3]) || !isHex(line[4]))
+                    continue;
+                // ID устройства - ровно 4 hex цифры после одного таба.
+                char idBuf[8];
+                for (int k = 0; k < 4; ++k)
+                {
+                    idBuf[k] = (line[1 + k] >= 'A' && line[1 + k] <= 'F')
+                        ? static_cast<char>(line[1 + k] - 'A' + 'a')
+                        : line[1 + k];
+                }
+                idBuf[4] = '\0';
+                if (wantDev == idBuf)
+                {
+                    size_t p = 5;
+                    while (p < sizeof(line) && (line[p] == ' ' || line[p] == '\t'))
+                        ++p;
+                    result = Trim(line + p);
+                    break;
+                }
+                continue;
+            }
+            // Строка вендора: "vvvv  Name". Секция AMD - 1002.
+            // Комментарии "#" внутри блока устройств не прерывают секцию.
+            if (line[0] != '#')
+                inAmd = (strncmp(line, "1002", 4) == 0);
+        }
+        fclose(f);
+        if (!result.empty())
+            return PolishPciName(result);
+    }
+    return "";
+}
+
 } // namespace
 
 bool AmdMonitor::LoadSysfs()
@@ -938,10 +1065,70 @@ bool AmdMonitor::LoadSysfs()
     std::vector<AmdCard> cards = ScanAmdCards();
     if (cards.empty())
     {
-        LOGI("AMD: No AMD GPU found in /sys/class/drm (amdgpu driver missing?).");
+        LOGI("AMD: No AMD GPU found in /sys/class/drm (amdgpu/radeon driver missing?).");
         return false;
     }
     LOGI("AMD: Found %zu AMD card(s) via amdgpu sysfs.", cards.size());
+
+    // Подробная диагностика окружения (один раз при старте): драйвер, PCI ID,
+    // наличие каждого нужного файла. Позволяет по логу определить, какие
+    // сенсоры драйвер реально не предоставляет, а какие недоступны по пути.
+    for (const AmdCard& card : cards)
+    {
+        LOGI("AMD diag: card '%s' dev='%s' path=%s bdf='%s' driver='%s'",
+             card.cardName.c_str(), card.device.c_str(), card.drmPath.c_str(),
+             card.bdf.c_str(), card.driver.c_str());
+
+        std::string p;
+        std::string pretty;
+        ReadSysfsStr(card.drmPath + "/product_name", p);
+        ReadSysfsStr(card.drmPath + "/pretty_name", pretty);
+        long long vramTotal = -1;
+        ReadSysfsLL(card.drmPath + "/mem_info_vram_total", vramTotal);
+        LOGI("AMD diag: product_name='%s' pretty_name='%s' vram_total=%lld",
+             p.c_str(), pretty.c_str(), vramTotal);
+
+        const std::vector<std::string> hwDirs = FindHwmonDirsForCard(card.drmPath);
+        if (hwDirs.empty())
+        {
+            LOGI("AMD diag: no hwmon dirs for this card");
+        }
+        for (const std::string& h : hwDirs)
+        {
+            std::string hwName;
+            ReadSysfsStr(h + "/name", hwName);
+            LOGI("AMD diag: hwmon dir=%s name='%s'", h.c_str(), hwName.c_str());
+            std::string files;
+            for (const std::string& e : ListSubdirs(h))
+                files += " " + e;
+            if (!files.empty())
+                LOGI("AMD diag: hwmon files:%s", files.c_str());
+        }
+
+        // Итоговый список того, что код пытается читать.
+        bool busy = HasFile(card.drmPath + "/gpu_busy_percent");
+        bool hasHwmonFile[8] = {};
+        const char* hwFiles[8] = {"temp1_input", "fan1_input", "pwm1",
+                                  "power1_average", "power1_input", "power1_cap",
+                                  "freq1_input", "freq2_input"};
+        for (const std::string& h : hwDirs)
+        {
+            for (int i = 0; i < 8; ++i)
+            {
+                if (HasFile(h + "/" + hwFiles[i]))
+                    hasHwmonFile[i] = true;
+            }
+        }
+        LOGI("AMD diag: sensors busy=%d vram_total=%d vram_used=%d temp1=%d "
+             "fan1=%d pwm1=%d pwr_avg=%d pwr_in=%d pwr_cap=%d freq1=%d freq2=%d",
+             busy ? 1 : 0,
+             HasFile(card.drmPath + "/mem_info_vram_total") ? 1 : 0,
+             HasFile(card.drmPath + "/mem_info_vram_used") ? 1 : 0,
+             hasHwmonFile[0] ? 1 : 0, hasHwmonFile[1] ? 1 : 0,
+             hasHwmonFile[2] ? 1 : 0, hasHwmonFile[3] ? 1 : 0,
+             hasHwmonFile[4] ? 1 : 0, hasHwmonFile[5] ? 1 : 0,
+             hasHwmonFile[6] ? 1 : 0, hasHwmonFile[7] ? 1 : 0);
+    }
 
     // Одноразовый диагностический вывод первых значений.
     std::vector<GpuMetrics> probe;
@@ -970,18 +1157,34 @@ void AmdMonitor::CollectSysfs(std::vector<GpuMetrics>& out)
         // GUI скрывает график вместо честного на вид, но лживого "0%".
         gm.loadPercent = -1.0;
 
-        // Имя модели.
+        // Имя модели: product_name/pretty_name дает amdgpu с powerplay.
+        // radeon и старый amdgpu их не экспортируют - берем модель из
+        // системной базы pci.ids по PCI device ID, это штатный файл дистрибутива.
         std::string name;
         if (!ReadSysfsStr(card.drmPath + "/product_name", name) &&
             !ReadSysfsStr(card.drmPath + "/pretty_name", name))
         {
-            name = "AMD GPU";
+            name = PciIdsName(card.device);
         }
+        if (name.empty() && !card.device.empty())
+        {
+            LOGI("AMD: pci.ids has no entry for device %s.", card.device.c_str());
+        }
+        if (name.empty())
+            name = "AMD GPU";
         gm.name = name;
 
-        // Загрузка GPU, %.
+        // Загрузка GPU, %. amdgpu отдает gpu_busy_percent в sysfs устройства;
+        // radeon - только в debugfs (доступен лишь root, при обычном запуске
+        // чтение молча не удаётся и загрузка остается N/A).
         long long busy = 0;
-        if (ReadSysfsLL(card.drmPath + "/gpu_busy_percent", busy))
+        bool busyOk = ReadSysfsLL(card.drmPath + "/gpu_busy_percent", busy);
+        if (!busyOk && card.cardIndex >= 0)
+        {
+            busyOk = ReadSysfsLL("/sys/kernel/debug/dri/" + std::to_string(card.cardIndex) +
+                                 "/gpu_busy_percent", busy);
+        }
+        if (busyOk)
         {
             if (busy < 0) busy = 0;
             if (busy > 100) busy = 100;
