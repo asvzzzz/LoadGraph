@@ -11,6 +11,7 @@ struct IDXGIFactory1;
 
 #include <string>
 #include <vector>
+#include <map>
 #include <cstdint>
 
 /// Мониторинт AMD GPU.
@@ -82,6 +83,11 @@ private:
 #else
     bool LoadSysfs();
     void CollectSysfs(std::vector<GpuMetrics>& out);
+
+    /// Кэш имени модели из pci.ids по PCI device ID. Разбор базы (~1 МБ
+    /// текста) делается один раз на ID, чтобы опрос раз в секунду не читал
+    /// файл. Кэш трогает только поток опроса (GpuMonitor::Collect), гонок нет.
+    std::map<std::string, std::string> m_pciNameCache;
 #endif
 
     bool m_available = false;

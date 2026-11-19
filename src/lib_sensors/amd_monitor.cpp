@@ -1164,11 +1164,16 @@ void AmdMonitor::CollectSysfs(std::vector<GpuMetrics>& out)
         if (!ReadSysfsStr(card.drmPath + "/product_name", name) &&
             !ReadSysfsStr(card.drmPath + "/pretty_name", name))
         {
-            name = PciIdsName(card.device);
-        }
-        if (name.empty() && !card.device.empty())
-        {
-            LOGI("AMD: pci.ids has no entry for device %s.", card.device.c_str());
+            // База разбирается один раз на PCI ID - см. m_pciNameCache.
+            std::map<std::string, std::string>::iterator it = m_pciNameCache.find(card.device);
+            if (it == m_pciNameCache.end())
+            {
+                const std::string resolved = PciIdsName(card.device);
+                it = m_pciNameCache.insert(std::make_pair(card.device, resolved)).first;
+                if (resolved.empty() && !card.device.empty())
+                    LOGI("AMD: pci.ids has no entry for device %s.", card.device.c_str());
+            }
+            name = it->second;
         }
         if (name.empty())
             name = "AMD GPU";
