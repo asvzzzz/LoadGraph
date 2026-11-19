@@ -27,6 +27,10 @@ private:
     // Close handler - saves window position/size to registry before closing.
     void OnClose(wxCloseEvent& evt);
 
+    // File -> Exit handler. Needed because window-manager close requests are
+    // not always delivered (WSLg/msrdc caption buttons can stop responding).
+    void OnExitMenu(wxCommandEvent& evt);
+
     // Size handler.
     void OnSize(wxSizeEvent& evt);
 

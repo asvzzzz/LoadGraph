@@ -260,6 +260,8 @@ endif()
 # ============================================================================
 set(GUI_SOURCES
     src/main.cpp
+    src/app_signals.h
+    src/app_signals.cpp
     src/main_frame.h
     src/main_frame.cpp
     src/graph_panel.h

@@ -5,6 +5,7 @@
 #include "metrics_api.h"
 #include "storage_monitor.h"
 #include "app_config.h"
+#include "app_signals.h"
 #include <wx/display.h>
 #include <wx/dcbuffer.h>
 #include <wx/graphics.h>
@@ -18,6 +19,7 @@ wxBEGIN_EVENT_TABLE(MainFrame, wxFrame)
     EVT_TIMER(wxID_ANY, MainFrame::OnTimer)
     EVT_CLOSE(MainFrame::OnClose)
     EVT_SIZE(MainFrame::OnSize)
+    EVT_MENU(wxID_EXIT, MainFrame::OnExitMenu)
 wxEND_EVENT_TABLE()
 
 // Parse a 6-char hex color string (e.g. "76B900") into wxColour.
@@ -128,6 +130,15 @@ MainFrame::MainFrame(const wxString& title, const AppConfig& cfg)
 	const std::map<std::string, bool>& initialState = m_cfg.view_menu;
 
 	wxMenuBar* menuBar = new wxMenuBar();
+
+	// File menu first: it carries the only in-app way to quit. A window manager
+	// close request is not guaranteed to arrive (under WSLg the caption is drawn
+	// by msrdc and its buttons can stop reacting), so "Exit" plus Ctrl+Q must
+	// exist on both platforms.
+	wxMenu* fileMenu = new wxMenu();
+	fileMenu->Append(wxID_EXIT, "Exit\tCtrl+Q");
+	menuBar->Append(fileMenu, "&File");
+
 	BuildViewMenu(menuBar, initialState);
 	SetMenuBar(menuBar);
 
@@ -672,6 +683,18 @@ void MainFrame::ApplyHeightAdjustment(const std::string& key, bool showingItem)
 
 void MainFrame::OnTimer(wxTimerEvent&)
 {
+	// A shutdown signal (Ctrl+C, pkill, terminal or WSL session closed) closes
+	// the window through the normal path instead of terminating the process, so
+	// the config save and the sensor thread joins still happen. The delay is
+	// bounded by the 1000 ms timer interval.
+	const int sig = PollShutdownSignal();
+	if (sig != 0)
+	{
+		LOGI("Shutdown signal %d received, closing window.", sig);
+		Close();
+		return;
+	}
+
 	if (!m_uiCreated) return;
 
 	CpuData  cpu{};
@@ -757,6 +780,14 @@ void MainFrame::OnClose(wxCloseEvent& evt)
 	MetricsShutdown();
 
 	evt.Skip();
+}
+
+void MainFrame::OnExitMenu(wxCommandEvent&)
+{
+	// Same path as the caption close button: OnClose() persists the window
+	// geometry, stops the update timer and shuts the sensors down, then the
+	// event loop exits because no top level window is left.
+	Close();
 }
 
 // Recursively unite the rectangles (m_content coordinates) of all shown

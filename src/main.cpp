@@ -5,6 +5,7 @@
 #include "metrics_api.h"
 #include "http_server.h"
 #include "app_config.h"
+#include "app_signals.h"
 #include <cstdio>
 #include <cstdlib>
 
@@ -89,6 +90,10 @@ public:
 
 #ifdef PLATFORM_LINUX
         signal(SIGSEGV, CrashHandler);
+        // Ctrl+C / pkill / terminal close must not kill the process directly:
+        // the handler only records the signal, the GUI timer turns it into a
+        // normal window close so OnClose() saves config and stops the sensors.
+        InstallShutdownSignals();
 #endif
 
         // Parse command-line arguments before logging.
