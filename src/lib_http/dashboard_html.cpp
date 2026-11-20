@@ -14,7 +14,9 @@ static const char* kHtmlPageHead = R"(<!DOCTYPE html>
                font-family: Consolas, monospace; overflow: hidden; }
   body { display: flex; flex-direction: column; padding: 12px; gap: 8px; }
 
-  h1 { color: var(--c-cpu-title, #76B900); font-size: 18px; flex: 0 0 auto; }
+  /* Same font size/weight as .gpu-title - CPU name and GPU titles must look
+     identical; only the color differs. */
+  h1 { color: var(--c-cpu-title, #76B900); font-size: 13px; flex: 0 0 auto; }
   .cpu-name { color: var(--c-cpu-name, #00bcd4); }
   .gpu-title { color: var(--c-cpu-title, #76B900); font-size: 13px; font-weight: bold;
                flex: 0 0 auto; white-space: nowrap; overflow: hidden;
@@ -63,7 +65,7 @@ static const char* kHtmlPageHead = R"(<!DOCTYPE html>
 </style>
 <script>window.__CFG={color:{cpuLoad:'%CPU_LOAD%',cpuTemp:'%CPU_TEMP%',cpuPower:'%CPU_POWER%',ram:'%RAM%',gpuLoad:'%GPU_LOAD%',gpuTemp:'%GPU_TEMP%',gpuVram:'%GPU_VRAM%',gpuFan:'%GPU_FAN%',gpuPower:'%GPU_POWER%',totalPower:'%TOTAL_POWER%'}};</script>
 </head>)";
-// Split into two literals to avoid MSVC C2026 on large raw strings.
+// Split into several literals to avoid MSVC C2026 on large raw strings.
 static const char* kHtmlPageBody1 = R"(<body>
 <h1><span id="cpuName" class="cpu-name"></span></h1>
 <div id="connWarn">Warning -- retrying...</div>
@@ -327,6 +329,11 @@ function updateGpu(d) {
                       '<canvas id="'+fCanvas+'" class="chart"></canvas>';
       sec.appendChild(row);
     }
+)";
+// Third chunk: MSVC rejects a single raw string over ~16 KB (C2026), so the
+// page script is kept in two literals and joined once in GetHtmlBody(). The
+// split is only at a line boundary, the resulting text is byte-identical.
+static const char* kHtmlPageBody3 = R"(
 
     // Row 1: Load | Temp.
     addSideBySide('Load','gpu'+i+'LoadVal','gpu'+i+'LoadChart',
@@ -378,40 +385,97 @@ function updateGpu(d) {
   }
 }
 
-// ── Flex layout - distributes free space among sections proportionally ---
-function countVisibleRows(el) {
-    void el.offsetHeight;   // force layout so offsetParent is accurate
-    var n = 0;
-    el.querySelectorAll(':scope > .chart-row, :scope > .full-row').forEach(function(r) {
-        if (r.offsetParent !== null) n++;
-    });
-    return n;
+// -- Exact layout: every chart gets the SAME pixel height. The free height of
+// .content is described by  F = sum(rows_i*(label+H) + overhead_i) + gaps,
+// where overhead_i is what a section spends on everything that is not a chart
+// (padding, GPU title strip, inner row gaps). Solving this for H and writing
+// the result as an explicit flex-basis makes all charts identical. Plain
+// proportional flex-grow cannot do it: it scales the fixed overheads too, so
+// sections with fewer rows (CPU, Total Power) got taller charts than GPUs.
+function cssNum(v) {                 // "8px" -> 8, anything else -> 0
+    var n = parseFloat(v);
+    return isFinite(n) ? n : 0;
 }
 
-function setFlex(el, grow) {
-    if (grow <= 0) return;
-    el.style.flexGrow   = String(grow);
-    el.style.flexShrink = '1';
-    el.style.flexBasis  = '0';
+// Geometry of one section: number of visible chart rows and the height it
+// spends on non-chart content. offsetParent is null for hidden rows/sections.
+function blockInfo(sec) {
+    void sec.offsetHeight;                        // force layout
+    var cs = getComputedStyle(sec);
+    var pad = cssNum(cs.paddingTop) + cssNum(cs.paddingBottom);
+    var gap = cssNum(cs.rowGap);
+    var rows = 0, items = 0;
+    sec.querySelectorAll(':scope > .chart-row, :scope > .full-row').forEach(function(r) {
+        if (r.offsetParent === null) return;
+        rows++; items++;
+    });
+    var t = sec.querySelector(':scope > .gpu-title');
+    var titleH = (t && t.offsetHeight > 0) ? t.offsetHeight : 0;
+    if (titleH > 0) items++;
+    var oh = pad + titleH + (items > 1 ? (items - 1) * gap : 0);
+    return { rows: rows, oh: oh };
+}
+
+// A group is one direct child of .content (CPU section, GPU container, Total
+// Power section). GPU container holds several cards, so it is a group of parts
+// whose heights must add up to the group height plus the gaps between them.
+function groupOf(el) {
+    var info = blockInfo(el);
+    return el && info.rows > 0 ? { el: el, rows: info.rows, oh: info.oh, parts: [] } : null;
 }
 
 function updateFlex() {
-    var cpuSec = document.getElementById('cpuSection');
-    if (cpuSec) setFlex(cpuSec, countVisibleRows(cpuSec));
+    var content = document.querySelector('.content');
+    if (!content) return;
+    void content.offsetHeight;
+    var F = content.clientHeight;         // free space, independent of children
+    if (F <= 0) return;                   // layout not ready (page just loaded)
+
+    var valH = 18;                        // .val-row fixed height
+    var v = document.querySelector('#cpuSection .val-row');
+    if (v && v.offsetHeight > 0) valH = v.offsetHeight;
+
+    var groups = [];
+
+    var g = groupOf(document.getElementById('cpuSection'));
+    if (g) groups.push(g);
 
     var gpuDiv = document.getElementById('gpuSections');
-    var gpuTotal = 0;
-    gpuDiv.querySelectorAll(':scope > .gpu-section').forEach(function(gs) {
-        var n = countVisibleRows(gs);
-        setFlex(gs, n);
-        gpuTotal += n;
-    });
-    if (gpuTotal > 0) setFlex(gpuDiv, gpuTotal);
-
-    var totalSec = document.getElementById('totalPowerSection');
-    if (totalSec && totalSec.style.display !== 'none') {
-        setFlex(totalSec, countVisibleRows(totalSec));
+    if (gpuDiv && gpuDiv.offsetParent !== null) {
+        var parts = [];
+        gpuDiv.querySelectorAll(':scope > .gpu-section').forEach(function(gs) {
+            var gi = blockInfo(gs);
+            if (gi.rows > 0) parts.push({ el: gs, rows: gi.rows, oh: gi.oh });
+        });
+        if (parts.length > 0) {
+            var ggap = cssNum(getComputedStyle(gpuDiv).rowGap) * (parts.length - 1);
+            var rows = 0, oh = ggap;
+            parts.forEach(function(p) { rows += p.rows; oh += p.oh; });
+            groups.push({ el: gpuDiv, rows: rows, oh: oh, parts: parts });
+        }
     }
+
+    g = groupOf(document.getElementById('totalPowerSection'));
+    if (g) groups.push(g);
+
+    var totalRows = 0, fixed = 0;
+    groups.forEach(function(gr) { totalRows += gr.rows; fixed += gr.oh; });
+    fixed += cssNum(getComputedStyle(content).rowGap) * Math.max(0, groups.length - 1);
+    if (totalRows <= 0) return;
+
+    // One common chart height: what is left after every label row, every
+    // section overhead and every container gap is shared by all chart rows.
+    // Clamped so a tiny window cannot produce a negative basis (sections then
+    // shrink together, still without scrollbars).
+    var H = (F - fixed) / totalRows - valH;
+    if (H < 4) H = 4;
+
+    groups.forEach(function(gr) {
+        gr.el.style.flex = '0 1 ' + (gr.rows * (valH + H) + gr.oh) + 'px';
+        gr.parts.forEach(function(p) {
+            p.el.style.flex = '0 1 ' + (p.rows * (valH + H) + p.oh) + 'px';
+        });
+    });
 }
 
 function redrawAll() {
@@ -422,7 +486,17 @@ function redrawAll() {
         .filter(function(c) { return c && typeof c.draw === 'function'; })
         .forEach(function(c) { c.draw(); });
 }
-window.addEventListener('resize', redrawAll);
+// The layout uses explicit pixel flex-basis, so it must be recomputed when the
+// available height changes (window resize, GPU card appearing). Watching
+// .content is enough: its own size is set by the body, not by its children, so
+// updateFlex() inside the observer cannot feed itself back.
+if (typeof ResizeObserver !== 'undefined') {
+    var layoutRO = new ResizeObserver(function () { updateFlex(); redrawAll(); });
+    var contentEl = document.querySelector('.content');
+    if (contentEl) layoutRO.observe(contentEl);
+} else {
+    window.addEventListener('resize', function () { updateFlex(); redrawAll(); });
+}
 
 // ── Fetch & refresh ───────────────────────────────────────────────────────
 var connLost = false;
@@ -469,7 +543,8 @@ fetchMetrics();
 
 std::string GetHtmlBody()
 {
-    static const std::string s = std::string(kHtmlPageBody1) + kHtmlPageBody2;
+    static const std::string s =
+        std::string(kHtmlPageBody1) + kHtmlPageBody2 + kHtmlPageBody3;
     return s;
 }
 
