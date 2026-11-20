@@ -43,7 +43,10 @@ struct AppConfig
     std::map<std::string, bool> view_menu;
 };
 
-// Load config from <cwd>/loadgraph.cfg. Creates file with defaults if missing.
+// Load config from the per-user config directory (same layout on both OS):
+//   Windows: %USERPROFILE%\.config\loadgraph\loadgraph.cfg
+//   Linux:   $XDG_CONFIG_HOME/loadgraph/loadgraph.cfg (default ~/.config/...)
+// The directory is created on demand; the file is created with defaults if missing.
 AppConfig LoadAppConfig();
 
 // Serialize current AppConfig back to loadgraph.cfg (call after user edits).
