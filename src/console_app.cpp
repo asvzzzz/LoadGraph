@@ -16,6 +16,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <cstdint>
+#include <atomic>
 #include <ctime>
 #include <thread>
 #include <chrono>
@@ -140,10 +141,17 @@ static std::string ClassifyGpuLoad(double load, double temp, double power, doubl
 }
 
 // ============================================================================
-// JSONL logger — append one line per snapshot for easy parsing and diffing.
+// JSONL logger - append one line per snapshot for easy parsing and diffing.
 // Format: {"timestamp":"...","cpu":{...},"gpus":[...]}
-// Reopens file on each write to avoid lock issues.
+// Reopens file on each write to avoid lock issues. The first snapshot of a run
+// rewrites the file (mode "w"), so loadgraph.jsonl holds only the current
+// session - same fresh-per-run behavior as loadgraph.log.
 // ============================================================================
+
+// Cleared after the first successful write of this process. Only touched by
+// the single TTY loop thread, atomic keeps it race-free by construction.
+static std::atomic<bool> s_jsonlFreshWrite{true};
+
 static void LogJsonlSnapshot(const std::string& logPath,
                               const CpuMetrics& cpu,
                               const RamMetrics& ram,
@@ -197,17 +205,22 @@ static void LogJsonlSnapshot(const std::string& logPath,
 
     json += "]}";
 
-    // Append to file.
+    // Write to file: the first snapshot of this run truncates it, the rest
+    // append. The fresh flag is cleared only after a successful write, so a
+    // failed open does not turn the next attempt into an append over the old
+    // file of the previous run.
+    const bool fresh = s_jsonlFreshWrite.load();
     FILE* fp = nullptr;
 #ifdef PLATFORM_WINDOWS
-    fopen_s(&fp, logPath.c_str(), "a");
+    fopen_s(&fp, logPath.c_str(), fresh ? "w" : "a");
 #else
-    fp = fopen(logPath.c_str(), "a");
+    fp = fopen(logPath.c_str(), fresh ? "w" : "a");
 #endif
     if (fp)
     {
         fprintf(fp, "%s\n", json.c_str());
         fclose(fp);
+        s_jsonlFreshWrite.store(false);
     }
 }
 

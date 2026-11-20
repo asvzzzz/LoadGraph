@@ -9,10 +9,14 @@
 class Logger
 {
 public:
+    // Opens the log file, discarding the previous run's contents: mode "w"
+    // truncates the file in place, so after a restart only the current session
+    // is logged and the file never disappears. Note that two simultaneously
+    // running instances truncate each other - last startup wins.
     static void Init(const char* filename)
     {
         if (s_file) fclose(s_file);
-        s_file = fopen(filename, "a");
+        s_file = fopen(filename, "w");
         if (!s_file)
             fprintf(stderr, "LoadGraph: cannot open %s for logging\n", filename);
     }

@@ -77,7 +77,7 @@ Features:
 - **Colored output** — reads colors from `loadgraph.cfg`; Windows uses WinAPI console colors, Linux uses ANSI escape sequences
 - **UTF-8 progress bars** — Unicode block characters (`░` empty, `█` filled) on both platforms
 - **Optional HTTP server** — pass `-port 9115` to serve the web dashboard alongside the TTY display
-- **File logging** — appends `loadgraph.jsonl` snapshots to the config directory when `"log_file": true` in config
+- **File logging** — writes `loadgraph.jsonl` snapshots to the config directory when `"log_file": true` in config (one file per run: the first snapshot rewrites it)
 
 ### Screenshots
 
@@ -171,7 +171,7 @@ All settings are stored in a single `loadgraph.cfg` JSON file, in the same per-u
 - **Windows**: `%USERPROFILE%\.config\loadgraph\loadgraph.cfg`
 - **Linux**: `$XDG_CONFIG_HOME/loadgraph/loadgraph.cfg` (defaults to `~/.config/loadgraph/loadgraph.cfg`)
 
-`loadgraph.log` (GUI) and `loadgraph.jsonl` (console) are written to that same directory — nothing is placed next to the executable.
+`loadgraph.log` (GUI) and `loadgraph.jsonl` (console) are written to that same directory — nothing is placed next to the executable. Both are recreated on every start: the previous run's contents are discarded.
 
 ```jsonc
 {
@@ -221,7 +221,7 @@ src/
   theme_linux.cpp           # Linux — GTK_THEME, XDG_CURRENT_DESKTOP, gsettings 30 s cache
   app_config.h/cpp          # AppConfig struct + JSON parser/emitter for loadgraph.cfg
   http_server.{h,cpp}       # cross-platform HTTP server + web dashboard HTML
-  logger.{h,cpp}            # file logger (loadgraph.log in the config directory; stderr fallback on fopen fail)
+  logger.{h,cpp}            # file logger (loadgraph.log in the config directory, recreated on each start; stderr fallback on fopen fail)
   platform.h                # PLATFORM_WINDOWS / PLATFORM_LINUX, ReadFileToString, mkdir -p helper
 ```
 
