@@ -65,7 +65,7 @@ static const char* kHtmlPageHead = R"(<!DOCTYPE html>
 </head>)";
 // Split into two literals to avoid MSVC C2026 on large raw strings.
 static const char* kHtmlPageBody1 = R"(<body>
-<h1>LoadGraph <span id="cpuName" class="cpu-name"></span></h1>
+<h1><span id="cpuName" class="cpu-name"></span></h1>
 <div id="connWarn">Warning -- retrying...</div>
 <div class="content">
 
