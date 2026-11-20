@@ -6,6 +6,7 @@
 #include "storage_monitor.h"
 #include "app_config.h"
 #include "app_signals.h"
+#include "http_server.h"
 #include <wx/display.h>
 #include <wx/dcbuffer.h>
 #include <wx/graphics.h>
@@ -20,6 +21,7 @@ wxBEGIN_EVENT_TABLE(MainFrame, wxFrame)
     EVT_CLOSE(MainFrame::OnClose)
     EVT_SIZE(MainFrame::OnSize)
     EVT_MENU(wxID_EXIT, MainFrame::OnExitMenu)
+    EVT_MENU(ID_HTTP_TOGGLE, MainFrame::OnHttpToggle)
 wxEND_EVENT_TABLE()
 
 // Parse a 6-char hex color string (e.g. "76B900") into wxColour.
@@ -136,6 +138,13 @@ MainFrame::MainFrame(const wxString& title, const AppConfig& cfg)
 	// by msrdc and its buttons can stop reacting), so "Exit" plus Ctrl+Q must
 	// exist on both platforms.
 	wxMenu* fileMenu = new wxMenu();
+	// Checkable toggle for the web dashboard (http://localhost:<port>).
+	// Initial state mirrors what the startup config did in main.cpp.
+	wxMenuItem* httpItem = fileMenu->AppendCheckItem(
+		ID_HTTP_TOGGLE,
+		wxString::Format("HTTP server (port %d)\tCtrl+H", m_cfg.http_port));
+	httpItem->Check(IsHttpServerRunning());
+	fileMenu->AppendSeparator();
 	fileMenu->Append(wxID_EXIT, "Exit\tCtrl+Q");
 	menuBar->Append(fileMenu, "&File");
 
@@ -784,6 +793,9 @@ void MainFrame::OnClose(wxCloseEvent& evt)
 	SaveAppConfig(m_cfg);
 
 	if (m_timer.IsRunning()) m_timer.Stop();
+	// Join the HTTP server thread before exiting: the global std::thread in
+	// lib_http must not be destroyed while still joinable (std::terminate).
+	StopHttpServer();
 	MetricsShutdown();
 
 	evt.Skip();
@@ -795,6 +807,36 @@ void MainFrame::OnExitMenu(wxCommandEvent&)
 	// geometry, stops the update timer and shuts the sensors down, then the
 	// event loop exits because no top level window is left.
 	Close();
+}
+
+void MainFrame::OnHttpToggle(wxCommandEvent&)
+{
+	// StopHttpServer() may block up to ~1 s (accept loop select timeout)
+	// plus finishing one in-flight response - acceptable for a menu click.
+	if (IsHttpServerRunning())
+	{
+		StopHttpServer();
+		m_cfg.http_enabled = false;
+		LOGI("HTTP server stopped (File menu).");
+	}
+	else
+	{
+		// bind() happens synchronously inside StartHttpServer, so a port
+		// conflict is known right here and the check state stays honest.
+		m_cfg.http_enabled = StartHttpServer(m_cfg);
+		if (m_cfg.http_enabled)
+			LOGI("HTTP server started on port %d (File menu).", m_cfg.http_port);
+		else
+			LOGI("HTTP server failed to start on port %d (File menu).", m_cfg.http_port);
+	}
+	SaveAppConfig(m_cfg);
+
+	wxMenuBar* mb = GetMenuBar();
+	if (mb)
+	{
+		wxMenuItem* mi = mb->FindItem(ID_HTTP_TOGGLE);
+		if (mi) mi->Check(m_cfg.http_enabled);
+	}
 }
 
 // Recursively unite the rectangles (m_content coordinates) of all shown

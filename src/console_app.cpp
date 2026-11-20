@@ -48,6 +48,9 @@
 #include "msr_sensor.h"
 #endif
 
+// Set once if StartHttpServer() failed (bind error), for the status line.
+static bool g_ttyHttpStartFailed = false;
+
 // ============================================================================
 // Helpers
 // ============================================================================
@@ -320,8 +323,8 @@ static std::string BuildFrame(const CpuMetrics& cpu, const RamMetrics& ram,
 #ifdef PLATFORM_WINDOWS
     // HTTP status
     {
-        bool httpStarted = false, httpFailed = false;
-        GetHttpStatus(httpStarted, httpFailed);
+        bool httpStarted = IsHttpServerRunning();
+        bool httpFailed  = g_ttyHttpStartFailed && !httpStarted;
         std::string httpTag;
         if (cfg.http_enabled)
             httpTag = httpFailed ? "HTTP failed" : (httpStarted ? "HTTP Server" : "HTTP starting");
@@ -502,6 +505,12 @@ int main(int argc, char* argv[])
         }
     }
 
+    // -port overrides cfg.http_port for everything that uses it (server bind,
+    // console title). Without this the server silently listened on the port
+    // from loadgraph.cfg instead of the command line one.
+    if (cliPort >= 0)
+        cfg.http_port = cliPort;
+
 #ifdef PLATFORM_WINDOWS
     InitConsoleHandle();
     if (!SetConsoleOutputCP(CP_UTF8))
@@ -581,7 +590,10 @@ int main(int argc, char* argv[])
     MetricsInit();
     if (httpActive)
     {
-        StartHttpServer(cfg);
+        // bind() runs synchronously inside StartHttpServer: a port conflict
+        // is known right here (shown as "HTTP failed" in the status line).
+        if (!StartHttpServer(cfg))
+            g_ttyHttpStartFailed = true;
     }
 
     auto lastRender = std::chrono::steady_clock::now();
@@ -711,6 +723,9 @@ int main(int argc, char* argv[])
     }
 #endif
 
+    // Join the HTTP thread first: the global std::thread in lib_http must
+    // not be destroyed while joinable (would call std::terminate).
+    StopHttpServer();
     MetricsShutdown();
 
 #ifdef PLATFORM_WINDOWS

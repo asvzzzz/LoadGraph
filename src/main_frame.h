@@ -11,6 +11,13 @@
 #include "app_config.h"
 
 // Main application window. Resizable, contains CPU / RAM / GPU metric panels.
+
+// Command IDs for custom menu items (wxID_HIGHEST+100 block is used by View).
+enum
+{
+    ID_HTTP_TOGGLE = wxID_HIGHEST + 900,
+};
+
 class MainFrame : public wxFrame
 {
 public:
@@ -30,6 +37,10 @@ private:
     // File -> Exit handler. Needed because window-manager close requests are
     // not always delivered (WSLg/msrdc caption buttons can stop responding).
     void OnExitMenu(wxCommandEvent& evt);
+
+    // File -> HTTP server toggle (checkable). Starts/stops the web dashboard
+    // on the configured port and persists the choice in loadgraph.cfg.
+    void OnHttpToggle(wxCommandEvent& evt);
 
     // Size handler.
     void OnSize(wxSizeEvent& evt);

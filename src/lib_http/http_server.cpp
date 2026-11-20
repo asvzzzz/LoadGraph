@@ -18,6 +18,10 @@
 #include <thread>
 #endif
 
+#include <atomic>
+#include <mutex>
+#include <system_error>
+
 // ============================================================================
 // Cross-platform helpers (pure C++, no platform APIs).
 // ============================================================================
@@ -152,16 +156,29 @@ static std::string BuildJson()
 // Socket helpers — platform-specific accept/send loop.
 // ============================================================================
 
+// ============================================================================
+// Shared server state (used by BOTH platform HttpLoop variants).
+// ============================================================================
+
+// Stop flag checked by the accept loop every select() timeout (1 s).
+static std::atomic<bool> g_httpStopReq{false};
+// Server thread; joinable only while the server runs. Guarded by g_httpMtx.
+static std::thread g_httpThread;
+static std::mutex  g_httpMtx;
+
 #ifdef PLATFORM_WINDOWS
-static void HttpLoop(int port, const AppConfig& cfg)
+// Create + bind + listen the server socket on the CALLER thread so bind()
+// errors (port in use) are visible to the caller synchronously.
+// Returns INVALID_SOCKET on failure; WSACleanup() is done in HttpClose().
+static SOCKET HttpOpenListen(int port)
 {
     WSADATA wsa{};
     if (WSAStartup(MAKEWORD(2,2), &wsa) != 0)
-    { fprintf(stderr, "HTTP: WSAStartup failed\n"); return; }
+    { fprintf(stderr, "HTTP: WSAStartup failed\n"); return INVALID_SOCKET; }
 
     SOCKET srv = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     if (srv == INVALID_SOCKET)
-    { fprintf(stderr, "HTTP: socket() failed err=%d\n", WSAGetLastError()); WSACleanup(); return; }
+    { fprintf(stderr, "HTTP: socket() failed err=%d\n", WSAGetLastError()); WSACleanup(); return INVALID_SOCKET; }
 
     int opt = 1;
     setsockopt(srv, SOL_SOCKET, SO_REUSEADDR,   (const char*)&opt, sizeof(opt));
@@ -175,18 +192,23 @@ static void HttpLoop(int port, const AppConfig& cfg)
     if (bind(srv, (sockaddr*)&addr, sizeof(addr)) == SOCKET_ERROR)
     {
         fprintf(stderr, "HTTP: bind() failed port=%d err=%d\n", port, WSAGetLastError());
-        closesocket(srv); WSACleanup(); return;
+        closesocket(srv); WSACleanup(); return INVALID_SOCKET;
     }
     if (listen(srv, 4) == SOCKET_ERROR)
     {
         fprintf(stderr, "HTTP: listen() failed err=%d\n", WSAGetLastError());
-        closesocket(srv); WSACleanup(); return;
+        closesocket(srv); WSACleanup(); return INVALID_SOCKET;
     }
+    return srv;
+}
 
+// Accept loop on the already-bound socket; runs on the server thread.
+static void HttpServeLoop(SOCKET srv, int port, const AppConfig& cfg)
+{
     DWORD rcvTimeout = 5000;
     DWORD sndTimeout = 5000;
 
-    while (true)
+    while (!g_httpStopReq.load())
     {
         fd_set rf; FD_ZERO(&rf); FD_SET(srv, &rf);
         timeval tv{}; tv.tv_sec = 1; tv.tv_usec = 0;
@@ -271,29 +293,23 @@ static void HttpLoop(int port, const AppConfig& cfg)
 
         closesocket(client);
     }
-    closesocket(srv); WSACleanup();
+    // srv is closed by the thread wrapper (HttpClose), not here.
 }
 
-static bool g_httpStarted = false;
-static bool g_httpFailed  = false;
-
-bool GetHttpStatus(bool& started, bool& failed)
+// Release socket + Winsock state (paired with HttpOpenListen).
+static void HttpClose(SOCKET srv)
 {
-    started = g_httpStarted;
-    failed  = g_httpFailed;
-    return true;
-}
-
-void StartHttpServer(const AppConfig& cfg)
-{
-    std::thread([cfg] { HttpLoop(cfg.http_port, cfg); }).detach();
+    closesocket(srv);
+    WSACleanup();
 }
 
 #else // PLATFORM_LINUX — POSIX sockets
-static void HttpLoop(int port, const AppConfig& cfg)
+// Create + bind + listen the server socket on the CALLER thread (see the
+// Windows variant above). Returns -1 on failure; close() is done in HttpClose.
+static int HttpOpenListen(int port)
 {
     int srv = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-    if (srv < 0) { fprintf(stderr, "HTTP: socket() failed\n"); return; }
+    if (srv < 0) { fprintf(stderr, "HTTP: socket() failed\n"); return -1; }
 
     int opt = 1;
     setsockopt(srv, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
@@ -304,11 +320,16 @@ static void HttpLoop(int port, const AppConfig& cfg)
     addr.sin_port        = htons(static_cast<unsigned short>(port));
 
     if (bind(srv, (sockaddr*)&addr, sizeof(addr)) < 0)
-    { fprintf(stderr, "HTTP: bind() failed port=%d\n", port); close(srv); return; }
+    { fprintf(stderr, "HTTP: bind() failed port=%d\n", port); close(srv); return -1; }
     if (listen(srv, 4) < 0)
-    { fprintf(stderr, "HTTP: listen() failed\n"); close(srv); return; }
+    { fprintf(stderr, "HTTP: listen() failed\n"); close(srv); return -1; }
+    return srv;
+}
 
-    while (true)
+// Accept loop on the already-bound socket; runs on the server thread.
+static void HttpServeLoop(int srv, int port, const AppConfig& cfg)
+{
+    while (!g_httpStopReq.load())
     {
         fd_set rf; FD_ZERO(&rf); FD_SET(srv, &rf);
         timeval tv{}; tv.tv_sec = 1; tv.tv_usec = 0;
@@ -387,11 +408,72 @@ static void HttpLoop(int port, const AppConfig& cfg)
 
         close(client);
     }
-    close(srv);
+    // srv is closed by the thread wrapper (HttpClose), not here.
 }
 
-void StartHttpServer(const AppConfig& cfg)
+// Release the listening socket (paired with HttpOpenListen).
+static void HttpClose(int srv)
 {
-    std::thread([cfg] { HttpLoop(cfg.http_port, cfg); }).detach();
+    close(srv);
 }
 #endif // PLATFORM_WINDOWS / PLATFORM_LINUX
+
+// ============================================================================
+// Public API (common for both platforms).
+// ============================================================================
+
+bool StartHttpServer(const AppConfig& cfg)
+{
+    std::lock_guard<std::mutex> lock(g_httpMtx);
+
+    // Already running - do not rebind, the caller just gets the status.
+    if (g_httpThread.joinable())
+        return true;
+
+    if (cfg.http_port <= 0 || cfg.http_port > 65535)
+    { fprintf(stderr, "HTTP: invalid port %d\n", cfg.http_port); return false; }
+
+#ifdef PLATFORM_WINDOWS
+    SOCKET srv = HttpOpenListen(cfg.http_port);
+    if (srv == INVALID_SOCKET)
+        return false;
+#else
+    int srv = HttpOpenListen(cfg.http_port);
+    if (srv < 0)
+        return false;
+#endif
+
+    g_httpStopReq = false;
+    try
+    {
+        g_httpThread = std::thread([srv, cfg]
+        {
+            HttpServeLoop(srv, cfg.http_port, cfg);
+            HttpClose(srv);
+        });
+    }
+    catch (const std::system_error& e)
+    {
+        fprintf(stderr, "HTTP: cannot create server thread: %s\n", e.what());
+        HttpClose(srv);
+        return false;
+    }
+    return true;
+}
+
+void StopHttpServer()
+{
+    std::lock_guard<std::mutex> lock(g_httpMtx);
+    if (!g_httpThread.joinable())
+        return;
+    // The loop checks the flag after every select() timeout (1 s), so the
+    // join returns quickly without touching the socket from another thread.
+    g_httpStopReq = true;
+    g_httpThread.join();
+}
+
+bool IsHttpServerRunning()
+{
+    std::lock_guard<std::mutex> lock(g_httpMtx);
+    return g_httpThread.joinable();
+}

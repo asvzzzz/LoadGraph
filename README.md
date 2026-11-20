@@ -50,7 +50,7 @@ Works on native Linux and inside WSL2 thanks to the GPU-PV bridge (NVML exposed 
 
 ### Web Dashboard (HTTP Server)
 
-Enable with `"http_enabled": true` in `loadgraph.cfg`. The server starts on the configured port (default `9115`) in a detached thread:
+Enable with `"http_enabled": true` in `loadgraph.cfg` or toggle at runtime via **File -> HTTP server (port N)** (`Ctrl+H`) in the GUI — the choice is saved to `loadgraph.cfg`:
 
 - **`GET /`** — responsive HTML dashboard with live charts, mirrors the GUI layout. No dependencies — pure vanilla JS + Canvas.
 - **`GET /api/metrics`** — JSON endpoint exposing all current metrics (CPU load/temp/power, RAM, per-GPU stats, storage).

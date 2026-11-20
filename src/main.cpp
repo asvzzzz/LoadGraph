@@ -132,7 +132,10 @@ public:
 
         // Start HTTP server if enabled in config.
         if (appCfg.http_enabled)
-            StartHttpServer(appCfg);
+        {
+            if (!StartHttpServer(appCfg))
+                LOGI("HTTP server failed to start on port %d.", appCfg.http_port);
+        }
 
         try
         {
