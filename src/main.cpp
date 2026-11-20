@@ -108,8 +108,13 @@ public:
             }
         }
 
-        wxString logPath = wxGetCwd() + "/loadgraph.log";
-        Logger::Init(logPath);
+        // Every per-user file (loadgraph.cfg, loadgraph.log, loadgraph.jsonl)
+        // lives in the same XDG-style directory on both platforms; the current
+        // directory is only a fallback when no user directory is available.
+        std::string logDir = GetAppConfigDir();
+        if (logDir.empty())
+            logDir = wxGetCwd().ToStdString();
+        Logger::Init((logDir + "/loadgraph.log").c_str());
 
         AppConfig appCfg = LoadAppConfig();
 

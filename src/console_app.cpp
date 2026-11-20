@@ -557,23 +557,12 @@ int main(int argc, char* argv[])
     static std::string s_logPath;
     if (cfg.log_file)
     {
-        char logPath[1024] = "loadgraph.jsonl";
-#ifdef PLATFORM_WINDOWS
-        DWORD len = GetCurrentDirectoryA(sizeof(logPath), logPath);
-        if (len > 0 && len < sizeof(logPath))
-            strncat_s(logPath, sizeof(logPath), "\\loadgraph.jsonl", 16);
-        else
-            strncpy_s(logPath, sizeof(logPath), "loadgraph.jsonl", _TRUNCATE);
-#else
-        // On Linux use home directory for config compatibility.
-        const char* home = getenv("HOME");
-        if (home && strlen(home) > 0)
-        {
-            snprintf(logPath, sizeof(logPath), "%s/.config/loadgraph/loadgraph.jsonl", home);
-        }
-#endif
-        s_logPath = logPath;
-        fprintf(stdout, "console: logging enabled file=%s\n", logPath);
+        // Same per-user directory as loadgraph.cfg on both platforms; the
+        // current directory is the fallback when none could be resolved.
+        const std::string dir = GetAppConfigDir();
+        s_logPath = dir.empty() ? std::string("loadgraph.jsonl")
+                                : dir + "/loadgraph.jsonl";
+        fprintf(stdout, "console: logging enabled file=%s\n", s_logPath.c_str());
         fflush(stdout);
     }
 

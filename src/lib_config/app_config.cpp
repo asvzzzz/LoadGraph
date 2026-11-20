@@ -123,10 +123,14 @@ namespace
         DWORD n = GetModuleFileNameW(NULL, path, MAX_PATH);
         if (n > 0 && n < MAX_PATH)
         {
-            std::wstring wstr(path);
-            size_t pos = wstr.find_last_of(L"\\/");
-            if (pos != std::wstring::npos)
-                return std::string(wstr.begin(), wstr.begin() + static_cast<std::wstring::iterator::difference_type>(pos));
+            // std::filesystem::path performs the wide -> narrow conversion the
+            // same way the narrow fopen()/ofstream calls expect it. Building a
+            // std::string from wchar_t iterators (C4244) truncates every symbol
+            // above 0xFF, so a non-ASCII user name produced a broken path.
+            std::filesystem::path p(std::wstring(path, n));
+            const std::filesystem::path dir = p.parent_path();
+            if (!dir.empty())
+                return dir.string();
         }
 #endif
         try { return std::filesystem::current_path().string(); }
@@ -165,12 +169,15 @@ namespace
 // Public API
 // ---------------------------------------------------------------------------
 
-// Return the path to loadgraph.cfg for the current platform.
-// Both Windows and Linux use XDG style: $HOME/.config/loadgraph/loadgraph.cfg
-static std::string GetConfigPath()
+// Return the per-user config directory for the current platform, created on
+// demand. XDG layout on both OS: %USERPROFILE%/.config/loadgraph on Windows,
+// $XDG_CONFIG_HOME/loadgraph (default ~/.config/loadgraph) on Linux. Empty
+// result means no user directory is available at all.
+std::string GetAppConfigDir()
 {
 #ifdef PLATFORM_WINDOWS
-    // Windows: use %USERPROFILE%\.config\loadgraph\loadgraph.cfg
+    // Windows: %USERPROFILE%\.config\loadgraph - same layout as on Linux, so
+    // one config/log location works for both builds (also inside WSL).
     const char* home = getenv("USERPROFILE");
     if (!home || !home[0]) home = getenv("HOME");
     std::string dir;
@@ -178,11 +185,9 @@ static std::string GetConfigPath()
         dir = std::string(home) + "/.config";
     else
         dir = GetExeDir();
-    std::error_code ec;
-    std::filesystem::create_directories(dir + "/loadgraph", ec);
-    return dir + "/loadgraph/loadgraph.cfg";
+    dir += "/loadgraph";
 #else
-    // Linux: use XDG_CONFIG_HOME/loadgraph/loadgraph.cfg
+    // Linux: XDG_CONFIG_HOME/loadgraph (default ~/.config/loadgraph).
     const char* xdg = getenv("XDG_CONFIG_HOME");
     std::string dir;
     if (xdg && xdg[0])
@@ -193,13 +198,20 @@ static std::string GetConfigPath()
         if (home && home[0])
             dir = std::string(home) + "/.config";
     }
-    if (dir.empty()) return "./loadgraph.cfg";
-    std::string path = dir + "/loadgraph/loadgraph.cfg";
-    // Ensure directory exists.
-    std::error_code ec;
-    std::filesystem::create_directories(dir + "/loadgraph", ec);
-    return path;
+    if (dir.empty()) return std::string();
+    dir += "/loadgraph";
 #endif
+    std::error_code ec;
+    std::filesystem::create_directories(dir, ec);
+    return dir;
+}
+
+// Path of loadgraph.cfg inside the per-user config directory.
+static std::string GetConfigPath()
+{
+    const std::string dir = GetAppConfigDir();
+    if (dir.empty()) return "./loadgraph.cfg";
+    return dir + "/loadgraph.cfg";
 }
 
 AppConfig LoadAppConfig()

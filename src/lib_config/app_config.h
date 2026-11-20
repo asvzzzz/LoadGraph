@@ -52,4 +52,9 @@ AppConfig LoadAppConfig();
 // Serialize current AppConfig back to loadgraph.cfg (call after user edits).
 void SaveAppConfig(const AppConfig& cfg);
 
+// Per-user directory that holds loadgraph.cfg and the log files. Created on
+// demand. Returns an empty string only when no user directory could be
+// determined, in which case callers should fall back to the current directory.
+std::string GetAppConfigDir();
+
 #endif // APP_CONFIG_H
