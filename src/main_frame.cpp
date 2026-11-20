@@ -240,9 +240,9 @@ void MainFrame::RealizeUI()
 	m_header = new wxPanel(this, wxID_ANY);
 	wxBoxSizer* hdrS = new wxBoxSizer(wxHORIZONTAL);
 
-	// Header matches the web dashboard h1: "LoadGraph" in green (#76B900)
-	// followed by the CPU model name in cyan (cpu_name config color). The
-	// CPU label stretches and ellipsizes so the uptime never gets pushed out.
+	// Header matches the web dashboard h1, which contains ONLY the CPU model
+	// name in cyan (cpu_name config color) - no "LoadGraph" prefix. The CPU
+	// label stretches and ellipsizes so the uptime never gets pushed out.
 	wxString cpuLabel;
 	CpuData cpuInit{};
 	MetricsGetCpu(cpuInit);
@@ -257,11 +257,6 @@ void MainFrame::RealizeUI()
 #endif
 	// Consolas to match the dashboard font (Consolas, monospace).
 	const wxFont cpuFont(wxFontInfo(wxSize(0, 15)).FaceName("Consolas").Bold());
-	wxStaticText* titleT = new wxStaticText(m_header, wxID_ANY, "LoadGraph");
-	titleT->SetFont(cpuFont);
-	// Same fixed green as the web h1 (--c-cpu-title default).
-	m_customColoredLabels.push_back({ titleT, HexColor("76B900") });
-	hdrS->Add(titleT, 0, wxALL | wxALIGN_CENTER_VERTICAL, 6);
 
 	wxStaticText* cpuT = new wxStaticText(m_header, wxID_ANY, cpuLabel);
 	cpuT->SetFont(cpuFont);
