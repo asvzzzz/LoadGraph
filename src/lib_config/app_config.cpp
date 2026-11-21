@@ -306,6 +306,21 @@ AppConfig LoadAppConfig()
             }
             cfg.superio_fan = v;
         }
+        else if (key == "http_user")
+        {
+            // Auth login, length-capped. An explicit empty string in the
+            // file disables auth; a missing key keeps the default.
+            std::string v;
+            if (ReadJsonString(p, v) && v.size() <= 128)
+                cfg.http_user = v;
+        }
+        else if (key == "http_pass")
+        {
+            // Auth password: any string up to 128 chars (empty = no auth).
+            std::string v;
+            if (ReadJsonString(p, v) && v.size() <= 128)
+                cfg.http_pass = v;
+        }
         else if (key == "window_x")
         {
             double v = 0.0;
@@ -506,6 +521,8 @@ void SaveAppConfig(const AppConfig& cfg)
     out += "{\n";
     out += "  \"http_port\": "   + EmitJsonNumber((double)cfg.http_port)   + ",\n";
     out += "  \"http_enabled\": " + std::string(cfg.http_enabled ? "true" : "false") + ",\n";
+    out += "  \"http_user\": "   + EmitJsonString(cfg.http_user)   + ",\n";
+    out += "  \"http_pass\": "   + EmitJsonString(cfg.http_pass)   + ",\n";
     out += "  \"log_file\": "    + std::string(cfg.log_file     ? "true"  : "false") + ",\n";
     out += "  \"superio_fan\": "  + std::string(cfg.superio_fan  ? "true"  : "false") + ",\n";
     out += "  \"window_x\": "    + EmitJsonNumber((double)cfg.window_x)     + ",\n";

@@ -5,7 +5,8 @@
 #include <string>
 
 // Minimal JSON-like config loader for loadgraph.cfg.
-// Stores chart colors, HTTP server port, window position/size and view menu state.
+// Stores chart colors, HTTP server port/credentials, window position/size
+// and view menu state.
 // File is created with defaults if missing.
 
 struct AppConfig
@@ -31,6 +32,12 @@ struct AppConfig
 
     int     http_port      = 9115;
     bool    http_enabled   = false;
+
+    // HTTP Basic auth for the web dashboard (RFC 7617). Stored in plaintext
+    // in loadgraph.cfg: protect the file via user/profile permissions.
+    // Empty http_user disables auth entirely.
+    std::string http_user  = "load";
+    std::string http_pass  = "graph";
     bool    log_file       = false; // console (TTY): write loadgraph.jsonl snapshots when true
     bool    superio_fan    = false; // enable Super I/O fan probe via WinRing0
     // Window position and size saved between sessions.

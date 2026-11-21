@@ -59,6 +59,8 @@ Enable with `"http_enabled": true` in `loadgraph.cfg` or toggle at runtime via *
 - **`GET /api/metrics`** — JSON endpoint exposing all current metrics (CPU load/temp/power, RAM, per-GPU stats, storage).
 - **`GET /favicon.ico`** — embedded favicon.
 
+All endpoints are protected with **HTTP Basic auth**. Login and password live in `loadgraph.cfg` as `"http_user": "load"` and `"http_pass": "graph"` (defaults `load` / `graph`). The browser prompts for credentials on the first visit; set `"http_user": ""` to disable auth. Credentials are captured when the server starts, so after editing them restart the server (`Ctrl+H` toggle or app restart). The password is stored in plaintext in the config file - protect it with user/profile permissions.
+
 Works on both Windows and Linux. The dashboard auto-refreshes every second via polling.
 
 ![Web Dashboard](img/loadgraph_http.png)
@@ -221,6 +223,8 @@ All settings are stored in a single `loadgraph.cfg` JSON file, in the same per-u
 {
   "http_port": 9115,
   "http_enabled": false,
+  "http_user": "load",
+  "http_pass": "graph",
   "log_file": false,
   // Window position and size — (0,0,0,0 = let OS decide)
   "window_x": 100,

@@ -19,7 +19,9 @@
 #endif
 
 #include <atomic>
+#include <cstring>   // strlen, strcmp for auth header parsing
 #include <mutex>
+#include <string>
 #include <system_error>
 
 // ============================================================================
@@ -166,6 +168,144 @@ static std::atomic<bool> g_httpStopReq{false};
 static std::thread g_httpThread;
 static std::mutex  g_httpMtx;
 
+// ============================================================================
+// HTTP Basic auth (RFC 7617). Credentials come from loadgraph.cfg
+// (http_user / http_pass) and are captured once in StartHttpServer();
+// edits to the file apply after the next start. Empty http_user = no auth.
+// ============================================================================
+
+// Immutable copy of the configured credentials. Written in StartHttpServer()
+// before the listener thread starts, then only read by request handling;
+// the mutex makes that hand-off explicit and race-free.
+struct AuthSnapshot
+{
+    std::string user;
+    std::string pass;
+};
+
+static std::mutex   g_authMutex;
+static AuthSnapshot g_auth;
+
+static void RefreshAuthSnapshot(const AppConfig& cfg)
+{
+    std::lock_guard<std::mutex> lk(g_authMutex);
+    g_auth.user = cfg.http_user;
+    g_auth.pass = cfg.http_pass;
+}
+
+// Base64 decoder; padding is optional. Returns false on any character
+// outside the base64 alphabet.
+static bool Base64Decode(const std::string& in, std::string& out)
+{
+    static const char kTable[] =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    signed char rev[256];
+    for (int i = 0; i < 256; ++i) rev[i] = -1;
+    for (int i = 0; i < 64; ++i) rev[(unsigned char)kTable[i]] = (signed char)i;
+
+    out.clear();
+    int bits = 0, nbits = 0;
+    for (unsigned char c : in)
+    {
+        if (c == '=') break;  // padding ends the payload
+        const signed char v = rev[c];
+        if (v < 0) return false;
+        bits = (bits << 6) | v;
+        nbits += 6;
+        if (nbits >= 8)
+        {
+            nbits -= 8;
+            out += (char)((bits >> nbits) & 0xFF);
+        }
+    }
+    return true;
+}
+
+// Value of the "Authorization" request header (exact name, case-insensitive;
+// headers merely containing the word are not matched).
+static bool FindAuthHeader(const std::string& req, std::string& value)
+{
+    size_t lineStart = 0;
+    while (lineStart < req.size())
+    {
+        size_t lineEnd = req.find('\n', lineStart);
+        if (lineEnd == std::string::npos) lineEnd = req.size();
+        std::string line = req.substr(lineStart, lineEnd - lineStart);
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        if (line.empty()) break;  // end of headers
+        const size_t colon = line.find(':');
+        if (colon != std::string::npos)
+        {
+            std::string name = line.substr(0, colon);
+            for (char& c : name)
+                if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
+            if (name == "authorization")
+            {
+                value = line.substr(colon + 1);
+                return true;
+            }
+        }
+        lineStart = lineEnd + 1;
+    }
+    return false;
+}
+
+// Parse "<scheme> <base64(user:pass)>" from an Authorization value.
+// Only the Basic scheme is accepted (scheme match is case-insensitive).
+static bool ExtractBasicCreds(const std::string& value, std::string& userpass)
+{
+    const size_t s = value.find_first_not_of(" \t");
+    if (s == std::string::npos) return false;
+    const size_t sp = value.find_first_of(" \t", s);
+    if (sp == std::string::npos) return false;
+    std::string scheme = value.substr(s, sp - s);
+    for (char& c : scheme)
+        if (c >= 'a' && c <= 'z') c = (char)(c - 'a' + 'A');
+    if (scheme != "BASIC") return false;
+
+    const size_t b = value.find_first_not_of(" \t", sp);
+    const size_t e = value.find_last_not_of(" \t\r\n");
+    if (b == std::string::npos || e == std::string::npos || b > e) return false;
+    if (!Base64Decode(value.substr(b, e - b + 1), userpass)) return false;
+    return userpass.find(':') != std::string::npos;
+}
+
+// Length-aware byte comparison without early exit on mismatch.
+static bool SecureCompare(const std::string& a, const std::string& b)
+{
+    unsigned diff = (a.size() != b.size()) ? 1u : 0u;
+    const size_t n = a.size() < b.size() ? a.size() : b.size();
+    for (size_t i = 0; i < n; ++i)
+        diff |= (unsigned)((unsigned char)a[i] ^ (unsigned char)b[i]);
+    return diff == 0;
+}
+
+// Decide whether the request may proceed. Returns false when the caller
+// must send a 401 challenge instead (socket close/send is platform code).
+static bool AuthorizeRequest(const std::string& req, const char* path)
+{
+    AuthSnapshot auth;
+    {
+        std::lock_guard<std::mutex> lk(g_authMutex);
+        auth = g_auth;
+    }
+    if (auth.user.empty())
+        return true;
+
+    std::string hdrval, userpass;
+    if (FindAuthHeader(req, hdrval) && ExtractBasicCreds(hdrval, userpass))
+    {
+        const size_t sep = userpass.find(':');
+        const std::string user = userpass.substr(0, sep);
+        const std::string pass = userpass.substr(sep + 1);
+        if (SecureCompare(user, auth.user) && SecureCompare(pass, auth.pass))
+            return true;
+    }
+
+    fprintf(stderr, "HTTP: auth denied for %s\n", path);
+    return false;
+}
+
 #ifdef PLATFORM_WINDOWS
 // Create + bind + listen the server socket on the CALLER thread so bind()
 // errors (port in use) are visible to the caller synchronously.
@@ -202,6 +342,22 @@ static SOCKET HttpOpenListen(int port)
     return srv;
 }
 
+// 401 challenge: after the user enters credentials the browser sends the
+// Authorization header on every request (including the metrics polls).
+static void SendUnauthorized(SOCKET client)
+{
+    static const char resp[] =
+        "HTTP/1.1 401 Unauthorized\r\n"
+        "WWW-Authenticate: Basic realm=\"LoadGraph\", charset=\"UTF-8\"\r\n"
+        "Content-Type: text/plain\r\n"
+        "Connection: close\r\n"
+        "Content-Length: 23\r\n\r\n"
+        "Authorization required.";
+    int total = (int)strlen(resp), sent = 0;
+    while (sent < total)
+    { int sn = send(client, resp + sent, total - sent, 0); if (sn <= 0) break; sent += sn; }
+}
+
 // Accept loop on the already-bound socket; runs on the server thread.
 static void HttpServeLoop(SOCKET srv, int port, const AppConfig& cfg)
 {
@@ -230,6 +386,14 @@ static void HttpServeLoop(SOCKET srv, int port, const AppConfig& cfg)
         bool isMetrics   = (strcmp(method, "GET") == 0 && strcmp(path, "/api/metrics") == 0);
         bool isIndex     = (strcmp(method, "GET") == 0 && strcmp(path, "/") == 0);
         bool isFavicon   = (strcmp(method, "GET") == 0 && strcmp(path, "/favicon.ico") == 0);
+
+        // Basic auth gate for all endpoints (metrics JSON included).
+        if (!AuthorizeRequest(std::string(req), path))
+        {
+            SendUnauthorized(client);
+            closesocket(client);
+            continue;
+        }
 
         std::string body;
         if (isMetrics)       body = BuildJson();
@@ -326,6 +490,24 @@ static int HttpOpenListen(int port)
     return srv;
 }
 
+// 401 challenge: after the user enters credentials the browser sends the
+// Authorization header on every request (including the metrics polls).
+static void SendUnauthorized(int client)
+{
+    static const char resp[] =
+        "HTTP/1.1 401 Unauthorized\r\n"
+        "WWW-Authenticate: Basic realm=\"LoadGraph\", charset=\"UTF-8\"\r\n"
+        "Content-Type: text/plain\r\n"
+        "Connection: close\r\n"
+        "Content-Length: 23\r\n\r\n"
+        "Authorization required.";
+    int total = (int)strlen(resp), sent = 0;
+    // MSG_NOSIGNAL: a client that hangs up mid-response must not raise
+    // SIGPIPE and kill the whole application.
+    while (sent < total)
+    { int sn = send(client, resp + sent, total - sent, MSG_NOSIGNAL); if (sn <= 0) break; sent += sn; }
+}
+
 // Accept loop on the already-bound socket; runs on the server thread.
 static void HttpServeLoop(int srv, int port, const AppConfig& cfg)
 {
@@ -348,6 +530,14 @@ static void HttpServeLoop(int srv, int port, const AppConfig& cfg)
         bool isMetrics   = (strcmp(method, "GET") == 0 && strcmp(path, "/api/metrics") == 0);
         bool isIndex     = (strcmp(method, "GET") == 0 && strcmp(path, "/") == 0);
         bool isFavicon   = (strcmp(method, "GET") == 0 && strcmp(path, "/favicon.ico") == 0);
+
+        // Basic auth gate for all endpoints (metrics JSON included).
+        if (!AuthorizeRequest(std::string(req), path))
+        {
+            SendUnauthorized(client);
+            close(client);
+            continue;
+        }
 
         std::string body;
         if (isMetrics)       body = BuildJson();
@@ -444,6 +634,9 @@ bool StartHttpServer(const AppConfig& cfg)
 #endif
 
     g_httpStopReq = false;
+    // Snapshot credentials before the thread starts: request handling then
+    // never touches the caller's AppConfig object.
+    RefreshAuthSnapshot(cfg);
     try
     {
         g_httpThread = std::thread([srv, cfg]
