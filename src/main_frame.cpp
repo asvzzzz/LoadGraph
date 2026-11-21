@@ -12,6 +12,7 @@
 #include <wx/dcbuffer.h>
 #include <wx/graphics.h>
 #include <wx/dcgraph.h>
+#include <wx/msgdlg.h>
 
 #include <algorithm>
 #include <cmath>
@@ -23,6 +24,7 @@ wxBEGIN_EVENT_TABLE(MainFrame, wxFrame)
     EVT_SIZE(MainFrame::OnSize)
     EVT_MENU(wxID_EXIT, MainFrame::OnExitMenu)
     EVT_MENU(ID_HTTP_TOGGLE, MainFrame::OnHttpToggle)
+    EVT_MENU(ID_SUPERIO_FAN, MainFrame::OnSuperIoFanToggle)
 wxEND_EVENT_TABLE()
 
 // Parse a 6-char hex color string (e.g. "76B900") into wxColour.
@@ -607,6 +609,17 @@ void MainFrame::BuildViewMenu(wxMenuBar* menuBar, const std::map<std::string, bo
 		addToggle("Total Power", "Total Power");
 	}
 
+#ifdef PLATFORM_WINDOWS
+	// Windows only: on Linux the CPU fan comes from /sys/class/hwmon and needs
+	// no switch at all. The Super I/O probe writes to the LPC config port of an
+	// otherwise unknown chip, so it stays off until it is asked for here or in
+	// loadgraph.cfg. The check state is not part of m_menuIdToKey, so
+	// OnViewToggle() does not write it into the view_menu map.
+	vm->AppendSeparator();
+	wxMenuItem* siProbe = vm->AppendCheckItem(ID_SUPERIO_FAN, "CPU Fan via Super I/O");
+	if (siProbe) siProbe->Check(m_cfg.superio_fan);
+#endif
+
 	menuBar->Append(vm, "&View");
 }
 
@@ -644,6 +657,55 @@ void MainFrame::OnViewToggle(wxCommandEvent& evt)
 			break;
 		}
 	}
+}
+
+void MainFrame::OnSuperIoFanToggle(wxCommandEvent& evt)
+{
+	const bool want = evt.IsChecked();
+
+	if (want && !m_cfg.superio_warn_ok)
+	{
+		// Asked once, the answer is stored in loadgraph.cfg (superio_warn_ok).
+		const int answer = wxMessageBox(
+			"Reading the CPU fan from the motherboard monitor chip needs direct "
+			"I/O port access.\n\n"
+			"LoadGraph reads only the tachometer registers of a Nuvoton NCT679x "
+			"and clears that chip's monitor I/O space lock - the same access "
+			"LibreHardwareMonitor performs - and never touches fan control. A "
+			"config port write to a chip that is not recognized can still have "
+			"side effects on uncommon hardware.\n\n"
+			"Enable the probe? This notice is shown only once.",
+			"Super I/O fan probe",
+			wxYES_NO | wxNO_DEFAULT | wxICON_WARNING, this);
+		if (answer != wxYES)
+		{
+			// Put the check mark back and leave the config untouched.
+			wxMenuBar* mbDecline = GetMenuBar();
+			if (mbDecline)
+			{
+				wxMenuItem* mi = mbDecline->FindItem(ID_SUPERIO_FAN);
+				if (mi) mi->Check(false);
+			}
+			LOGI("Super I/O fan probe declined by the user.");
+			return;
+		}
+		m_cfg.superio_warn_ok = true;
+	}
+
+	m_cfg.superio_fan = want;
+	// The polling thread applies the request on its next tick and identifies
+	// the chip again; turning it off reports the fan as N/A when the probe was
+	// the only source, so the chart does not keep a frozen value.
+	MetricsSetSuperIoFanProbe(want);
+	SaveAppConfig(m_cfg);
+
+	wxMenuBar* mb = GetMenuBar();
+	if (mb)
+	{
+		wxMenuItem* mi = mb->FindItem(ID_SUPERIO_FAN);
+		if (mi) mi->Check(want);
+	}
+	LOGI("Super I/O fan probe %s from the View menu.", want ? "enabled" : "disabled");
 }
 
 void MainFrame::ApplyHeightAdjustment(const std::string& key, bool showingItem)

@@ -73,6 +73,18 @@ std::vector<GpuData> MetricsGetGpus();
 // Returns true if NVML/NVAPI is available.
 bool MetricsGpuAvailable();
 
+// Requests the Super I/O tachometer probe on Windows: the motherboard monitor
+// chip is read through direct I/O port access, so the probe stays off until
+// loadgraph.cfg or the View menu asks for it (the GUI confirms with the user
+// first). Enabling it makes the collector identify the chip again on its next
+// poll; disabling it reports the fan as N/A unless another sensor owns it.
+// On Linux the CPU fan comes from /sys/class/hwmon and needs no switch, so the
+// call does nothing and the getter reports false.
+void MetricsSetSuperIoFanProbe(bool enable);
+
+// Current request state of that probe.
+bool MetricsSuperIoFanProbeEnabled();
+
 // Fetch current storage metrics. Thread-safe. Returns empty vector if none.
 std::vector<StorageData> MetricsGetStorage();
 

@@ -306,6 +306,22 @@ AppConfig LoadAppConfig()
             }
             cfg.superio_fan = v;
         }
+        else if (key == "superio_warn_ok")
+        {
+            // Set by the View menu once the user confirmed the one time
+            // notice about direct port access.
+            bool v = false;
+            SkipSpaces(p);
+            if (strncmp(p, "true", 4) == 0)       { p += 4;  v = true;  }
+            else if (strncmp(p, "false", 5) == 0) { p += 5;  v = false; }
+            else if (*p == '"')
+            {
+                std::string sv;
+                if (ReadJsonString(p, sv))
+                    v = (sv == "true");
+            }
+            cfg.superio_warn_ok = v;
+        }
         else if (key == "http_user")
         {
             // Auth login, length-capped. An explicit empty string in the
@@ -555,6 +571,7 @@ void SaveAppConfig(const AppConfig& cfg)
     out += "  \"http_log\": "    + std::string(cfg.http_log  ? "true" : "false") + ",\n";
     out += "  \"log_file\": "    + std::string(cfg.log_file     ? "true"  : "false") + ",\n";
     out += "  \"superio_fan\": "  + std::string(cfg.superio_fan  ? "true"  : "false") + ",\n";
+    out += "  \"superio_warn_ok\": " + std::string(cfg.superio_warn_ok ? "true" : "false") + ",\n";
     out += "  \"window_x\": "    + EmitJsonNumber((double)cfg.window_x)     + ",\n";
     out += "  \"window_y\": "    + EmitJsonNumber((double)cfg.window_y)     + ",\n";
     out += "  \"window_w\": "    + EmitJsonNumber((double)cfg.window_w)     + ",\n";

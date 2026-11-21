@@ -5,15 +5,18 @@
 
 #ifdef PLATFORM_LINUX
 
+#include <dirent.h>
+#include <algorithm>
 #include <chrono>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <fstream>
 #include <sstream>
 #include <ctime>
-#include <algorithm>
 #include <set>
 #include <utility>
+#include <vector>
 
 // ----------------------------------------------------------------------------
 // Linux-specific CPU monitor implementation.
@@ -72,6 +75,147 @@ namespace
         }
 
         return -1.0;
+    }
+
+    // ------------------------------------------------------------------------
+    // CPU fan through the hwmon class of the Linux kernel.
+    //
+    // A motherboard monitor chip (Nuvoton NCT677x/NCT679x, ITE IT86xx, Fintek
+    // F718xx, Winbond W836xx, SMSC ...) is driven by a kernel driver that
+    // publishes its tachometers as /sys/class/hwmon/hwmonN/fanM_input, already
+    // decoded into RPM, with an optional fanM_label naming the connector
+    // ("CPUFAN", "cpu_fan", "CPU OPT"). Reading those files needs neither root
+    // nor port access because the driver owns the chip, which is why this fan
+    // source is always on here while the Windows Super I/O probe is opt in.
+    // ------------------------------------------------------------------------
+
+    // Tachometer readings outside this range are not plausible: 0 means the
+    // input is stopped or unconnected, the upper bound rejects a broken sensor.
+    // The GPU hwmon reader uses the same bound.
+    constexpr long long kHwmonMaxRpm = 30000;
+
+    // Ticks between two scans while no CPU tachometer was found: the monitor
+    // chip driver module can be loaded long after LoadGraph started.
+    constexpr int kHwmonRetryTicks = 30;
+
+    // Sorted names of the subdirectories of a sysfs class root. Sorting keeps
+    // the channel selection below stable across runs, readdir order is not.
+    std::vector<std::string> ListHwmonDirs(const std::string& base)
+    {
+        std::vector<std::string> out;
+        DIR* dir = opendir(base.c_str());
+        if (!dir) return out;
+        dirent* ent = nullptr;
+        while ((ent = readdir(dir)) != nullptr)
+        {
+            if (ent->d_name[0] == '.') continue;
+            out.push_back(ent->d_name);
+        }
+        closedir(dir);
+        std::sort(out.begin(), out.end());
+        return out;
+    }
+
+    // Reads one numeric sysfs file. Returns false when the file is missing or
+    // does not hold a number.
+    bool ReadSysfsLong(const std::string& path, long long& value)
+    {
+        std::string content;
+        if (!ReadFileToString(path.c_str(), content)) return false;
+        try { value = std::stoll(content); }
+        catch (...) { return false; }
+        return true;
+    }
+
+    // Trims the line ending sysfs appends and folds ASCII letters to lower
+    // case, so device names and fan labels can be matched case insensitively.
+    std::string NormalizeSysfsText(std::string s)
+    {
+        const size_t end = s.find_last_not_of(" \t\r\n");
+        if (end == std::string::npos) return std::string();
+        s.erase(end + 1);
+        for (char& c : s)
+            if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
+        return s;
+    }
+
+    // True when the sensors of this hwmon device belong to a board part that is
+    // reported elsewhere (a graphics card fan already fills the GPU Fan row) or
+    // that never has a fan connector.
+    bool IsOtherDeviceHwmon(const std::string& name)
+    {
+        static const char* kSkip[] = {
+            "amdgpu", "radeon", "nouveau", "nvidia", "i915", "drm_hwmon",
+            "nvme", "iwlwifi_1", "mlx5_core",
+        };
+        for (const char* s : kSkip)
+            if (name == s) return true;
+        return false;
+    }
+
+    // True for the driver names of the motherboard monitor chips, which own the
+    // CPU fan header. Used when a tachometer channel publishes no label.
+    bool IsBoardMonitorHwmon(const std::string& name)
+    {
+        static const char* kParts[] = {
+            "nct", "it8", "f718", "fintek", "w83", "smsc", "sch",
+        };
+        for (const char* s : kParts)
+            if (name.find(s) != std::string::npos) return true;
+        return false;
+    }
+
+    // Picks the tachometer of the CPU fan header. A channel whose label names
+    // the CPU wins, then a channel of a board monitor chip, then any channel
+    // that reports a running fan. Channels reading 0 are skipped: an
+    // unconnected input also reads 0, so only a running value proves that a
+    // fan is attached to the header.
+    bool SelectHwmonCpuFan(std::string& pathOut, std::string& sourceOut)
+    {
+        int bestScore = -1;
+        std::string bestPath, bestSource;
+
+        for (const std::string& entry : ListHwmonDirs("/sys/class/hwmon"))
+        {
+            const std::string dir = "/sys/class/hwmon/" + entry;
+
+            std::string name;
+            if (!ReadFileToString((dir + "/name").c_str(), name)) continue;
+            name = NormalizeSysfsText(name);
+            if (IsOtherDeviceHwmon(name)) continue;
+
+            for (int ch = 1; ch <= 16; ++ch)
+            {
+                char suffix[24];
+                snprintf(suffix, sizeof(suffix), "fan%d_input", ch);
+                const std::string input = dir + "/" + suffix;
+
+                long long rpm = 0;
+                if (!ReadSysfsLong(input, rpm)) continue;              // no such channel
+                if (rpm <= 0 || rpm > kHwmonMaxRpm) continue;          // stopped or absurd
+
+                snprintf(suffix, sizeof(suffix), "fan%d_label", ch);
+                std::string label;
+                if (ReadFileToString((dir + "/" + suffix).c_str(), label))
+                    label = NormalizeSysfsText(label);
+
+                int score = 0;
+                if (label.find("cpu") != std::string::npos) score = 2;
+                else if (IsBoardMonitorHwmon(name))         score = 1;
+
+                if (score <= bestScore) continue;
+                bestScore  = score;
+                bestPath   = input;
+                bestSource = name + " channel " + std::to_string(ch) +
+                             (label.empty() ? std::string(" unlabeled")
+                                            : std::string(" label ") + label);
+            }
+        }
+
+        if (bestScore < 0) return false;
+        pathOut   = bestPath;
+        sourceOut = bestSource;
+        return true;
     }
 
     // Read CPU name from /proc/cpuinfo.
@@ -342,6 +486,60 @@ double CpuMonitor::ReadRaplPowerWatts()
     return watts;
 }
 
+// Returns the RPM of the CPU fan tachometer selected in sysfs, or -1 while no
+// channel reports a running fan. The channel is chosen on the first call and
+// its file is re-read every tick - one small sysfs read is far below the CPU
+// budget and keeps the chart live.
+int CpuMonitor::ReadHwmonFanRpm()
+{
+    if (!m_hwmonFan.found)
+    {
+        if (m_hwmonFan.searched && m_hwmonFan.cooldown > 0)
+        {
+            --m_hwmonFan.cooldown;
+            return -1;
+        }
+
+        const bool firstScan = !m_hwmonFan.searched;
+        m_hwmonFan.searched  = true;
+        m_hwmonFan.cooldown  = kHwmonRetryTicks;
+
+        std::string path, source;
+        if (SelectHwmonCpuFan(path, source))
+        {
+            m_hwmonFan.path   = std::move(path);
+            m_hwmonFan.source = std::move(source);
+            m_hwmonFan.found  = true;
+            LOGI("CPU fan tachometer found: hwmon %hs", m_hwmonFan.source.c_str());
+        }
+        else if (firstScan)
+        {
+            // Reported once: a machine whose monitor chip has no driver simply
+            // has no tachometer to show, and the retry cycle must not repeat
+            // that line every 30 s.
+            LOGI("No CPU fan tachometer in /sys/class/hwmon - fan speed is N/A.");
+        }
+
+        if (!m_hwmonFan.found) return -1;
+    }
+
+    long long rpm = 0;
+    if (!ReadSysfsLong(m_hwmonFan.path, rpm))
+    {
+        // The sysfs entry is gone (driver unloaded): drop the selection so the
+        // next scan walks the hwmon class again.
+        m_hwmonFan.found   = false;
+        m_hwmonFan.path.clear();
+        m_hwmonFan.cooldown = kHwmonRetryTicks;
+        LOGI("CPU fan tachometer %hs became unreadable.", m_hwmonFan.source.c_str());
+        return -1;
+    }
+
+    if (rpm <= 0 || rpm > kHwmonMaxRpm)
+        return -1;                     // stopped fan or implausible reading
+    return static_cast<int>(rpm);
+}
+
 double CpuMonitor::SampleLoad()
 {
     double user = 0, nice = 0, system = 0, idle = 0;
@@ -435,6 +633,11 @@ void CpuMonitor::Collect()
         temp = ReadCpuTemperature();
     }
 
+    // CPU fan: tachometer of the CPU header as published by the hwmon driver of
+    // the motherboard monitor chip. Always read, no switch and no warning: the
+    // kernel driver owns the chip and sysfs reads cannot change anything.
+    const int fanRpm = ReadHwmonFanRpm();
+
     // All writes to m_metrics must hold the mutex: GetMetrics() reads it from
     // the GUI thread (data race otherwise).
     {
@@ -442,6 +645,8 @@ void CpuMonitor::Collect()
         m_metrics.uptimeMs = uptimeMs;
         if (temp >= 0.0)
             m_metrics.temperature = temp;
+        if (fanRpm > 0)
+            m_metrics.fanRpm = fanRpm;
     }
 
     if (probe)
@@ -451,9 +656,6 @@ void CpuMonitor::Collect()
         else
             LOGI("CPU temp sensor unavailable");
     }
-
-    // Fan speed - not commonly available on Linux desktops without special drivers.
-    // Leaving as N/A by default.
 }
 
 #endif // PLATFORM_LINUX

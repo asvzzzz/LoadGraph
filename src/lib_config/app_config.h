@@ -48,6 +48,10 @@ struct AppConfig
     bool    http_log       = true;
     bool    log_file       = false; // GUI and console (TTY): write loadgraph.jsonl snapshots when true
     bool    superio_fan    = false; // enable Super I/O fan probe via WinRing0
+    // One time notice shown the first time the probe is switched on from the
+    // View menu. Set to true once the user confirmed it, so the dialog does
+    // not repeat on every start.
+    bool    superio_warn_ok = false;
     // Window position and size saved between sessions.
     // (0,0,0,0 means "let OS decide" - default placement).
     int     window_x       = 0;

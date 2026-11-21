@@ -231,6 +231,7 @@ All settings are stored in a single `loadgraph.cfg` JSON file, in the same per-u
   "http_log": true,
   "log_file": false,
   "superio_fan": false,
+  "superio_warn_ok": false,
   // Window position and size — (0,0,0,0 = let OS decide)
   "window_x": 100,
   "window_y": 100,
@@ -250,6 +251,12 @@ All settings are stored in a single `loadgraph.cfg` JSON file, in the same per-u
 }
 ```
 
+`superio_fan` (Windows only) turns on the direct Super I/O tachometer read described in
+the limitations section; the same switch is available at runtime under **View -> CPU Fan
+via Super I/O**, which also persists the value. `superio_warn_ok` records that the one-time
+warning about direct port access has been confirmed, so the dialog is never repeated. On
+Linux the CPU fan always comes from `/sys/class/hwmon` and neither key has any effect.
+
 ## Architecture
 
 ```
@@ -261,7 +268,7 @@ src/
   graph_panel.{h,cpp}       # custom wxPanel, rendering via wxGraphicsContext
   metrics_collector.{h,cpp} # base class: poll thread, 1000 ms interval, condition_variable stop
   cpu_monitor.{h,cpp}       # Windows — PDH load, WMI thermal probe, MSR driver init, LHM/WMI power sensor, Super I/O (NCT679x) fan probe
-  cpu_monitor_linux.cpp     # Linux — /proc/stat (delta-method), /sys/class/thermal, RAPL power
+  cpu_monitor_linux.cpp     # Linux — /proc/stat (delta-method), /sys/class/thermal, RAPL power, hwmon CPU fan
   ram_monitor.{h,cpp}       # Windows — GlobalMemoryStatusEx
   ram_monitor_linux.cpp     # Linux — /proc/meminfo
   gpu_monitor.{h,cpp}       # Windows — NVML primary + NVAPI fallback (GetDynamicPstates)
@@ -294,7 +301,8 @@ src/
 - **Intel GPU** — not supported.
 - **macOS** — not a target platform.
 - **CPU temperature on Linux** — reads `/sys/class/thermal/thermal_zone0/temp`; many desktop boards expose no thermal zone, so N/A is common.
-- **CPU fan (Windows)** — the Fan chart appears only when a sensor reports RPM, so on boards without a readable tachometer the row simply shows Temperature alone. Sources: the WMI thermal sensor probe, and, when `"superio_fan": true`, a direct read of the Super I/O hardware monitor through WinRing0 port I/O. The chip is identified on the LPC config ports (0x2E / 0x4E), its hardware monitor logical device (0x0B) publishes the I/O window in config registers 0x60/0x61, that window is addressed at `base + 5` (index) and `base + 6` (data) with the bank selector at index 0x4E, and the 13-bit tachometer counters (0x4B0 and up) are decoded as `1350000 / count`. This is the layout of the Nuvoton NCT6791D..NCT6799D family (verified on NCT6793); only the config register that locks the monitor I/O space is written, no fan control or limit register is touched. If the firmware keeps the monitor block undecoded the log names every window that was probed and the value stays N/A.
+- **CPU fan (Windows)** — the Fan chart appears only when a sensor reports RPM, so on boards without a readable tachometer the row simply shows Temperature alone. Sources: the WMI thermal sensor probe, and, when the probe is switched on (`"superio_fan": true` in the config or **View -> CPU Fan via Super I/O**, which asks for confirmation the first time), a direct read of the Super I/O hardware monitor through WinRing0 port I/O. The chip is identified on the LPC config ports (0x2E / 0x4E), its hardware monitor logical device (0x0B) publishes the I/O window in config registers 0x60/0x61, that window is addressed at `base + 5` (index) and `base + 6` (data) with the bank selector at index 0x4E, and the 13-bit tachometer counters (0x4B0 and up) are decoded as `1350000 / count`. A window is accepted only when it answers with the Nuvoton vendor ID `0x5CA3` at `0x804F` / `0x004F`, which is what proves the firmware really decoded the monitor block; the config device ID (registers 0x20/0x21, masked with `0xFFF8`) only names the chip. Decoded parts: NCT6779D, NCT6791D, NCT6792D, NCT6793D, NCT6795D, NCT6796D/DR, NCT6797D, NCT6799D. Recognized but deliberately not decoded, because their tachometers live elsewhere: NCT6683D/6686D/6687D (EC page interface instead of the banked window), NCT6771F, NCT6776F (16-bit RPM registers), NCT610XD (different window) and NCT6701D (different register read order). The excluded parts are matched on the exact id/revision pair, the family only on the masked value, so an NCT6701D (0xD8/0x06) is never taken for an NCT6799D (0xD8/0x02). Only the config register that locks the monitor I/O space is written, no fan control or limit register is touched. Turning the probe off at runtime drops the value back to N/A instead of freezing the last reading; turning it on makes the collector identify the chip again. If the firmware keeps the monitor block undecoded the log names every window that was probed and the value stays N/A.
+- **CPU fan (Linux)** — always on, no warning: the tachometers of the motherboard monitor chip are published by its kernel driver (`nct6775`, `it87`, `f71882fg`, `w83627hf`, `smsc47m1`, ...) as `/sys/class/hwmon/hwmonN/fanM_input`, already decoded into RPM, so LoadGraph only reads sysfs and never touches ports or needs root. The channel is picked once: a `fanM_label` naming the CPU connector wins (CPUFAN, CPU_FAN, CPU OPT), otherwise the first channel of a board monitor driver, otherwise the first channel that reports a running fan; graphics-card and NVMe hwmon devices are skipped so that the CPU row never repeats the GPU fan. A channel reading 0 is treated as "nothing connected". When the driver module is loaded later, the scan is retried every 30 s, and the startup log names the device and channel that was chosen (`CPU fan tachometer found: hwmon nct6779 channel 1 label cpufan`). Laptops whose fan is attached to an EC rather than to a Super I/O chip expose no hwmon tachometer, so the value stays N/A there.
 - **HVCI / Memory Integrity** — if enabled in Windows Security, user-mode `rdmsr` is blocked and a kernel driver is required.
 - **WinRing0 blocklist** — Microsoft actively blocks WinRing0 drivers on Windows 11 22H2+. Defender may delete the `.sys` file; add an exclusion for the LoadGraph directory if needed.
 - **Virtualized systems (Hyper-V / VM)** — CPU temperature typically shows N/A. Standard WMI thermal classes (`MSAcpi_ThermalZoneTemperature`) are inaccessible from guest OS user mode, and `rdmsr` is blocked by the hypervisor. NVIDIA App works around this by running its backend (`nvcontainer.exe`) as LOCALSYSTEM, which has different WMI permissions — replicating this pattern requires elevation.

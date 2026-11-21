@@ -60,6 +60,15 @@ public:
     void QueryCpuName();
     // Probe MSR thermal sensor params on the main thread.
     void ProbeMsrInit();
+#ifdef PLATFORM_WINDOWS
+    // Requests the Super I/O tachometer probe (loadgraph.cfg or the View menu).
+    // The request is the only piece of probe state shared with the caller: the
+    // polling thread applies it at the start of its next Collect() and
+    // reinitializes the rest there, so that state stays single threaded.
+    void SetSuperIoFanProbe(bool enable);
+    // Current request state: true when the collector may touch LPC ports.
+    bool IsSuperIoFanProbeEnabled() const;
+#endif
 #ifdef PLATFORM_LINUX
     // Read RAPL package energy counter and return power in watts.
     // Returns -1.0 when RAPL is unavailable (WSL2, AMD, root-only perms).
@@ -110,6 +119,13 @@ private:
     // missing: LibreHardwareMonitor / OpenHardwareMonitor and the port I/O
     // driver can be started long after LoadGraph.
     int  m_wmiRetry  = 0;
+    // Switch of the Super I/O probe. m_superIoEnableReq is written by the GUI
+    // thread through SetSuperIoFanProbe() (or once at startup), the polling
+    // thread only reads it; m_superIoApplied records the state that thread has
+    // already installed, so a difference between the two makes the next
+    // Collect() drop the cached window and identify the chip again.
+    std::atomic<bool> m_superIoEnableReq{false};
+    bool              m_superIoApplied   = false;
     bool m_fanIoTried  = false;  // true after first Super I/O fan probe attempt
     // Super I/O state after a successful identification: the monitor window
     // base is cached so the tachometers can be re-read without touching the
@@ -146,6 +162,24 @@ private:
     // powerWatts; SampleLoad() then skips the load x TDP estimate.
     std::atomic<bool> m_powerReal{false};
 #ifdef PLATFORM_LINUX
+    // Selected CPU tachometer of the hwmon class. The channel is picked once
+    // and its sysfs file is re-read every tick; while nothing was found the
+    // scan is repeated on a slow cycle, because the monitor chip driver
+    // (nct6775, it87, f7188x, ...) can be loaded long after LoadGraph started.
+    struct HwmonFanState
+    {
+        bool        searched = false; // a scan already ran
+        bool        found    = false; // path names a channel that reported a fan
+        std::string path;             // /sys/class/hwmon/hwmonN/fanM_input
+        std::string source;           // device name + channel, for the log
+        int         cooldown = 0;     // ticks until the scan is repeated
+    };
+    HwmonFanState m_hwmonFan;
+
+    // Reads the selected tachometer. Returns RPM, or -1 while no channel of
+    // the CPU fan header is available.
+    int ReadHwmonFanRpm();
+
     // Previous /proc/stat values for delta-based CPU load calculation.
     double   m_prevUser = 0, m_prevNice = 0, m_prevSystem = 0, m_prevIdle = 0;
     bool     m_loadFirst = true;          // first sample is a warm-up discard

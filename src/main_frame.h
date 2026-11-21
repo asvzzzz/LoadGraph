@@ -16,6 +16,10 @@
 enum
 {
     ID_HTTP_TOGGLE = wxID_HIGHEST + 900,
+    // View -> Super I/O fan probe. Kept outside the wxID_HIGHEST+100 block the
+    // View toggles allocate sequentially, and outside m_menuIdToKey, so its
+    // check state is stored in superio_fan and not in the view_menu map.
+    ID_SUPERIO_FAN = wxID_HIGHEST + 910,
 };
 
 class MainFrame : public wxFrame
@@ -141,6 +145,12 @@ private:
     void BuildViewMenu(wxMenuBar* menuBar,
                        const std::map<std::string, bool>& initialState);
     void OnViewToggle(wxCommandEvent& evt);
+
+    // View -> CPU fan via Super I/O (Windows only). The probe reads the
+    // motherboard monitor chip through direct port access, so the first time it
+    // is switched on the user confirms the notice; the confirmation is remembered
+    // in loadgraph.cfg (superio_warn_ok) and never asked again.
+    void OnSuperIoFanToggle(wxCommandEvent& evt);
     void ApplyHeightAdjustment(const std::string& key, bool showingItem);
 
     // Adds the CPU fan chart to the CPU Temp row when the fan sensor starts

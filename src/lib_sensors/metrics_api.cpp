@@ -3,6 +3,7 @@
 #include "ram_monitor.h"
 #include "gpu_monitor.h"
 #include "storage_monitor.h"
+#include "app_config.h"
 #include <chrono>
 #include <thread>
 #include <cstring>
@@ -22,6 +23,14 @@ bool MetricsInit()
     s_cpu = new CpuMonitor();
     s_ram = new RamMonitor();
     s_gpu = new GpuMonitor();
+
+#ifdef PLATFORM_WINDOWS
+    // The Super I/O tachometer probe writes to the LPC config port of an
+    // unknown chip, so it stays off unless loadgraph.cfg asks for it. The View
+    // menu can raise the request later through MetricsSetSuperIoFanProbe();
+    // applying it before CollectNow() makes the first sample use it as well.
+    s_cpu->SetSuperIoFanProbe(LoadAppConfig().superio_fan);
+#endif
 
     s_cpu->QueryCpuName();
     s_cpu->CollectNow();
@@ -98,6 +107,26 @@ std::vector<GpuData> MetricsGetGpus()
 bool MetricsGpuAvailable()
 {
     return s_gpu && s_gpu->IsAvailable();
+}
+
+void MetricsSetSuperIoFanProbe(bool enable)
+{
+#ifdef PLATFORM_WINDOWS
+    if (s_cpu) s_cpu->SetSuperIoFanProbe(enable);
+#else
+    // Linux reads the CPU tachometers from /sys/class/hwmon, which involves no
+    // port access and needs no switch.
+    (void)enable;
+#endif
+}
+
+bool MetricsSuperIoFanProbeEnabled()
+{
+#ifdef PLATFORM_WINDOWS
+    return s_cpu ? s_cpu->IsSuperIoFanProbeEnabled() : false;
+#else
+    return false;
+#endif
 }
 
 std::vector<StorageData> MetricsGetStorage()

@@ -3,7 +3,7 @@
 #include "ring0_msr.h"
 #include "power_table.h"
 #include "logger.h"
-#include "app_config.h"
+#include <cstdio>    // snprintf for the diagnostic buffers
 
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -419,17 +419,44 @@ void CpuMonitor::Collect()
     // --- Super I/O fan probe (WinRing0 I/O port access) --------------------
     // The chip is identified once per session; its tachometers are then
     // re-read on a 5 s cadence because RPM is dynamic. Disabled by default -
-    // direct port I/O can affect unknown LPC devices. Enable in loadgraph.cfg:
-    // "superio_fan": true
-    static bool s_superioEnabled = []() -> bool {
-        extern AppConfig LoadAppConfig();
-        static const AppConfig cfg = LoadAppConfig();
-        return cfg.superio_fan;
-    }();
-    if (s_superioEnabled && fan < 0 && Ring0Msr::IsOpen() && !m_fanIoTried)
+    // direct port I/O can affect unknown LPC devices. Enable it in
+    // loadgraph.cfg ("superio_fan": true) or from the View menu, which pushes
+    // the request through MetricsSetSuperIoFanProbe().
+    //
+    // m_superIoEnableReq is the only probe field another thread writes. When it
+    // differs from what this thread already applied, all probe state owned by
+    // this thread is dropped here and the identification runs again.
+    const bool wantProbe = m_superIoEnableReq.load(std::memory_order_relaxed);
+    if (wantProbe != m_superIoApplied)
+    {
+        m_superIoApplied = wantProbe;
+        m_fanIoTried     = false;
+        m_fanIoOk        = false;
+        m_fanIoBase      = 0;
+        m_fanIoCool      = 0;
+        m_fanIoLogged    = false;
+        LOGI("Super I/O fan probe %s.", wantProbe ? "enabled" : "disabled");
+        if (!wantProbe && m_fanIoLastRpm >= 0)
+        {
+            // The RPM on screen came from the probe that was just switched
+            // off, and WMI does not own the fan: report N/A instead of keeping
+            // a frozen value in the chart forever.
+            m_fanIoLastRpm = -1;
+            if (!(m_wmiMask & 2u))
+            {
+                std::lock_guard<std::mutex> lock(m_mutex);
+                m_metrics.fanRpm = -1;
+            }
+        }
+        else
+        {
+            m_fanIoLastRpm = -1;
+        }
+    }
+
+    if (wantProbe && fan < 0 && Ring0Msr::IsOpen() && !m_fanIoTried)
     {
         m_fanIoTried = true;
-        LOGI("Super I/O fan probe enabled by config (\"superio_fan\": true)");
         m_fanIoBase = ProbeSuperIoHwm();
         m_fanIoOk   = (m_fanIoBase != 0);
     }
@@ -642,16 +669,30 @@ unsigned int CpuMonitor::RefreshWmiSensors(double& tempC, int& fanRpm,
     return filled | w;
 }
 
+// Runtime switch of the Super I/O tachometer probe. The caller (startup code or
+// the View menu of the GUI) only publishes the request; Collect() of the
+// polling thread applies it and reinitializes the probe state there, so the
+// state needs no lock and can never be observed half updated.
+void CpuMonitor::SetSuperIoFanProbe(bool enable)
+{
+    m_superIoEnableReq.store(enable, std::memory_order_relaxed);
+}
+
+bool CpuMonitor::IsSuperIoFanProbeEnabled() const
+{
+    return m_superIoEnableReq.load(std::memory_order_relaxed);
+}
+
 // ----------------------------------------------------------------------------
-// Nuvoton NCT6793 Super I/O access through WinRing0 port I/O.
+// Nuvoton NCT679x Super I/O access through WinRing0 port I/O.
 //
 // The LPC config interface is an index/data port pair (0x2E and 0x2F, or 0x4E
 // and 0x4F). Writing the key byte 0x87 twice enters config mode, after which a
 // config register is read by writing its number to the index port and reading
-// the data port. Registers 0x20/0x21 hold the 16 bit device ID; masked with
-// 0xFFF8 it names the chip (0xD120 = NCT6793). Logical device 0x0B is the
-// hardware monitor: register 0x30 tells whether it is active and 0x60/0x61
-// hold the base of the I/O window it decodes.
+// the data port. Registers 0x20/0x21 hold the 16 bit device ID that names the
+// chip. Logical device 0x0B is the hardware monitor: register 0x30 tells
+// whether it is active and 0x60/0x61 hold the base of the I/O window it
+// decodes.
 //
 // Inside that window the index register is NOT at base + 0: the NCT679x maps
 // it to base + 5 with the data register at base + 6, exactly as the Linux
@@ -668,9 +709,68 @@ unsigned int CpuMonitor::RefreshWmiSensors(double& tempC, int& fanRpm,
 // chip keeps running exactly the way the firmware configured it.
 // ----------------------------------------------------------------------------
 
-// Device ID of the supported chip, as read from config registers 0x20/0x21
-// and masked with 0xFFF8 (the low 3 bits are a stepping revision).
-static constexpr unsigned int kNct6793Id = 0xD120u;
+// Device IDs of the chips whose tachometers use the 13 bit counters decoded
+// below. The ID is read from config registers 0x20/0x21 and masked with 0xFFF8,
+// because the low 3 bits carry a stepping revision. LibreHardwareMonitor lists
+// these parts as id/revision pairs (LpcIO); collapsing a pair into the masked
+// ID is also what makes a board that reports revision 0x20 for an NCT6793D
+// match, while the strict pair table of that project does not.
+struct NctChip { unsigned int id; const char* name; };
+static constexpr NctChip kNct679xChips[] = {
+    { 0xC560u, "NCT6779D" },
+    { 0xC800u, "NCT6791D" },
+    { 0xC910u, "NCT6792D" },
+    { 0xD120u, "NCT6793D" },
+    { 0xD350u, "NCT6795D" },
+    { 0xD420u, "NCT6796D" },
+    { 0xD428u, "NCT6796DR/NCT6798D" },
+    { 0xD450u, "NCT6797D" },
+    { 0xD800u, "NCT6799D" },
+};
+
+// Nuvoton parts that are recognized here but deliberately not decoded, so the
+// log can name the chip instead of calling it unknown: the NCT668x keep their
+// monitor registers behind an EC page interface rather than the banked index
+// and data window, the NCT6771F and NCT6776F report RPM in 16 bit registers
+// instead of a counter, the NCT610XD maps its tachometers elsewhere, and the
+// NCT6701D reads its source registers in another order. These entries are
+// matched on the full id/revision pair, before the mask is applied, because
+// 0xD8/0x06 (NCT6701D) and 0xD8/0x02 (NCT6799D) collapse to the same masked
+// value. Pairs are taken from the identification table of that project.
+static constexpr NctChip kNctOtherChips[] = {
+    { 0xB470u, "NCT6771F" },
+    { 0xC330u, "NCT6776F" },
+    { 0xC450u, "NCT610XD" },
+    { 0xC732u, "NCT6683D" },
+    { 0xD440u, "NCT6686D" },
+    { 0xD441u, "NCT6686D" },
+    { 0xD592u, "NCT6687D" },
+    { 0xD806u, "NCT6701D" },
+};
+
+// Outcome of naming a config space device ID.
+enum class NctChipKind { Unknown, Decoded, OtherLayout };
+
+// Names the Nuvoton chip behind a device ID read from config registers
+// 0x20/0x21. 'name' receives the chip name for Decoded and OtherLayout and a
+// null pointer for Unknown. Note that this only labels the chip: what proves
+// that a monitor window is really alive is the vendor ID read inside it
+// (NctWindowAlive). 'id' is the raw pair; the exclusion list is matched first
+// and only then the family table, which is matched on the masked value.
+static NctChipKind MatchNctChip(unsigned int id, const char*& name)
+{
+    for (const NctChip& c : kNctOtherChips)
+    {
+        if (c.id == id) { name = c.name; return NctChipKind::OtherLayout; }
+    }
+    const unsigned int masked = id & 0xFFF8u;
+    for (const NctChip& c : kNct679xChips)
+    {
+        if (c.id == masked) { name = c.name; return NctChipKind::Decoded; }
+    }
+    name = nullptr;
+    return NctChipKind::Unknown;
+}
 // Config register that locks the monitor I/O space on the NCT679x family.
 static constexpr uint8_t kNct6791RegIoLock = 0x28;
 // Index and data ports inside a monitor window, plus the bank select register
@@ -785,17 +885,33 @@ static uint16_t ProbeSuperIoHwm()
             continue;
         }
 
+        // Raw id/revision pair: the exclusion list is matched on it exactly,
+        // the family table only on the masked value (the low 3 bits are the
+        // stepping, and some boards report 0x20 where the vendor table says
+        // 0x21).
         const unsigned int chipId =
-            ((static_cast<unsigned int>(idHi) << 8) |
-             static_cast<unsigned int>(idLo)) & 0xFFF8u;
-        if (chipId != kNct6793Id)
+            (static_cast<unsigned int>(idHi) << 8) |
+            static_cast<unsigned int>(idLo);
+
+        const char* chipName = nullptr;
+        const NctChipKind kind = MatchNctChip(chipId, chipName);
+        if (kind == NctChipKind::OtherLayout)
         {
-            LOGI("Super I/O 0x%02X: device ID 0x%04X, only NCT6793 (0x%04X) is decoded",
-                 cfg, chipId, kNct6793Id);
+            LOGI("Super I/O 0x%02X: Nuvoton %s, device ID 0x%04X - its "
+                 "tachometers use another register layout and are not decoded",
+                 cfg, chipName, chipId);
             Ring0Msr::WriteIoPortByte(cfg, 0xAA);
             continue;
         }
-        LOGI("Super I/O 0x%02X: Nuvoton NCT6793, device ID 0x%04X", cfg, chipId);
+        if (kind == NctChipKind::Unknown)
+        {
+            LOGI("Super I/O 0x%02X: device ID 0x%04X is not a Nuvoton chip of "
+                 "the NCT679x family", cfg, chipId);
+            Ring0Msr::WriteIoPortByte(cfg, 0xAA);
+            continue;
+        }
+        LOGI("Super I/O 0x%02X: Nuvoton %s, device ID 0x%04X (masked 0x%04X)",
+             cfg, chipName, chipId, chipId & 0xFFF8u);
 
         // The NCT679x family splits its hardware monitor function over several
         // logical devices, and the firmware picks the I/O address of the
