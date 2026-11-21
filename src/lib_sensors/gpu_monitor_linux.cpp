@@ -37,14 +37,14 @@ struct NvmlMemory
 };
 
 // ----------------------------------------------------------------------------
-// NVIDIA-карта без проприетарного драйвера: libnvidia-ml отсутствует, но
-// само устройство видно на шине (/sys/bus/pci/devices существует в любом
-// случае). Список PCI-устройств vendor 0x10de класса "дисплей" (class 0x03)
-// нужен, чтобы показать модель из pci.ids с N/A-метриками, как это делается
-// для AMD без драйвера. Только чтение sysfs, внешних процессов нет.
+// An NVIDIA card without the proprietary driver: libnvidia-ml is missing, but
+// the device itself is visible on the bus (/sys/bus/pci/devices exists in any
+// case). The list of PCI devices with vendor 0x10de of the display class 0x03
+// is needed to show the model from pci.ids with N/A metrics, as is done for
+// AMD cards without a driver. sysfs reads only, no external processes.
 // ----------------------------------------------------------------------------
 
-/// Первая строка sysfs-файла без обрамляющих пробелов. False при ошибке.
+/// First line of a sysfs file without surrounding whitespace. False on error.
 static bool ReadPciSysfsStr(const std::string& path, std::string& out)
 {
     out.clear();
@@ -68,8 +68,8 @@ static bool ReadPciSysfsStr(const std::string& path, std::string& out)
     return !out.empty();
 }
 
-/// Найти все NVIDIA-дисплейконтроллеры (vendor 0x10de, class 0x03xx) на шине.
-/// devIds - device ID в форме "0x0a65", bdfs - адрес вида 0000:04:00.0.
+/// Find all NVIDIA display controllers (vendor 0x10de, class 0x03xx) on the bus.
+/// devIds - device ID in the "0x0a65" form, bdfs - address like 0000:04:00.0.
 static void ScanNvidiaPci(std::vector<std::string>& devIds,
                           std::vector<std::string>& bdfs)
 {
@@ -93,8 +93,8 @@ static void ScanNvidiaPci(std::vector<std::string>& devIds,
             continue;
         if (!ReadPciSysfsStr(base + "/class", cls))
             continue;
-        // class "0x030000": 0x03 - VGA/3D-контроллеры. HD-audio function
-        // той же карты (class 0x0403) нас не интересует.
+        // class "0x030000": 0x03 - VGA/3D controllers. The HD-audio function
+        // of the same card (class 0x0403) is of no interest to us.
         if (cls.size() < 6 || cls.compare(0, 4, "0x03") != 0)
             continue;
         if (!ReadPciSysfsStr(base + "/device", dev))
@@ -106,9 +106,9 @@ static void ScanNvidiaPci(std::vector<std::string>& devIds,
     closedir(dir);
 }
 
-/// Добавить метрики-заглушки для NVIDIA-карт без драйвера: имя из pci.ids,
-/// все значения N/A (-1), GUI сам скроет графики при отрицательных значениях.
-/// pci.ids разбирается один раз на device ID, лог пишется один раз за запуск.
+/// Add stub metrics for NVIDIA cards without a driver: name from pci.ids,
+/// all values N/A (-1), the GUI hides the graphs itself on negative values.
+/// pci.ids is parsed once per device ID, the log is written once per run.
 static void AppendUndrivenNvidia(std::vector<GpuMetrics>& out)
 {
     static std::map<std::string, std::string> s_nameCache;
@@ -121,8 +121,8 @@ static void AppendUndrivenNvidia(std::vector<GpuMetrics>& out)
     for (size_t i = 0; i < devIds.size(); ++i)
     {
         GpuMetrics gm{};
-        // Явный N/A загрузки: без NVML загрузки нет, и GUI скрывает график
-        // вместо честного на вид, но лживого "0%".
+        // Explicit N/A for load: without NVML there is no load reading, and the
+        // GUI hides the graph instead of a plausible-looking but false "0%".
         gm.loadPercent = -1.0;
 
         std::map<std::string, std::string>::iterator it = s_nameCache.find(devIds[i]);
@@ -162,8 +162,8 @@ GpuMonitor::GpuMonitor()
     else
         LOGI("NVML not available on this system - GPU graphs hidden.");
 
-    // NVIDIA на шине, но без NVML (драйвер не установлен): блок GPU должен
-    // остаться видимым - карта покажется моделью из pci.ids с N/A-метриками.
+    // NVIDIA on the bus but without NVML (driver not installed): the GPU block
+    // must stay visible - the card shows as the pci.ids model with N/A metrics.
     if (!m_nvvmAvailable)
     {
         std::vector<std::string> nvidiaIds;
@@ -172,7 +172,7 @@ GpuMonitor::GpuMonitor()
         m_available = !nvidiaIds.empty();
     }
 
-    // Initialize AMD monitor once — lifetime managed with GpuMonitor.
+    // Initialize AMD monitor once - lifetime managed with GpuMonitor.
     m_amdMonitor = new AmdMonitor();
     if (m_amdMonitor && m_amdMonitor->IsAvailable())
         LOGI("AMD GPU monitor initialized (Linux).");
@@ -193,20 +193,20 @@ std::vector<GpuMetrics> GpuMonitor::GetMetrics()
 
 bool GpuMonitor::IsAvailable() const
 {
-    // Доступность = NVIDIA (NVML) ИЛИ AMD. Иначе на системе без NVIDIA-драйвера
-    // весь GPU-блок скрывается, даже когда amdgpu-карта найдена и читается.
-    // m_available на Linux означает "NVIDIA видна на PCI, но NVML недоступен"
-    // (карта показывается с N/A-метриками).
+    // Availability = NVIDIA (NVML) OR AMD. Otherwise, on a system without the
+    // NVIDIA driver the whole GPU block is hidden even when an amdgpu card is
+    // found and read. On Linux m_available means "NVIDIA visible on PCI, but
+    // NVML is unavailable" (the card is shown with N/A metrics).
     return m_nvvmAvailable || m_available ||
            (m_amdMonitor && m_amdMonitor->IsAvailable());
 }
 
 void GpuMonitor::Collect()
 {
-    // Метрики собираются в локальный вектор и публикуются одним swap под
-    // мьютексом: читатель (UI при старте, HTTP-эндпоинт) не должен видеть
-    // очищенный список. Локальный вектор заодно исключает накопление дублей
-    // при AMD-вставке - свежий список каждый цикл.
+    // Metrics are collected into a local vector and published with a single
+    // swap under the mutex: a reader (UI at startup, HTTP endpoint) must never
+    // see a cleared list. A local vector also rules out accumulating duplicates
+    // on the AMD append - a fresh list every cycle.
     std::vector<GpuMetrics> collected;
 
     // Primary source: NVML.
@@ -224,10 +224,10 @@ void GpuMonitor::Collect()
                          std::make_move_iterator(amdMetrics.end()));
     }
 
-    // NVML не вернул ни одного устройства (драйвера нет или его не видно):
-    // добавляем NVIDIA-карты с шины заглушками - имя из pci.ids, N/A метрики.
-    // Скрытая карта выглядит как "ее нет", это сбивает с толку (GeForce 210
-    // без драйвера на Ubuntu 22.04 именно так и выглядело).
+    // NVML returned no device at all (no driver, or it is not visible): append
+    // the NVIDIA cards from the bus as stubs - name from pci.ids, N/A metrics.
+    // A hidden card looks like "there is none", which is confusing (a GeForce
+    // 210 without a driver on Ubuntu 22.04 looked exactly like that).
     if (nvmlCount == 0)
     {
         std::vector<GpuMetrics> nvidiaStub;

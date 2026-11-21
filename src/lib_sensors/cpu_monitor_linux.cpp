@@ -350,7 +350,7 @@ double CpuMonitor::SampleLoad()
 
     // Calculate CPU usage since last sample.
     // State lives in class members (m_prevUser etc.) so multiple CpuMonitor
-    // instances do not share counters — the old statics were a latent bug.
+    // instances do not share counters - the old statics were a latent bug.
     if (m_loadFirst)
     {
         m_prevUser  = user;
@@ -412,7 +412,7 @@ void CpuMonitor::QueryCpuName()
 void CpuMonitor::Collect()
 {
     // CPU load: /proc/stat delta. SampleLoad writes loadPercent and powerWatts
-    // into m_metrics under its own lock — called here so the delta is single-threaded.
+    // into m_metrics under its own lock - called here so the delta is single-threaded.
     (void)SampleLoad();
 
     const uint64_t uptimeMs = ReadUptimeMs();

@@ -53,7 +53,7 @@ public:
 
     // Sample CPU load (PDH delta on Windows, /proc/stat on Linux).
     // Thread-safe: writes into m_metrics under its own lock.
-    // Called from the polling thread inside Collect() — do NOT call from GUI thread.
+    // Called from the polling thread inside Collect() - do NOT call from GUI thread.
     double SampleLoad();
 
     // Read the CPU model name (called once at startup before polling starts).
@@ -70,7 +70,7 @@ protected:
     void Collect() override;
 
 #ifdef PLATFORM_LINUX
-    // RAPL package energy counter state — monotonic microjoule counter with
+    // RAPL package energy counter state - monotonic microjoule counter with
     // wrap-around handling. Accessed only from the GUI thread (1 Hz tick), so
     // no extra locking is needed beyond m_mutex for m_metrics writes.
     struct RaplState

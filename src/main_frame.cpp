@@ -104,7 +104,7 @@ MainFrame::MainFrame(const wxString& title, const AppConfig& cfg)
 	int y = m_cfg.window_y;
 	int w = m_cfg.window_w;
 	int h = m_cfg.window_h;
-	// (0,0,0,0 means "let OS decide" — default placement).
+	// (0,0,0,0 means "let OS decide" - default placement).
 	bool hasPos = (x != 0 || y != 0);
 	if (!hasPos) { x = 100; y = 100; w = 640; h = 720; }
 
@@ -116,7 +116,7 @@ MainFrame::MainFrame(const wxString& title, const AppConfig& cfg)
 	SetMinSize(wxSize(480, 540));
 
 	// Icon is set in OnInit via MakeEmbeddedGreenIcon() which loads from the
-	// embedded ICO bytes — avoids Win32 LoadIcon quirks.
+	// embedded ICO bytes - avoids Win32 LoadIcon quirks.
 	// Initialize the shared metrics system (CPU / RAM / GPU monitors).
 	MetricsInit();
 
@@ -172,7 +172,7 @@ MainFrame::MainFrame(const wxString& title, const AppConfig& cfg)
 		// Use the pre-adjustment size so user-persisted dimensions are preserved
 		// even when some sections were hidden in a previous session.
 		const wxSize cs = savedCs;
-		// Use saved height if it is larger than content minimum — this preserves
+		// Use saved height if it is larger than content minimum - this preserves
 		// the user's preferred window size across restarts.
 		wxSize finalSz(std::max(cs.x, mn.x), std::max(cs.y, mn.y));
 

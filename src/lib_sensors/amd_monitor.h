@@ -14,35 +14,35 @@ struct IDXGIFactory1;
 #include <map>
 #include <cstdint>
 
-/// Мониторинт AMD GPU.
-/// Windows: ADL2 API (atiadlxx.dll грузится динамически), VRAM - через DXGI.
-/// Linux:   sysfs/hwmon драйвера amdgpu (без внешних процессов).
+/// AMD GPU monitoring.
+/// Windows: ADL2 API (atiadlxx.dll is loaded dynamically), VRAM - via DXGI.
+/// Linux:   amdgpu driver sysfs/hwmon (no external processes).
 class AmdMonitor
 {
 public:
     AmdMonitor();
     ~AmdMonitor();
 
-    /// Собрать актуальные метрики всех AMD GPU.
-    /// Пустой вектор, если библиотека/драйвер недоступны или карт нет.
+    /// Collect current metrics of all AMD GPUs.
+    /// Empty vector if the library/driver is unavailable or no cards exist.
     std::vector<GpuMetrics> GetMetrics();
 
-    /// True, если ADL/amdgpu инициализирован и найдена хотя бы одна карта.
+    /// True if ADL/amdgpu is initialized and at least one card was found.
     bool IsAvailable() const;
 
 #ifndef PLATFORM_WINDOWS
-    /// Универсальный помощник (не только для AMD): имя модели PCI-устройства
-    /// по vendor:device ("0x1002", "0x679a") из системной базы pci.ids.
-    /// Используется GpuMonitor для показа NVIDIA-карт без проприетарного
-    /// драйвера, когда NVML недоступен. Пустая строка, если записи нет.
+    /// Generic helper (not only for AMD): PCI device model name
+    /// by vendor:device ("0x1002", "0x679a") from the system pci.ids database.
+    /// Used by GpuMonitor to show NVIDIA cards without the proprietary
+    /// driver when NVML is unavailable. Empty string if there is no entry.
     static std::string ResolvePciName(const std::string& vendorId,
                                       const std::string& deviceId);
 #endif
 
 private:
 #ifdef PLATFORM_WINDOWS
-    // ADL2 сигнатуры (adl_sdk.h / adapter.h / overdrive5.h / overdrive6.h).
-    // ADL_CONTEXT_HANDLE - это void*.
+    // ADL2 signatures (adl_sdk.h / adapter.h / overdrive5.h / overdrive6.h).
+    // ADL_CONTEXT_HANDLE is a void*.
     using FnAdlCreate      = int (*)(void* callback, int iEnumConnectedAdapters, void** ppContext);
     using FnAdlDestroy     = int (*)(void* pContext);
     using FnNumAdaptersGet = int (*)(void* pContext, int* lpNumAdapters);
@@ -58,44 +58,44 @@ private:
     using FnOD6PowerGet    = int (*)(void* pContext, int iAdapterIndex, int iPowerType, int* lpCurrentValue);
     using FnMemInfo2Get    = int (*)(void* pContext, int iAdapterIndex, void* lpMemoryInfo2);
 
-    /// Аппаратный AMD-адаптер, перечисленный DXGI (без ADL).
+    /// Hardware AMD adapter enumerated by DXGI (no ADL).
     struct DxgiAmdInfo
     {
-        std::string name;                 // Description из DXGI_ADAPTER_DESC
-        uint64_t    dedicatedBytes = 0;   // объем выделенной видеопамяти
-        uint64_t    usedBytes      = 0;   // использование, если usedValid
+        std::string name;                 // Description from DXGI_ADAPTER_DESC
+        uint64_t    dedicatedBytes = 0;   // dedicated video memory size
+        uint64_t    usedBytes      = 0;   // usage, valid when usedValid
         bool        usedValid      = false;
     };
 
     bool LoadAdl();
     void FreeAdl();
 
-    /// Инициализация ADL: загрузка atiadlxx.dll, поиск точек входа ADL2 и
-    /// создание контекста. false означает, что метрики ADL недоступны.
+    /// ADL initialization: load atiadlxx.dll, resolve ADL2 entry points and
+    /// create the context. false means ADL metrics are unavailable.
     bool InitAdl();
 
-    /// Загрузка dxgi.dll и создание IDXGIFactory1. Ошибка не фатальна: без DXGI
-    /// недоступен только VRAM.
+    /// Loads dxgi.dll and creates IDXGIFactory1. The failure is not fatal:
+    /// without DXGI only VRAM is unavailable.
     void OpenDxgi();
 
-    /// Сбор метрик: сначала ADL, если он ничего не вернул - DXGI-запас.
+    /// Metrics collection: ADL first; if it returns nothing - the DXGI fallback.
     void CollectAdl(std::vector<GpuMetrics>& out);
 
-    /// Метрики только по ADL. diag = печатать одноразовую диагностику ADL.
+    /// ADL-only metrics. diag = print the one-time ADL diagnostics.
     void CollectViaAdl(std::vector<GpuMetrics>& out, bool diag);
 
-    /// Запасной источник: адаптеры, видимые DXGI (имя и VRAM), когда ADL карту
-    /// не перечисляет. diag = печатать сообщение один раз.
+    /// Fallback source: adapters visible to DXGI (name and VRAM), when ADL does
+    /// not enumerate the card. diag = print the message only once.
     void CollectDxgiOnly(std::vector<GpuMetrics>& out, bool diag);
 
-    /// Список аппаратных AMD-адаптеров DXGI (софтверный WARP отброшен).
+    /// List of hardware DXGI AMD adapters (software WARP dropped).
     bool EnumerateDxgiAmd(std::vector<DxgiAmdInfo>& out);
 
-    /// VRAM по DXGI: ADL не отдает использование видеопамяти, поэтому used
-    /// берется из IDXGIAdapter3::QueryVideoMemoryInfo. Сопоставление адаптеров
-    /// идет по порядковому номеру среди AMD-адаптеров (если их количество
-    /// совпадает), иначе - по объему выделенной памяти.
-    /// Возвращает false, если DXGI недоступен или адаптер не найден.
+    /// VRAM via DXGI: ADL never reports video memory usage, so used
+    /// comes from IDXGIAdapter3::QueryVideoMemoryInfo. Adapter matching
+    /// goes by ordinal number among AMD adapters (when their counts
+    /// match), otherwise - by the dedicated memory size.
+    /// Returns false if DXGI is unavailable or the adapter is not found.
     bool QueryVramDXGI(unsigned amdOrdinal, uint64_t adlTotalBytes,
                        uint64_t& totalBytes, uint64_t& usedBytes);
 
@@ -122,15 +122,15 @@ private:
     bool LoadSysfs();
     void CollectSysfs(std::vector<GpuMetrics>& out);
 
-    /// Кэш имени модели из pci.ids по PCI device ID. Разбор базы (~1 МБ
-    /// текста) делается один раз на ID, чтобы опрос раз в секунду не читал
-    /// файл. Кэш трогает только поток опроса (GpuMonitor::Collect), гонок нет.
+    /// Cache of pci.ids model names keyed by PCI device ID. Parsing the database
+    /// (~1 MB of text) is done once per ID so that the once-per-second poll does
+    /// not read the file. Only the poll thread (GpuMonitor::Collect) touches it.
     std::map<std::string, std::string> m_pciNameCache;
 #endif
 
     bool m_available = false;
 #ifdef PLATFORM_WINDOWS
-    bool m_enumLogged = false;   // флаг одноразовой диагностики перечисления ADL
+    bool m_enumLogged = false;   // one-time ADL enumeration diagnostics flag
 #endif
 };
 

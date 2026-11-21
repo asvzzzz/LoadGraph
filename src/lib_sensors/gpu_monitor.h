@@ -33,9 +33,9 @@ class AmdMonitor; // Forward declaration, defined in amd_monitor.h
 
 // Collects GPU metrics for all GPUs (NVIDIA via NVML/NVAPI, AMD via ADL).
 // Primary source: NVML (nvml.dll on Windows, libnvidia-ml.so on Linux).
-// Fallback: NVAPI (nvapi64.dll on Windows) — Windows only.
+// Fallback: NVAPI (nvapi64.dll on Windows) - Windows only.
 // AMD support: ADL (atiadlxx.dll on Windows).
-// Dynamically loads libraries — falls back to empty list if unavailable.
+// Dynamically loads libraries - falls back to empty list if unavailable.
 class GpuMonitor : public MetricsCollector
 {
 public:
@@ -100,20 +100,20 @@ private:
     FnNvAPI_GPU_GetAllClockFrequencies m_fnGetAllClockFrequencies = nullptr;
     FnNvAPI_Unload                     m_fnUnload           = nullptr;
     bool                               m_initialized       = false;  // true only after successful NVAPI_Initialize.
-    // Одноразовая диагностика NVAPI: коды возврата отдельных вызовов печатаются
-    // только в первом цикле сбора. Флаг пишется и читается только потоком
-    // сборщика (Collect вызывает CollectNvApi последовательно), мьютекс не нужен.
+    // One-shot NVAPI diagnostics: return codes of individual calls are printed
+    // only in the first collection cycle. The flag is written and read only by
+    // the collector thread (Collect calls CollectNvApi in sequence), no mutex needed.
     bool                               m_nvapiDiagLogged   = false;
 
     bool LoadNvml();
     void FreeNvml();
-    /// NVML-метрики всех GPU: результат дописывается в out. Опубликован
-    /// (заменен целиком) список может быть только в Collect().
+    /// NVML metrics for all GPUs: the result is appended to out. The list is
+    /// published (replaced as a whole) only in Collect().
     void CollectNvml(std::vector<GpuMetrics>& out);
 
     bool LoadNvApi();
     void FreeNvApi();
-    /// NVAPI-метрики всех GPU: результат дописывается в out.
+    /// NVAPI metrics for all GPUs: the result is appended to out.
     void CollectNvApi(std::vector<GpuMetrics>& out);
 #else
 private:
@@ -147,8 +147,8 @@ private:
 
     bool LoadNvml();
     void FreeNvml();
-    /// NVML-метрики всех GPU: результат дописывается в out. Опубликован
-    /// (заменен целиком) список может быть только в Collect().
+    /// NVML metrics for all GPUs: the result is appended to out. The list is
+    /// published (replaced as a whole) only in Collect().
     void CollectNvml(std::vector<GpuMetrics>& out);
 #endif
 

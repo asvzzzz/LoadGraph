@@ -191,7 +191,7 @@ function makeChart(id, color, yMax) {
     };
 }
 
-// ── Charts ---------------------------------------------------------------─
+// -- Charts ----------------------------------------------------------------
 let cpuChart      = makeChart('cpuChart',       C.cpuLoad,   100);
 let ramChart      = makeChart('ramChart',       C.ram,       128);
 let tempChart     = makeChart('tempChart',      C.cpuTemp,   100);
@@ -201,11 +201,11 @@ let totalPowerChart = null;
 
 const gpuCharts  = {};
 
-// ── Helpers ───────────────────────────────────────────────────────────────
+// -- Helpers ---------------------------------------------------------------
 function esc(s)  { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;'); }
 function tempColor(t) { return t > 80 ? '#ff0000' : C.cpuTemp; }
 
-// ── CPU section update ────────────────────────────────────────────────────
+// -- CPU section update ----------------------------------------------------
 function updateCpu(d) {
   document.getElementById('cpuName').textContent = d.cpu_name || '';
   document.getElementById('cpuLoadVal').textContent = d.cpu_load.toFixed(1) + '%';
@@ -276,7 +276,7 @@ function updateCpu(d) {
   }
 }
 
-// ── GPU sections - preserve DOM, update in place ──────────────────────────
+// -- GPU sections - preserve DOM, update in place --------------------------
 function getOrCreateGpuSec(i, name) {
   var div = document.getElementById('gpusec'+i);
   if (div) return div;
@@ -498,7 +498,7 @@ if (typeof ResizeObserver !== 'undefined') {
     window.addEventListener('resize', function () { updateFlex(); redrawAll(); });
 }
 
-// ── Fetch & refresh ───────────────────────────────────────────────────────
+// -- Fetch & refresh -------------------------------------------------------
 var connLost = false;
 function setConnLost(v) {
   var el = document.getElementById('connWarn');

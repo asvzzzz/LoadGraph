@@ -141,7 +141,7 @@ static bool QueryWmiValueRaw(const wchar_t* ns, const wchar_t* query,
     if (ctx->pLoc)  ctx->pLoc->Release();
     if (ctx->comInit) CoUninitialize();
 
-    // Read ok BEFORE delete — reading ctx->ok after delete is use-after-free.
+    // Read ok BEFORE delete - reading ctx->ok after delete is use-after-free.
     const bool ok = ctx->ok;
     delete ctx;
     return ok;
@@ -305,7 +305,7 @@ static int ProbeSuperIoFan();
 
 void CpuMonitor::Collect()
 {
-    // CPU load — PDH delta sample once per tick, same cadence as the polling loop.
+    // CPU load - PDH delta sample once per tick, same cadence as the polling loop.
     // SampleLoad writes loadPercent and powerWatts into m_metrics under its own lock;
     // calling it here (instead of from a separate timer thread) keeps the delta
     // calculation single-threaded and avoids race conditions.
@@ -389,7 +389,7 @@ void CpuMonitor::Collect()
     // Runs once per session: if no fan RPM yet but the kernel driver is loaded,
     // try reading the hardware monitoring chip directly. Guarded by m_wmiTried
     // so we only attempt after WMI has been tried at least once.
-    // Disabled by default — direct port I/O can affect unknown LPC devices.
+    // Disabled by default - direct port I/O can affect unknown LPC devices.
     // Enable via config: superio_fan = true in loadgraph.cfg
     static bool s_superioEnabled = []() -> bool {
         extern AppConfig LoadAppConfig();
@@ -630,7 +630,7 @@ static int ProbeSuperIoFan()
         if (baseAddr < 0x100) continue;
         LOGI("Super I/O base I/O = 0x%04X", baseAddr);
 
-        // Select logical device #1 (typically fan controller) — config reg 0x07.
+        // Select logical device #1 (typically fan controller) - config reg 0x07.
         if (!Ring0Msr::WriteIoPortByte(p.cfgPort, 0x07)) continue;
         Ring0Msr::ReadIoPortDword(p.dataPort); // LD selection ack.
         // If LD#1 is not enabled (bit 0 of status reg at offset 0x30), try another.
@@ -671,8 +671,8 @@ static int ProbeSuperIoFan()
         if (div == 0)    div = 1; // avoid division by zero.
 
         // Read fan counter register (16-bit). Nuvoton offset 0x4A, ITE 0x48, SMSC 0x49.
-        // Регистр адресуются байтом, поэтому смещение хранится в uint8_t - это
-        // убирает предупреждение о сужении при вызове WriteIoPortByte.
+        // The register is addressed with a byte, so the offset is kept in uint8_t -
+        // this removes the narrowing warning in the WriteIoPortByte call.
         uint8_t cntRegOff = isNuvoton ? 0x4A : (isIte ? 0x48 : 0x49);
         if (!Ring0Msr::WriteIoPortByte(p.cfgPort, cntRegOff)) continue;
         uint32_t cntLow  = Ring0Msr::ReadIoPortDword(p.dataPort);
@@ -748,12 +748,12 @@ static void ProbeAllTempSources()
 {
     // COM must be initialized before any CoCreateInstance / CoInitializeEx call.
     // QueryWmiValueRaw does its own per-call init, but this function calls
-    // CoCreateInstance directly without wrapping it — initialize once here.
+    // CoCreateInstance directly without wrapping it - initialize once here.
     HRESULT comHres = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
     bool comInit = (comHres == S_OK || comHres == S_FALSE);
     (void)comInit;
 
-    // ---- WMI: Win32_TemperatureProbe (root\cimv2) — enumerate ALL rows + props --
+    // ---- WMI: Win32_TemperatureProbe (root\cimv2) - enumerate ALL rows + props --
     {
         IWbemLocator* pLoc = nullptr;
         IWbemServices* pSvc = nullptr;
@@ -793,7 +793,7 @@ static void ProbeAllTempSources()
         }
     }
 
-    // ---- WMI: MSAcpi_ThermalZoneTemperature (root\wmi) — enumerate ALL rows + props --
+    // ---- WMI: MSAcpi_ThermalZoneTemperature (root\wmi) - enumerate ALL rows + props --
     {
         IWbemLocator* pLoc = nullptr;
         IWbemServices* pSvc = nullptr;
@@ -981,8 +981,8 @@ void CpuMonitor::QueryCpuName()
 #endif
     }
 
-    // Логируется ASCII-копия: m_metrics.cpuName на Windows это wchar_t[], а
-    // узкий "%s" прочитал бы из неё один символ ("Intel..." -> "I").
+    // The ASCII copy is logged: on Windows m_metrics.cpuName is a wchar_t[], so
+    // a narrow "%s" would read only one character from it ("Intel..." -> "I").
     LOGI("CPU name: %s", nameA.c_str());
 
     // Resolve the TDP limit once from the static table (unknown CPU -> 125 W).

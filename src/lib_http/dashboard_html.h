@@ -2,7 +2,7 @@
 #define DASHBOARD_HTML_H
 
 // Web dashboard HTML strings and rendering helpers.
-// Shared between GUI (http_server.cpp) and console_app — no wxWidgets dependency.
+// Shared between GUI (http_server.cpp) and console_app - no wxWidgets dependency.
 // Part of lib_http static library.
 
 #include "app_config.h"

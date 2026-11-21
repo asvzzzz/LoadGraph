@@ -74,7 +74,7 @@ static wxIcon MakeEmbeddedGreenIcon()
 {
     // Load the embedded Windows icon resource directly.
     // The .rc file compiles loadgraph.ico as ordinal 1 into the executable,
-    // so Windows Explorer shows it immediately — no runtime temp files needed.
+    // so Windows Explorer shows it immediately - no runtime temp files needed.
     return wxIcon(wxT("#1"), wxBITMAP_TYPE_ICO_RESOURCE);
 }
 #endif

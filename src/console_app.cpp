@@ -72,7 +72,7 @@ static std::string FormatUptime(uint64_t ms)
 }
 
 // ============================================================================
-// Progress bar — plain text, no colors. Label is right-padded to 12 chars
+// Progress bar - plain text, no colors. Label is right-padded to 12 chars
 // so all bars start at the same column. Value appended after the bar.
 // ============================================================================
 static const char* const kBarFull = "\xe2\x96\x88";
@@ -88,7 +88,7 @@ static std::string BuildProgress(const char* label, double percent, int cols)
     for (int i = static_cast<int>(strlen(label)); i < 14; ++i) out += ' ';
     out += '[';
     for (int i = 0; i < filled;   ++i) out += kBarFull;
-    // Empty cells: spaces (background already dark, no need for ░).
+    // Empty cells: plain spaces (background is already dark, no shading glyph).
     for (int i = filled; i < cols; ++i) out += ' ';
     out += ']';
     return out;
@@ -120,7 +120,7 @@ static int GetConsoleWidth()
 #endif
 
 // ============================================================================
-// GPU load classification — determine workload type from utilization patterns.
+// GPU load classification - determine workload type from utilization patterns.
 // Returns descriptive string for display and logging.
 // ============================================================================
 static std::string ClassifyGpuLoad(double load, double temp, double power, double fanPct)
@@ -225,7 +225,7 @@ static void LogJsonlSnapshot(const std::string& logPath,
 }
 
 // ============================================================================
-// OutputFrame — unified ANSI output on both platforms.
+// OutputFrame - unified ANSI output on both platforms.
 // Windows: VT enabled, write frame atomically without full clear to avoid flicker.
 // Linux:   clear screen then write.
 // ============================================================================
@@ -265,7 +265,7 @@ static std::string AnsiColor(const char* hex)
 }
 
 // ============================================================================
-// BuildFrame — unified ANSI output for both Windows (VT enabled) and Linux.
+// BuildFrame - unified ANSI output for both Windows (VT enabled) and Linux.
 // ============================================================================
 static std::string BuildFrame(const CpuMetrics& cpu, const RamMetrics& ram,
                               const std::vector<GpuMetrics>& gpus, int barCols)
@@ -317,7 +317,7 @@ static std::string BuildFrame(const CpuMetrics& cpu, const RamMetrics& ram,
     }
 #endif
 
-    // Header — same style as GPU header.
+    // Header - same style as GPU header.
     std::string cpuNameStr;
 #ifdef PLATFORM_WINDOWS
     cpuNameStr = cpuNameUtf8.empty() ? "CPU (N/A)" : cpuNameUtf8;
@@ -351,7 +351,7 @@ static std::string BuildFrame(const CpuMetrics& cpu, const RamMetrics& ram,
     out += " " + cDim + "| Uptime: " + cReset + FormatUptime(cpu.uptimeMs) + "\n";
 #endif
 
-    // CPU Load — bar + value
+    // CPU Load - bar + value
     {
         const std::string bar = BuildProgress("CPU Load", cpu.loadPercent, barCols);
         out += "\n" + cCpuLoad + bar + " " + cReset;
@@ -359,7 +359,7 @@ static std::string BuildFrame(const CpuMetrics& cpu, const RamMetrics& ram,
         out += cCpuLoad + std::string(tmp) + cReset;
     }
 
-    // CPU Temperature — bar + value (only when driver provides data)
+    // CPU Temperature - bar + value (only when driver provides data)
     if (cpu.temperature >= 0.0)
     {
         double tempPct = std::min(100.0, cpu.temperature);
@@ -371,7 +371,7 @@ static std::string BuildFrame(const CpuMetrics& cpu, const RamMetrics& ram,
         out += std::string(tc) + std::string(tmp) + cReset;
     }
 
-    // CPU Fan — bar + value (only when sensor provides data)
+    // CPU Fan - bar + value (only when sensor provides data)
     if (cpu.fanRpm > 0)
     {
         const std::string bar = BuildProgress("CPU Fan", static_cast<double>(cpu.fanRpm), barCols);
@@ -380,7 +380,7 @@ static std::string BuildFrame(const CpuMetrics& cpu, const RamMetrics& ram,
         out += cCpuTemp + std::string(tmp) + cReset;
     }
 
-    // CPU Power — bar (percent of TDP) + value
+    // CPU Power - bar (percent of TDP) + value
     if (cpu.powerWatts > 0.0)
     {
         double pwrPct = (cpu.tdpWatts > 0.0) ? (cpu.powerWatts / cpu.tdpWatts * 100.0) : 0.0;
@@ -394,7 +394,7 @@ static std::string BuildFrame(const CpuMetrics& cpu, const RamMetrics& ram,
         out += cDim + std::string(tmp) + cReset;
     }
 
-    // RAM Usage — bar + value
+    // RAM Usage - bar + value
     {
         const std::string bar = BuildProgress("RAM Usage", ram.loadPercent, barCols);
         out += "\n" + cRam + bar + " " + cReset;

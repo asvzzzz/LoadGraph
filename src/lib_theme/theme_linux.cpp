@@ -17,7 +17,7 @@ namespace
     bool   g_dark       = false;
     double g_darkCached = 0.0;
 
-    // Minimal INI reader — only parses a single key under [Settings].
+    // Minimal INI reader - only parses a single key under [Settings].
     // Returns true if the file exists and key was found with value "1".
     static bool ReadIniBool(const char* path, const char* key)
     {
@@ -37,7 +37,7 @@ namespace
             if (line.empty() || line[0] == ';' || line[0] == '#')
                 continue;
 
-            // Section header — check for [Settings].
+            // Section header - check for [Settings].
             if (line[0] == '[')
             {
                 size_t end = line.find(']');
@@ -72,7 +72,7 @@ namespace
     // Read GTK theme setting to determine dark/light mode.
     bool ReadDarkFlag()
     {
-        // 1) Explicit env var — fastest path.
+        // 1) Explicit env var - fastest path.
         const char* gtk_theme = getenv("GTK_THEME");
         if (gtk_theme && gtk_theme[0])
         {
@@ -83,7 +83,7 @@ namespace
                    theme.find("night") != std::string::npos;
         }
 
-        // 2) XDG_CURRENT_DESKTOP — GNOME/Cinnamon/MATE default to dark on modern
+        // 2) XDG_CURRENT_DESKTOP - GNOME/Cinnamon/MATE default to dark on modern
         //    systems when the user has selected a dark GTK theme.
         const char* desktop = getenv("XDG_CURRENT_DESKTOP");
 
@@ -138,7 +138,7 @@ namespace
         }
         if (preferDark) return true;
 
-        // 4) XDG_CURRENT_DESKTOP — GNOME defaults to dark on modern systems.
+        // 4) XDG_CURRENT_DESKTOP - GNOME defaults to dark on modern systems.
         if (desktop && strstr(desktop, "GNOME"))
             return true;
         // Cinnamon and MATE also tend to use dark themes by default now.
@@ -175,7 +175,7 @@ namespace
             return false;
         }
 
-        // 5) GTK settings.ini — works for XFCE, Deepin and others.
+        // 5) GTK settings.ini - works for XFCE, Deepin and others.
         const char* home = getenv("HOME");
         if (home && home[0])
         {

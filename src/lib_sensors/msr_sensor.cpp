@@ -15,8 +15,8 @@
 namespace MsrSensor
 {
     // MSR addresses (Intel SDM Vol 3B).
-    // IA32_TEMPERATURE_TARGET = 0x0000_01A2 — Tjmax in bits[23:16].
-    // IA32_THERM_STATUS       = 0x0000_019C — digital readout in bits[22:16].
+    // IA32_TEMPERATURE_TARGET = 0x0000_01A2 - Tjmax in bits[23:16].
+    // IA32_THERM_STATUS       = 0x0000_019C - digital readout in bits[22:16].
     static constexpr uint32_t kTargetMsr = 0x000001A2;
     static constexpr uint32_t kThermMsr  = 0x0000019C;
 
@@ -45,7 +45,7 @@ namespace MsrSensor
     // Pin thread to a specific logical processor and read an MSR.
     // Returns {EAX, EDX} from the single rdmsr instruction. RdmsrRaw returns
     // only EAX (low 32 bits); EDX is not separately addressable here, so hi is
-    // set to 0 — callers that need the high half should use Ring0Msr::ReadMsr().
+    // set to 0 - callers that need the high half should use Ring0Msr::ReadMsr().
     static std::pair<uint32_t, uint32_t> ReadMsrOnCore(uint32_t msr)
     {
         HANDLE hThread = GetCurrentThread();
@@ -98,7 +98,7 @@ namespace MsrSensor
         }
 
         // --- Raw rdmsr fallback (EAX only) -------------------------------------
-        auto [loT, hiT] = ReadMsrOnCore(kTargetMsr);   // EDX ignored — rdmsr returns EAX only
+        auto [loT, hiT] = ReadMsrOnCore(kTargetMsr);   // EDX ignored - rdmsr returns EAX only
         (void)hiT;
         if (loT != 0xFFFFFFFF)
         {
@@ -107,7 +107,7 @@ namespace MsrSensor
             if (computedTjmax <= 0 || computedTjmax > 150)
                 computedTjmax = static_cast<int>(tjmax);
 
-            auto [lo, hi] = ReadMsrOnCore(kThermMsr);     // EDX ignored — rdmsr returns EAX only
+            auto [lo, hi] = ReadMsrOnCore(kThermMsr);     // EDX ignored - rdmsr returns EAX only
             (void)hi;
             if (lo != 0xFFFFFFFF)
             {

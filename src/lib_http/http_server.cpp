@@ -71,7 +71,7 @@ static std::string WcharToUtf8(const std::wstring& w)
 #endif
 
 // ============================================================================
-// JSON metrics builder — calls MetricsGet* API (thread-safe).
+// JSON metrics builder - calls MetricsGet* API (thread-safe).
 // ============================================================================
 static std::string BuildJson()
 {
@@ -131,7 +131,7 @@ static std::string BuildJson()
         out += buf;
     }
 
-    // Storage array — separate from gpus.
+    // Storage array - separate from gpus.
     out += "],\"storage\":[";
     auto storage = MetricsGetStorage();
     for (size_t i = 0; i < storage.size(); ++i)
@@ -153,7 +153,7 @@ static std::string BuildJson()
 }
 
 // ============================================================================
-// Socket helpers — platform-specific accept/send loop.
+// Socket helpers - platform-specific accept/send loop.
 // ============================================================================
 
 // ============================================================================
@@ -244,7 +244,7 @@ static void HttpServeLoop(SOCKET srv, int port, const AppConfig& cfg)
                 "Connection: close\r\n"
                 "Content-Length: %u\r\n\r\n",
                 (unsigned int)kLoadGraphIcoSize);
-            // Send header — if client disconnected mid-header, stop immediately.
+            // Send header - if client disconnected mid-header, stop immediately.
             int sent = 0;
             while (sent < hlen)
             { int sn = send(client, hdr + sent, hlen - sent, 0); if (sn <= 0) break; sent += sn; }
@@ -303,7 +303,7 @@ static void HttpClose(SOCKET srv)
     WSACleanup();
 }
 
-#else // PLATFORM_LINUX — POSIX sockets
+#else // PLATFORM_LINUX - POSIX sockets
 // Create + bind + listen the server socket on the CALLER thread (see the
 // Windows variant above). Returns -1 on failure; close() is done in HttpClose.
 static int HttpOpenListen(int port)

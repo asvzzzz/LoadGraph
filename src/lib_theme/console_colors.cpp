@@ -45,7 +45,7 @@ WORD TempAttrs(double t)
 }
 
 const char* TempAnsi(double /* t */) { return ""; } // N/A on Windows
-#else // PLATFORM_LINUX — ANSI escape sequences
+#else // PLATFORM_LINUX - ANSI escape sequences
 static std::string HexToAnsi(unsigned int r, unsigned int g, unsigned int b)
 {
     char buf[32];

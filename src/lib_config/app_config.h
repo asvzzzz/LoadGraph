@@ -34,7 +34,7 @@ struct AppConfig
     bool    log_file       = false; // console (TTY): write loadgraph.jsonl snapshots when true
     bool    superio_fan    = false; // enable Super I/O fan probe via WinRing0
     // Window position and size saved between sessions.
-    // (0,0,0,0 means "let OS decide" — default placement).
+    // (0,0,0,0 means "let OS decide" - default placement).
     int     window_x       = 0;
     int     window_y       = 0;
     int     window_w       = 0;

@@ -9,7 +9,7 @@
 // Number of data points stored in the rolling buffer.
 static const int kGraphHistorySize = 60;
 
-// Value formatting mode — controls how the header readout is formatted so it
+// Value formatting mode - controls how the header readout is formatted so it
 // matches the web dashboard (load "26.5%", temp "52 C", RAM "13.8 GB").
 enum class GraphYMode { Auto, Percent, Gigabytes, Celsius, Watts };
 
@@ -20,8 +20,8 @@ enum class GraphYMode { Auto, Percent, Gigabytes, Celsius, Watts };
 class GraphPanel : public wxPanel
 {
 public:
-    // title — label shown above the chart (e.g. "Load").
-    // yLabel — unit suffix for the header readout (e.g. "%", "C", "W").
+    // title - label shown above the chart (e.g. "Load").
+    // yLabel - unit suffix for the header readout (e.g. "%", "C", "W").
     GraphPanel(wxWindow* parent, const wxString& title, const wxString& yLabel);
 
     // Append a new data point. Older points are discarded to keep history at kGraphHistorySize.
@@ -51,7 +51,7 @@ public:
     // Set the chart canvas background color (replaces theme-based card bg).
     void SetBgColor(const wxColour& color);
 
-    // Set the color painted behind the title row and around the canvas —
+    // Set the color painted behind the title row and around the canvas -
     // should match the section card color so the panel blends into its card.
     void SetSectionColor(const wxColour& color);
 

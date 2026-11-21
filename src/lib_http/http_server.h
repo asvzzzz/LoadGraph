@@ -4,7 +4,7 @@
 // Simple cross-platform HTTP server for serving the LoadGraph web dashboard.
 // Runs an accept loop in a worker thread; the listening socket is created
 // synchronously in StartHttpServer so a port conflict is reported instantly.
-// No third-party dependencies — uses only native sockets (Winsock2 on Windows,
+// No third-party dependencies - uses only native sockets (Winsock2 on Windows,
 // POSIX sockets on Linux). Built into lib_http static library.
 
 #include "app_config.h"

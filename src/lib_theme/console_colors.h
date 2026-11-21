@@ -24,7 +24,7 @@ using ConsoleColor = std::string;   // ANSI escape sequence per cell on Linux
 
 struct ConsoleColors
 {
-    // Palette entries — always populated by ApplyColors().
+    // Palette entries - always populated by ApplyColors().
     // = {} zero-initializes WORD to 0 and default-constructs std::string to "".
     ConsoleColor title       = {};
     ConsoleColor label       = {};

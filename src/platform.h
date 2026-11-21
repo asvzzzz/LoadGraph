@@ -58,7 +58,7 @@ inline bool ReadFileToString(const char* path, std::string& out)
     if (!f) return false;
 #endif
 
-    // Read until EOF — works correctly for virtual filesystems like /proc.
+    // Read until EOF - works correctly for virtual filesystems like /proc.
     char buf[4096];
     size_t n;
     while ((n = fread(buf, 1, sizeof(buf), f)) > 0)

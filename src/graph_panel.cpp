@@ -1,4 +1,4 @@
-﻿#include "graph_panel.h"
+#include "graph_panel.h"
 #include "logger.h"
 #include "theme.h"
 #include <wx/dcbuffer.h>
@@ -287,7 +287,7 @@ void GraphPanel::OnPaint(wxPaintEvent& /*evt*/)
 // load 26.5%, temp 52 C, RAM 13.8 GB, power 31.9 W, fan/RPM integers.
 wxString GraphPanel::FormatValue(double val) const
 {
-    // Guard against NaN / Inf — static_cast of NaN to integral is UB.
+    // Guard against NaN / Inf - static_cast of NaN to integral is UB.
     if (!std::isfinite(val)) return "N/A";
     switch (m_yMode)
     {

@@ -70,7 +70,7 @@ namespace Ring0Msr
     typedef bool(__stdcall* FnIsMsr)();
     typedef int(__stdcall* FnGetDllStatus)();
     typedef int(__stdcall* FnGetDriverType)();
-    // WinRing0 I/O port access (optional — not present in all builds).
+    // WinRing0 I/O port access (optional - not present in all builds).
     typedef uint32_t(__stdcall* FnReadPortDword)(uint16_t);
     typedef void(__stdcall* FnWritePortByte)(uint16_t, uint8_t);
 
@@ -686,7 +686,7 @@ namespace Ring0Msr
                 s_fnWrPortB(port, value);
                 return true;
             }
-            // DLL backend loaded but WritePortByte not exported — skip driver.
+            // DLL backend loaded but WritePortByte not exported - skip driver.
             LOGI("MSR: WritePortByte not available in DLL, skipping I/O write.");
             return false;
         }

@@ -14,7 +14,7 @@ static const unsigned int NVAPI_ENUM_PHYSICAL_GPUS_ID        = 0xE5AC921F;
 static const unsigned int NVAPI_GPU_GET_FULL_NAME_ID         = 0xCEEE8E9F;
 // IDs from nvapi_interface.h (NVIDIA/nvapi repo, Sep 2 2026).
 static const unsigned int NVAPI_GPU_GET_DYNAMIC_PSTATES_EX_ID = 0x60DED2ED;
-// Note: NvAPI_GPU_GetUsages (0x189A1FDF) is not supported on modern drivers —
+// Note: NvAPI_GPU_GetUsages (0x189A1FDF) is not supported on modern drivers -
 // GPU load is read via NvAPI_GPU_GetDynamicPstatesInfoEx instead.
 static const unsigned int NVAPI_GPU_GET_MEMORY_INFO_ID       = 0x07F9B368;
 static const unsigned int NVAPI_GPU_GET_THERMAL_SETTINGS_ID  = 0xE3640A56;
@@ -25,18 +25,18 @@ static const unsigned int NVAPI_UNLOAD_ID                    = 0xD22BDD7E;
 // Sizes and layouts taken from nvapi.h (R550+). Passing wrong sizes causes
 // INVALID_ARGUMENT or stack corruption.
 // NVAPI standard: version in high 16 bits, size in low 16 bits.
-// (nvapi.h convention differs from what I wrote earlier — sorry.)
+// (nvapi.h convention differs from what I wrote earlier - sorry.)
 #define MAKE_NVAPI_VERSION(sz, ver) \
     ((static_cast<unsigned int>(sz)) | (static_cast<unsigned int>(ver) << 16))
 
 // Match nvapi.h: #pragma pack(push,8). All fields here are NvU32 / int, so
-// default alignment already matches pack(1) for these structs — but we must
+// default alignment already matches pack(1) for these structs - but we must
 // not override the driver's expectation.
 #pragma pack(push, 8)
 
 static const unsigned int NVAPI_MAX_GPU_PUBLIC_CLOCKS = 32;
 
-// NV_DISPLAY_DRIVER_MEMORY_INFO_V1 — sizeof = 20 bytes, VER = 1.
+// NV_DISPLAY_DRIVER_MEMORY_INFO_V1 - sizeof = 20 bytes, VER = 1.
 // Official layout from nvapi_lite_common.h (NVIDIA/nvapi, Sep 2026).
 // No "reserved" field exists in any version. All size fields are in KB.
 struct NvMemoryInfo
@@ -48,7 +48,7 @@ struct NvMemoryInfo
     unsigned int sharedSystemMemory;               // offset 0x10
 };
 
-// NV_GPU_DYNAMIC_PSTATES_INFO_EX_V1 — sizeof = 40 bytes, VER = 1.
+// NV_GPU_DYNAMIC_PSTATES_INFO_EX_V1 - sizeof = 40 bytes, VER = 1.
 struct NvDynamicPstatesInfoEx
 {
     unsigned int version;
@@ -60,7 +60,7 @@ struct NvDynamicPstatesInfoEx
     } utilization[8];
 };
 
-// NV_GPU_THERMAL_SETTINGS_V2 — sizeof = 68 bytes, VER = 2.
+// NV_GPU_THERMAL_SETTINGS_V2 - sizeof = 68 bytes, VER = 2.
 // Field names differ from V1: defaultMinTemp/defaultMaxTemp/currentTemp (not
 // defaultTarget/currentTemperature).
 struct NvThermalSettings
@@ -76,7 +76,7 @@ struct NvThermalSettings
     } sensor[3];
 };
 
-// NV_GPU_CLOCK_FREQUENCIES_V1 — sizeof = 264 bytes, VER = 1.
+// NV_GPU_CLOCK_FREQUENCIES_V1 - sizeof = 264 bytes, VER = 1.
 // domain[NVAPI_MAX_GPU_PUBLIC_CLOCKS] where the constant equals 32 in nvapi.h.
 struct NvClockFrequencies
 {
@@ -134,7 +134,7 @@ using FnNvAPI_QueryInterface = void* (__cdecl*)(unsigned int interfaceId);
 GpuMonitor::GpuMonitor()
     : m_amdMonitor(nullptr)
 {
-    // Try NVML first — it is the primary metrics source.
+    // Try NVML first - it is the primary metrics source.
     m_nvvmAvailable = LoadNvml();
     if (m_nvvmAvailable)
     {
@@ -145,7 +145,7 @@ GpuMonitor::GpuMonitor()
         LOGI("NVML not available, falling back to NVAPI.");
     }
 
-    // Always try NVAPI too — used for GPU names as fallback and for GPUs
+    // Always try NVAPI too - used for GPU names as fallback and for GPUs
     // that NVML might miss (e.g. MUX-less laptops are not a concern here).
     m_available = LoadNvApi();
     if (m_available)
@@ -153,7 +153,7 @@ GpuMonitor::GpuMonitor()
     else
         LOGI("NVAPI load FAILED.");
 
-    // Initialize AMD monitor once — lifetime managed with GpuMonitor.
+    // Initialize AMD monitor once - lifetime managed with GpuMonitor.
     m_amdMonitor = new AmdMonitor();
     if (m_amdMonitor && m_amdMonitor->IsAvailable())
         LOGI("AMD GPU monitor initialized.");
@@ -178,20 +178,20 @@ std::vector<GpuMetrics> GpuMonitor::GetMetrics()
 
 bool GpuMonitor::IsAvailable() const
 {
-    // Доступность = NVIDIA (NVML/NVAPI) ИЛИ AMD. Иначе на машине без NVIDIA
-    // весь GPU-блок скрывается, даже когда ADL нашел AMD-карту.
+    // Availability = NVIDIA (NVML/NVAPI) OR AMD. Otherwise, on a machine with no
+    // NVIDIA GPU the whole GPU block is hidden even when ADL found an AMD card.
     return m_nvvmAvailable || m_available ||
            (m_amdMonitor && m_amdMonitor->IsAvailable());
 }
 
 void GpuMonitor::Collect()
 {
-    // Метрики собираются в локальный вектор и публикуются одним swap под
-    // мьютексом. Раньше список сначала очищался, а затем заполнялся долгим
-    // опросом NVML/NVAPI/ADL: читатель (UI при старте или HTTP-эндпоинт)
-    // попадал в это окно и видел пустой список, из-за чего GUI мог вообще не
-    // создать панели GPU. Локальный вектор заодно исключает накопление дублей
-    // при AMD-вставке (свежий список каждый цикл).
+    // Metrics are collected into a local vector and published with a single
+    // swap under the mutex. Earlier the list was cleared first and only then
+    // filled by the slow NVML/NVAPI/ADL polling: a reader (UI at startup or
+    // the HTTP endpoint) landed in that window and saw an empty list, so the
+    // GUI might not create the GPU panels at all. A local vector also rules
+    // out accumulating duplicates on the AMD append (fresh list every cycle).
     std::vector<GpuMetrics> collected;
 
     // Primary source: NVML.
@@ -229,8 +229,8 @@ void GpuMonitor::CollectNvApi(std::vector<GpuMetrics>& out)
 
     out.reserve(out.size() + count);
 
-    // Флаг одноразовой диагностики: первый цикл логирует коды возврата NVAPI,
-    // последующие циклы молчат, иначе в лог идёт 2+ строки каждую секунду.
+    // One-shot diagnostics flag: the first cycle logs the NVAPI return codes,
+    // later cycles stay silent, otherwise the log grows by 2+ lines every second.
     const bool diag = !m_nvapiDiagLogged;
 
     for (unsigned int i = 0; i < count; ++i)
@@ -258,8 +258,8 @@ void GpuMonitor::CollectNvApi(std::vector<GpuMetrics>& out)
         // Memory info. NV_DISPLAY_DRIVER_MEMORY_INFO_V1 (20 bytes, VER=1).
         // All size fields are in KB - convert to bytes. For cards > 4 GB the
         // U32 wraps; NVML is the accurate source - this path is a fallback only.
-        // Коды возврата печатаются только в первом цикле: при опросе раз в
-        // секунду такие строки превращают лог в бесконечный поток.
+        // Return codes are printed only in the first cycle: at one poll per
+        // second such lines turn the log into an endless stream.
         if (m_fnGetMemoryInfo)
         {
             NvMemoryInfo memInfo{};
@@ -319,8 +319,8 @@ void GpuMonitor::CollectNvApi(std::vector<GpuMetrics>& out)
         out.push_back(meta);
     }
 
-    // Диагностика NVAPI выполнена: дальше цикл сбора не печатает ничего, чтобы
-    // лог не рос на 2+ строки каждую секунду (дежурный режим с LLM).
+    // NVAPI diagnostics are done: the collection cycle prints nothing further so
+    // the log does not grow by 2+ lines per second (idle mode next to an LLM).
     m_nvapiDiagLogged = true;
 }
 
@@ -598,7 +598,7 @@ bool GpuMonitor::LoadNvApi()
 
 void GpuMonitor::FreeNvApi()
 {
-    // Only call NvAPI_Unload if Initialize succeeded — calling Unload on an
+    // Only call NvAPI_Unload if Initialize succeeded - calling Unload on an
     // uninitialised handle is undefined and may crash in newer driver versions.
     if (m_fnUnload && m_initialized)
         m_fnUnload();

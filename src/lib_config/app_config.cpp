@@ -11,7 +11,7 @@
 #endif
 
 // ---------------------------------------------------------------------------
-// Minimal JSON parser / emitter — no external dependencies.
+// Minimal JSON parser / emitter - no external dependencies.
 // Only handles the subset we actually use: strings, numbers, booleans, objects.
 // ---------------------------------------------------------------------------
 
@@ -484,7 +484,7 @@ AppConfig LoadAppConfig()
             }
             else
             {
-                // Number, bool, or null — skip to next comma or }.
+                // Number, bool, or null - skip to next comma or }.
                 while (*p && *p != ',' && *p != '}') ++p;
             }
         }

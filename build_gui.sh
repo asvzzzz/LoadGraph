@@ -2,7 +2,7 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-echo "=== LoadGraph GUI — build (Linux, Release) ==="
+echo "=== LoadGraph GUI - build (Linux, Release) ==="
 
 if [ ! -d "build_linux" ]; then
     mkdir -p build_linux

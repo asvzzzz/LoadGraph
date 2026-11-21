@@ -9,20 +9,20 @@
 #include <vector>
 
 // ============================================================================
-// Общие константы
+// Common constants
 // ============================================================================
 
-// PCI Vendor ID компании AMD.
+// PCI Vendor ID of AMD.
 static const int AMD_PCI_VENDOR_ID = 0x1002;
 
-// ADLAdapterInfo.iVendorID заполняется не hex-кодом PCI, а числом, собранным из
-// десятичных цифр идентификатора: для AMD это "1002" = 0x03EA, для NVIDIA - 10.
-// Проверка по одному только 0x1002 отбрасывает все рабочие адаптеры (проверено
-// дапом: у живых AMD-записей vendor равен 0x03EA).
+// ADLAdapterInfo.iVendorID is not filled with the PCI hex code but with a number
+// built from its decimal digits: AMD gives "1002" = 0x03EA, NVIDIA gives 10.
+// Matching on 0x1002 alone rejects every working adapter (verified from a
+// dump: live AMD records have vendor equal to 0x03EA).
 static const int ADL_VENDOR_ID_AMD_DECIMAL = 1002;
 
 // ============================================================================
-// Каркас класса (общий для всех платформ)
+// Class skeleton (common to all platforms)
 // ============================================================================
 
 AmdMonitor::AmdMonitor()
@@ -68,33 +68,33 @@ std::vector<GpuMetrics> AmdMonitor::GetMetrics()
 
 #include <windows.h>
 
-// GUID'ы интерфейсов DXGI должны быть определены в этом TU
-// (без необходимости линковать dxguid.lib).
+// DXGI interface GUIDs must be defined in this TU
+// (without the need to link dxguid.lib).
 #include <initguid.h>
 #include <dxgi.h>
 #include <dxgi1_6.h>
 
-// Коды ADL (adl_defines.h).
+// ADL result codes (adl_defines.h).
 #define ADL_OK                        0
 #define ADL_MAX_PATH                  256
 #define ADL_MAX_ADAPTERS              250
 
-// Типы скорости вращения вентилятора OD6 (битовая маска iSpeedType).
+// OD6 fan speed types (bit mask in iSpeedType).
 #define ADL_OD6_FANSPEED_TYPE_PERCENT 0x00000001
 #define ADL_OD6_FANSPEED_TYPE_RPM     0x00000002
 
-// Маска возможностей термоконтроллера OD5 (поле iFlags у ADLFanSpeedInfo).
+// OD5 thermal controller capabilities mask (iFlags field of ADLFanSpeedInfo).
 #define ADL_DL_FANCTRL_SUPPORTS_PERCENT_READ  1
 #define ADL_DL_FANCTRL_SUPPORTS_RPM_READ      4
 
-// Единица запроса для ADL2_Overdrive5_FanSpeed_Get (поле iSpeedType).
+// Request unit for ADL2_Overdrive5_FanSpeed_Get (iSpeedType field).
 #define ADL_DL_FANCTRL_SPEED_TYPE_PERCENT     1
 #define ADL_DL_FANCTRL_SPEED_TYPE_RPM         2
 
-// Максимум термоконтроллеров, которые перебираем в OD5.
+// Maximum number of thermal controllers iterated over in OD5.
 static const int ADL_OD5_MAX_THERMAL_CONTROLLERS = 8;
 
-// --- Структуры ADL. Layout в точности как в adl_structures.h SDK 18.1 ---
+// --- ADL structures. Layout exactly as in adl_structures.h SDK 18.1 ---
 
 namespace {
 
@@ -134,7 +134,7 @@ struct ADLPMActivity
 struct ADLTemperature
 {
     int iSize;
-    int iTemperature;   // миллиградусы Цельсия
+    int iTemperature;   // millidegrees Celsius
 };
 
 struct ADLFanSpeedInfo
@@ -155,7 +155,7 @@ struct ADLFanSpeedValue
     int iFlags;
 };
 
-// ADLOD6CurrentStatus: часы в единицах 10 КГц (документировано в SDK).
+// ADLOD6CurrentStatus: clocks in units of 10 KHz (documented in the SDK).
 struct ADLOD6CurrentStatus
 {
     int iEngineClock;
@@ -169,7 +169,7 @@ struct ADLOD6CurrentStatus
     int iExtMask;
 };
 
-// ADLOD6FanSpeedInfo: iSpeedType - битовая маска валидности полей.
+// ADLOD6FanSpeedInfo: iSpeedType - bit mask of field validity.
 struct ADLOD6FanSpeedInfo
 {
     int iSpeedType;
@@ -179,27 +179,27 @@ struct ADLOD6FanSpeedInfo
     int iExtMask;
 };
 
-// ADLMemoryInfo2 (adl_structures.h, SDK 18.1): размеры памяти в байтах.
+// ADLMemoryInfo2 (adl_structures.h, SDK 18.1): memory sizes in bytes.
 struct ADLMemoryInfo2
 {
-    long long iMemorySize;         // полный объем видеопамяти
+    long long iMemorySize;         // total video memory size
     char      strMemoryType[ADL_MAX_PATH];
-    long long iMemoryBandwidth;    // Мбайт/с на максимальном P-state
+    long long iMemoryBandwidth;    // MByte/s at the maximum P-state
     long long iHyperMemorySize;
     long long iInvisibleMemorySize;
     long long iVisibleMemorySize;
 };
 
-/// Символ, входящий в состав слова (буква латиницы или цифра).
+/// Character that is part of a word (a Latin letter or a digit).
 bool IsWordChar(char c)
 {
     return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
            (c >= '0' && c <= '9');
 }
 
-/// Поиск подстроки без учета регистра (только ASCII). Сравнение идет по
-/// длинам строк: чтения за терминирующим нулем нет. wordBounds требует, чтобы
-/// совпадение было отдельным словом.
+/// Case-insensitive substring search (ASCII only). Comparison follows the
+/// string lengths: there is no reading past the terminating null. wordBounds requires
+/// the match to be a standalone word.
 bool FindNoCase(const char* text, const char* needle, bool wordBounds)
 {
     if (!text || !needle)
@@ -226,8 +226,8 @@ bool FindNoCase(const char* text, const char* needle, bool wordBounds)
         if (!wordBounds)
             return true;
 
-        // p[0..n-1] заведомо существуют (иначе прервались выше), поэтому
-        // p[n] - минимум терминирующий ноль, чтение безопасно.
+        // p[0..n-1] are known to exist (otherwise we broke out above), so
+        // p[n] is at worst the terminating null, the read is safe.
         const bool leftOk  = (p == text) || !IsWordChar(p[-1]);
         const bool rightOk = !IsWordChar(p[n]);
         if (leftOk && rightOk)
@@ -236,9 +236,9 @@ bool FindNoCase(const char* text, const char* needle, bool wordBounds)
     return false;
 }
 
-/// Косвенный признак AMD-адаптера по имени ("AMD Radeon RX 5700 XT",
-/// "ATI Radeon E2460", "AMD FirePro W5100", "Ryzen Graphics"). Нужен потому,
-/// что часть версий драйвера не заполняет ADLAdapterInfo.iVendorID.
+/// Indirect sign of an AMD adapter from its name ("AMD Radeon RX 5700 XT",
+/// "ATI Radeon E2460", "AMD FirePro W5100", "Ryzen Graphics"). Needed because
+/// some driver versions do not fill in ADLAdapterInfo.iVendorID.
 bool LooksLikeAmdName(const char* name)
 {
     static const char* const kWords[] = { "radeon", "ati", "amd", "firepro",
@@ -251,16 +251,16 @@ bool LooksLikeAmdName(const char* name)
     return false;
 }
 
-/// True, если iVendorID из ADL соответствует AMD. Драйверы отдают это поле в
-/// "десятичной" записи (см. ADL_VENDOR_ID_AMD_DECIMAL), поэтому принимаем оба
-/// варианта; сравнение только с 0x1002 рабочие адаптеры не находит.
+/// True if the ADL iVendorID corresponds to AMD. Drivers report this field in
+/// a "decimal" encoding (see ADL_VENDOR_ID_AMD_DECIMAL), so both variants are
+/// accepted; comparing only against 0x1002 finds no working adapters.
 bool IsAmdAdlVendor(int vendorId)
 {
     return vendorId == AMD_PCI_VENDOR_ID || vendorId == ADL_VENDOR_ID_AMD_DECIMAL;
 }
 
-/// WCHAR[] -> UTF-8. Длина источника передана явно, поэтому незавершенная
-/// строка в DXGI Description не приведет к чтению за буфером.
+/// WCHAR[] -> UTF-8. The source length is passed explicitly, so an unterminated
+/// string in DXGI Description will not cause reads past the buffer.
 std::string WideToUtf8(const wchar_t* text, size_t chars)
 {
     if (!text || chars == 0)
@@ -286,8 +286,8 @@ std::string WideToUtf8(const wchar_t* text, size_t chars)
     return out;
 }
 
-/// Одноразовый дамп всех записей ADL. Позволяет по логу отличить "карты нет"
-/// от "ADL видит адаптер, но не тот вендор/флаги".
+/// One-time dump of all ADL records. Lets the log distinguish "no card" from
+/// "ADL sees an adapter, but the wrong vendor/flags".
 void LogAdlAdapters(const std::vector<ADLAdapterInfo>& adapters)
 {
     for (size_t i = 0; i < adapters.size(); ++i)
@@ -301,16 +301,16 @@ void LogAdlAdapters(const std::vector<ADLAdapterInfo>& adapters)
     }
 }
 
-/// Перечисляет дисплейные устройства Windows (user32 EnumDisplayDevices,
-/// документированный API, прав администратора не требует) и печатает их.
-/// Возвращает true, если ОС сообщает о PCI-устройстве vendor 0x1002 - это
-/// независимая от ADL проверка того, что AMD-карта в системе есть.
+/// Enumerates Windows display devices (user32 EnumDisplayDevices,
+/// documented API, requires no administrator rights) and prints them.
+/// Returns true if the OS reports a PCI device of vendor 0x1002 - this is an
+/// ADL-independent check that an AMD card exists in the system.
 bool LogOsDisplayDevices()
 {
     bool seesAmd = false;
 
-    // 16 - разумный предел: EnumDisplayDevices возвращает FALSE на первом же
-    // индексе за списком устройств, цикл защищен на случай сбоя драйвера.
+    // 16 is a sane limit: EnumDisplayDevices returns FALSE on the very first
+    // index past the device list; the loop is guarded in case of driver failure.
     for (DWORD i = 0; i < 16; ++i)
     {
         DISPLAY_DEVICEA dev{};
@@ -330,8 +330,8 @@ bool LogOsDisplayDevices()
     return seesAmd;
 }
 
-/// Длина строки с явным ограничением: чтение останавливается на limit байтах,
-/// поэтому незавершенная строка в полях ADL безопасна.
+/// String length with an explicit cap: reading stops at limit bytes,
+/// so an unterminated string in ADL fields is safe.
 size_t StrLenN(const char* text, size_t limit)
 {
     if (!text)
@@ -342,8 +342,8 @@ size_t StrLenN(const char* text, size_t limit)
     return n;
 }
 
-/// Колбэк аллокации ADL (ADL_MAIN_MALLOC_CALLBACK).
-/// ADL вызывает его для своих внутренних буферов.
+/// ADL allocation callback (ADL_MAIN_MALLOC_CALLBACK).
+/// ADL calls it for its own internal buffers.
 void* __stdcall AdlMallocCallback(int iSize)
 {
     if (iSize <= 0)
@@ -351,15 +351,15 @@ void* __stdcall AdlMallocCallback(int iSize)
     return malloc(static_cast<size_t>(iSize));
 }
 
-/// Привести температуру ADL к градусам: и OD5 (ADLTemperature.iTemperature),
-/// и OD6 (ADL2_Overdrive6_Temperature_Get) отдают миллиградусы Цельсия.
+/// Convert an ADL temperature to degrees: both OD5 (ADLTemperature.iTemperature)
+/// and OD6 (ADL2_Overdrive6_Temperature_Get) report millidegrees Celsius.
 double NormalizeAdlTemperature(int raw)
 {
     if (raw <= 0)
         return -1.0;
     double celsius = static_cast<double>(raw) / 1000.0;
     if (celsius < 1.0 && raw <= 250)
-        celsius = static_cast<double>(raw);   // резерв: драйвер вернул градусы
+        celsius = static_cast<double>(raw);   // fallback: the driver returned degrees
     if (celsius <= 0.0 || celsius > 250.0)
         return -1.0;
     return celsius;
@@ -368,23 +368,23 @@ double NormalizeAdlTemperature(int raw)
 } // namespace
 
 // ---------------------------------------------------------------------------
-// Инициализация ADL/DXGI
+// ADL/DXGI initialization
 // ---------------------------------------------------------------------------
 
 bool AmdMonitor::LoadAdl()
 {
-    // DXGI поднимается первым: он единственный источник объема и использования
-    // VRAM, а когда ADL недоступен (базовый драйвер дисплея, карта без ADL2) -
-    // единственный способ вообще увидеть карту.
+    // DXGI comes up first: it is the only source of VRAM size and usage, and
+    // when ADL is unavailable (basic display driver, card without ADL2) it is
+    // the only way to see the card at all.
     OpenDxgi();
 
     const bool adlOk = InitAdl();
 
-    // Независимая от ADL проверка: сообщает ли Windows о дисплейном устройстве
-    // PCI vendor 0x1002. Дешевый вызов, делаем один раз при старте.
+    // ADL-independent check: does Windows report a display device with PCI
+    // vendor 0x1002. Cheap call, done once at startup.
     const bool osSeesAmd = LogOsDisplayDevices();
 
-    // Проверка наличия хотя бы одной AMD карты.
+    // Probe for the presence of at least one AMD card.
     std::vector<GpuMetrics> probe;
     CollectAdl(probe);
     if (probe.empty())
@@ -405,8 +405,8 @@ bool AmdMonitor::LoadAdl()
         return false;
     }
 
-    // Диагностика необязательных точек входа: отсутствующая функция означает,
-    // что соответствующая метрика будет N/A на этом драйвере.
+    // Diagnostics for optional entry points: a missing function means that
+    // the corresponding metric will be N/A on this driver.
     if (adlOk)
     {
         if (!m_fnOD6Status)   LOGI("AMD: ADL2_Overdrive6_CurrentStatus_Get missing - load/clocks unavailable.");
@@ -435,13 +435,13 @@ bool AmdMonitor::LoadAdl()
     return true;
 }
 
-/// Загружает atiadlxx.dll, резолвит точки входа ADL2 и создает контекст ADL.
-/// False означает, что метрики ADL на этой системе недоступны - мониторинг тогда
-/// возможен только по DXGI.
+/// Loads atiadlxx.dll, resolves the ADL2 entry points and creates the ADL context.
+/// False means ADL metrics are unavailable on this system - monitoring is then
+/// possible via DXGI only.
 bool AmdMonitor::InitAdl()
 {
-    // atiadlxx.dll - 64-битная библиотека современных драйверов Adrenalin,
-    // atiadlxy.dll - устаревшее 32-битное имя.
+    // atiadlxx.dll is the 64-bit library of modern Adrenalin drivers,
+    // atiadlxy.dll is the legacy 32-bit name.
     const char* dllNames[] = { "atiadlxx.dll", "atiadlxy.dll" };
     for (const char* name : dllNames)
     {
@@ -455,7 +455,7 @@ bool AmdMonitor::InitAdl()
         return false;
     }
 
-    // Обязательные точки входа ADL2.
+    // Required ADL2 entry points.
     m_fnCreate      = reinterpret_cast<FnAdlCreate>(
         GetProcAddress(m_hAdl, "ADL2_Main_Control_Create"));
     m_fnDestroy     = reinterpret_cast<FnAdlDestroy>(
@@ -465,7 +465,7 @@ bool AmdMonitor::InitAdl()
     m_fnAdapterInfo = reinterpret_cast<FnAdapterInfoGet>(
         GetProcAddress(m_hAdl, "ADL2_Adapter_AdapterInfo_Get"));
 
-    // Необязательные: без них часть метрик просто не будет собрана.
+    // Optional: without them some metrics simply are not collected.
     m_fnActiveGet   = reinterpret_cast<FnActiveGet>(
         GetProcAddress(m_hAdl, "ADL2_Adapter_Active_Get"));
     m_fnOD6Status   = reinterpret_cast<FnOD6StatusGet>(
@@ -493,8 +493,8 @@ bool AmdMonitor::InitAdl()
         return false;
     }
 
-    // iEnumConnectedAdapters = 0: перечисляем все адаптеры (фильтр по
-    // вендору/флагам присутствия делаем сами).
+    // iEnumConnectedAdapters = 0: enumerate all adapters (the filtering by
+    // vendor and presence flags is done by us).
     int rc = m_fnCreate(reinterpret_cast<void*>(AdlMallocCallback), 0, &m_adlContext);
     if (rc != ADL_OK || !m_adlContext)
     {
@@ -505,8 +505,8 @@ bool AmdMonitor::InitAdl()
     return true;
 }
 
-/// Загружает dxgi.dll и создает IDXGIFactory1. Без него VRAM останется N/A, но
-/// остальные метрики продолжают работать, поэтому ошибка не считается фатальной.
+/// Loads dxgi.dll and creates IDXGIFactory1. Without it VRAM stays N/A, but the
+/// other metrics keep working, so the failure is not treated as fatal.
 void AmdMonitor::OpenDxgi()
 {
     m_hDxgi = LoadLibraryA("dxgi.dll");
@@ -574,30 +574,30 @@ void AmdMonitor::FreeAdl()
 }
 
 // ---------------------------------------------------------------------------
-// Сбор метрик
+// Metrics collection
 // ---------------------------------------------------------------------------
 
 void AmdMonitor::CollectAdl(std::vector<GpuMetrics>& out)
 {
     out.clear();
 
-    // Одноразовая диагностика печатается только на первой пробе (вызов из
-    // LoadAdl): дальше опрос идет раз в секунду и засорять лог нельзя.
+    // One-time diagnostics print only on the first pass (the call from
+    // LoadAdl): after that the poll runs once per second and the log must not be polluted.
     const bool diag = !m_enumLogged;
 
     CollectViaAdl(out, diag);
 
-    // ADL не дал ни одной карты, но адаптер виден операционной системе:
-    // показываем то, что умеет DXGI (имя и VRAM), вместо того чтобы прятать
-    // карту целиком.
+    // ADL returned no cards, but the adapter is visible to the operating system:
+    // show whatever DXGI can do (name and VRAM) instead of hiding
+    // the card entirely.
     if (out.empty())
         CollectDxgiOnly(out, diag);
 
     m_enumLogged = true;
 }
 
-/// Метрики по ADL: перечисление адаптеров и опрос Overdrive5/Overdrive6.
-/// diag = true печатает одноразовый дамп того, что вернул ADL.
+/// Metrics via ADL: adapter enumeration and Overdrive5/Overdrive6 queries.
+/// diag = true prints a one-time dump of what ADL returned.
 void AmdMonitor::CollectViaAdl(std::vector<GpuMetrics>& out, bool diag)
 {
     if (!m_adlContext || !m_fnNumAdapters || !m_fnAdapterInfo)
@@ -623,16 +623,16 @@ void AmdMonitor::CollectViaAdl(std::vector<GpuMetrics>& out, bool diag)
     if (diag)
         LogAdlAdapters(adapters);
 
-    // Один физический адаптер может занимать несколько записей - оставляем
-    // первую подходящую.
+    // One physical adapter can occupy several records - keep
+    // the first suitable one.
     struct AdapterRef
     {
-        int         index;      // ADL adapter index (первая запись адаптера)
-        int         bus;        // адрес на шине PCI: признак адаптера
+        int         index;      // ADL adapter index (adapter's first record)
+        int         bus;        // address on the PCI bus: identifies the adapter
         int         dev;
         int         func;
-        std::string udid;       // UDID одинаков у всех путей одного адаптера
-        unsigned    ordinal;    // порядковый номер среди AMD-адаптеров
+        std::string udid;       // UDID is the same for all paths of one adapter
+        unsigned    ordinal;    // ordinal number among AMD adapters
         std::string name;
     };
     std::vector<AdapterRef> targets;
@@ -640,28 +640,28 @@ void AmdMonitor::CollectViaAdl(std::vector<GpuMetrics>& out, bool diag)
 
     for (const ADLAdapterInfo& a : adapters)
     {
-        // Вендор берем из iVendorID (с учетом "десятичной" записи ADL); если
-        // драйвер поле не заполнил - ориентируемся на имя адаптера.
+        // Vendor is taken from iVendorID (allowing for ADL's "decimal" encoding); if
+        // the driver left the field unset - fall back to the adapter name.
         const bool isAmd = IsAmdAdlVendor(a.iVendorID) ||
                            LooksLikeAmdName(a.strAdapterName) ||
                            LooksLikeAmdName(a.strDisplayName);
         if (!isAmd)
             continue;
 
-        // iPresent - адаптер активен сейчас, iExist - установлен. Карта без
-        // подключенного монитора (типовой LLM-сценарий) часто отвечает
-        // present=0, поэтому достаточно любого из двух флагов. Если драйвер не
-        // выставил ни одного, но адаптер имеет адрес на шине PCI и имя - это
-        // реальное устройство (пустые записи-заполнители имеют bus=-1).
+        // iPresent - the adapter is active now, iExist - it is installed. A card with
+        // no connected monitor (typical LLM scenario) often answers
+        // present=0, so either of the two flags is enough. If the driver set
+        // neither, but the adapter has an address on the PCI bus and a name - it is
+        // a real device (empty placeholder records have bus=-1).
         const bool onPciBus = (a.iBusNumber >= 0) && (a.strAdapterName[0] != '\0');
         if (!a.iPresent && !a.iExist && !onPciBus)
             continue;
 
-        // ADL перечисляет отдельной записью каждый дисплейный путь: у R9 280
-        // это 8 записей с индексами 0..7, но одним адресом PCI
-        // (bus=3 dev=0 func=0). Физический адаптер опознается по адресу на
-        // шине (и по UDID), а не по iAdapterIndex, иначе одна карта
-        // превращается в восемь.
+        // ADL lists every display path as a separate record: the R9 280 has
+        // 8 records with indexes 0..7 but a single PCI address
+        // (bus=3 dev=0 func=0). The physical adapter is recognized by its address on
+        // the bus (and by the UDID), not by iAdapterIndex, otherwise one card
+        // turns into eight.
         const std::string udid(a.strUDID, StrLenN(a.strUDID, ADL_MAX_PATH - 1));
         bool dup = false;
         for (const AdapterRef& t : targets)
@@ -708,10 +708,10 @@ void AmdMonitor::CollectViaAdl(std::vector<GpuMetrics>& out, bool diag)
 
     for (const AdapterRef& t : targets)
     {
-        // ADL2_Adapter_Active_Get не используется как фильтр: адаптер, который
-        // ADL считает неактивным (карта без подключенного монитора, режим
-        // вычислений), по-прежнему отдает метрики Overdrive. Адаптер без каких
-        // либо данных отбрасывается ниже, по итогам опроса.
+        // ADL2_Adapter_Active_Get is not used as a filter: an adapter that
+        // ADL considers inactive (card with no connected monitor, compute mode)
+        // still returns its Overdrive metrics. An adapter without any
+        // data at all is dropped below, based on the query results.
         int active = 1;
         if (m_fnActiveGet &&
             m_fnActiveGet(m_adlContext, t.index, &active) != ADL_OK)
@@ -724,12 +724,12 @@ void AmdMonitor::CollectViaAdl(std::vector<GpuMetrics>& out, bool diag)
 
         GpuMetrics gm{};
         gm.name = t.name;
-        // Явный N/A: если ни OD6, ни OD5 не вернули валидный iActivityPercent,
-        // GUI скрывает график загрузки вместо лживого "0%".
+        // Explicit N/A: if neither OD6 nor OD5 returned a valid iActivityPercent,
+        // the GUI hides the load graph instead of a lying "0%".
         gm.loadPercent = -1.0;
 
-        // Загрузка и частоты: основной источник - ADLOD6CurrentStatus
-        // (часы документированы в 10 КГц), запасной - OD5 activity.
+        // Load and clocks: the primary source is ADLOD6CurrentStatus
+        // (clocks documented in units of 10 KHz), the fallback is OD5 activity.
         bool haveActivity = false;
         if (m_fnOD6Status)
         {
@@ -751,15 +751,15 @@ void AmdMonitor::CollectViaAdl(std::vector<GpuMetrics>& out, bool diag)
             activity.iSize = sizeof(ADLPMActivity);
             if (m_fnOD5Activity(m_adlContext, t.index, &activity) == ADL_OK)
             {
-                // Единицы частот ADLPMActivity в SDK не документированы,
-                // поэтому берем только процент загрузки.
+                // ADLPMActivity clock units are not documented in the SDK,
+                // so only the load percentage is taken.
                 if (activity.iActivityPercent >= 0 && activity.iActivityPercent <= 100)
                     gm.loadPercent = static_cast<double>(activity.iActivityPercent);
             }
         }
 
-        // Температура: сначала OD6 (int, миллиградусы), затем перебор
-        // термоконтроллеров OD5 (ADLTemperature.iTemperature - миллиградусы).
+        // Temperature: OD6 first (int, millidegrees), then iterating over
+        // OD5 thermal controllers (ADLTemperature.iTemperature - millidegrees).
         double tempC = -1.0;
         if (m_fnOD6Temp)
         {
@@ -779,8 +779,8 @@ void AmdMonitor::CollectViaAdl(std::vector<GpuMetrics>& out, bool diag)
         }
         gm.temperature = tempC;
 
-        // Вентилятор: OD6 (маска валидности percent/RPM), затем OD5
-        // через возможности термоконтроллера.
+        // Fan: OD6 (percent/RPM validity mask), then OD5
+        // through the thermal controller capabilities.
         bool fanDone = false;
         if (m_fnOD6Fan)
         {
@@ -837,10 +837,10 @@ void AmdMonitor::CollectViaAdl(std::vector<GpuMetrics>& out, bool diag)
             }
         }
 
-        // Мощность: ADL2_Overdrive6_CurrentPower_Get, iPowerType = 0
-        // ("ASIC Total Power"), значение - Ватты с 8 дробными битами.
-        // Публичный лимит мощности в Ваттах ADL не отдает (PowerControl_Get
-        // возвращает проценты регулировки), поэтому powerLimitWatts = N/A.
+        // Power: ADL2_Overdrive6_CurrentPower_Get, iPowerType = 0
+        // ("ASIC Total Power"), the value is Watts with 8 fractional bits.
+        // ADL does not return a public power limit in Watts (PowerControl_Get
+        // returns adjustment percentages), so powerLimitWatts = N/A.
         if (m_fnOD6Power)
         {
             int rawPower = 0;
@@ -852,8 +852,8 @@ void AmdMonitor::CollectViaAdl(std::vector<GpuMetrics>& out, bool diag)
             }
         }
 
-        // VRAM: total - из ADL (ADLMemoryInfo2.iMemorySize, байты), used - из
-        // DXGI (IDXGIAdapter3::QueryVideoMemoryInfo), ADL использование не отдает.
+        // VRAM: total comes from ADL (ADLMemoryInfo2.iMemorySize, bytes), used from
+        // DXGI (IDXGIAdapter3::QueryVideoMemoryInfo), ADL never reports usage.
         uint64_t adlTotal = 0;
         if (m_fnMemInfo2)
         {
@@ -881,11 +881,11 @@ void AmdMonitor::CollectViaAdl(std::vector<GpuMetrics>& out, bool diag)
                                  static_cast<double>(gm.vramTotalBytes) * 100.0;
         }
 
-        // Адаптер, на который ADL не ответил ни одним валидным значением
-        // (отключенное устройство, гибрид без поддержки Overdrive), на экран не
-        // выводим: вместо него сработает DXGI-запас в CollectAdl. loadPercent в
-        // расчет не берется: у GpuMetrics он по умолчанию 0.0, а не признак
-        // ответа драйвера.
+        // An adapter for which ADL answered with no valid value at all
+        // (disabled device, hybrid without Overdrive support) is not shown on
+        // screen: the DXGI fallback in CollectAdl handles it instead. loadPercent is
+        // not counted: GpuMetrics defaults it to 0.0, which is not a sign
+        // of a driver response.
         const bool noData = (gm.temperature  < 0.0) && (gm.fanPercent < 0.0) &&
                             (gm.fanRpm       < 0)   && (gm.powerWatts < 0.0) &&
                             (gm.vramTotalBytes == 0) && (gm.gpuFreqMhz <= 0.0);
@@ -903,9 +903,9 @@ void AmdMonitor::CollectViaAdl(std::vector<GpuMetrics>& out, bool diag)
     }
 }
 
-/// Запасной источник метрик: адаптеры, видимые DXGI. Применяется, когда ADL карту
-/// не перечисляет (базовый драйвер дисплея, драйвер без ADL2). Доступны только
-/// имя и видеопамять, все остальные метрики остаются N/A.
+/// Fallback metrics source: adapters visible to DXGI. Used when ADL does not
+/// enumerate the card (basic display driver, driver without ADL2). Only the
+/// name and video memory are available, all other metrics stay N/A.
 void AmdMonitor::CollectDxgiOnly(std::vector<GpuMetrics>& out, bool diag)
 {
     std::vector<DxgiAmdInfo> list;
@@ -935,19 +935,19 @@ void AmdMonitor::CollectDxgiOnly(std::vector<GpuMetrics>& out, bool diag)
 }
 
 // ---------------------------------------------------------------------------
-// VRAM через DXGI
+// VRAM via DXGI
 // ---------------------------------------------------------------------------
 
-/// Список аппаратных AMD-адаптеров DXGI (софтверный WARP отбрасывается).
-/// Возвращает false, если DXGI недоступен или AMD-адаптеров нет.
+/// List of hardware DXGI AMD adapters (software WARP is dropped).
+/// Returns false if DXGI is unavailable or there are no AMD adapters.
 bool AmdMonitor::EnumerateDxgiAmd(std::vector<DxgiAmdInfo>& out)
 {
     out.clear();
     if (!m_dxgiFactory)
         return false;
 
-    // 16 - защитный предел: EnumAdapters1 возвращает DXGI_ERROR_NOT_FOUND после
-    // последнего адаптера, но цикл застрахован на случай сбоя драйвера.
+    // 16 is a safety limit: EnumAdapters1 returns DXGI_ERROR_NOT_FOUND after
+    // the last adapter, but the loop is guarded in case of driver failure.
     for (UINT i = 0; i < 16; ++i)
     {
         IDXGIAdapter1* adapter = nullptr;
@@ -956,8 +956,8 @@ bool AmdMonitor::EnumerateDxgiAmd(std::vector<DxgiAmdInfo>& out)
             break;
         if (FAILED(hr))
         {
-            // На сбое перечисления адаптер все равно может быть выдан -
-            // отпускаем ссылку, чтобы не терять счетчик COM.
+            // On an enumeration failure an adapter may still have been handed out -
+            // release the reference so the COM refcount is not leaked.
             if (adapter)
                 adapter->Release();
             continue;
@@ -975,7 +975,7 @@ bool AmdMonitor::EnumerateDxgiAmd(std::vector<DxgiAmdInfo>& out)
                                    sizeof(desc.Description) / sizeof(wchar_t));
             item.dedicatedBytes = static_cast<uint64_t>(desc.DedicatedVideoMemory);
 
-            // Used: IDXGIAdapter3::QueryVideoMemoryInfo (Windows 10 и новее).
+            // Used: IDXGIAdapter3::QueryVideoMemoryInfo (Windows 10 and newer).
             IDXGIAdapter3* adapter3 = nullptr;
             if (SUCCEEDED(adapter->QueryInterface(IID_IDXGIAdapter3,
                                                   reinterpret_cast<void**>(&adapter3))))
@@ -1008,9 +1008,9 @@ bool AmdMonitor::QueryVramDXGI(unsigned amdOrdinal, uint64_t adlTotalBytes,
     if (!EnumerateDxgiAmd(list))
         return false;
 
-    // Сопоставление с адаптером ADL. DXGI не предоставляет адрес PCI, поэтому:
-    // 1) однозначное совпадение по объему выделенной памяти;
-    // 2) иначе - порядковый номер среди AMD-адаптеров.
+    // Matching against the ADL adapter. DXGI provides no PCI address, therefore:
+    // 1) an unambiguous match by the dedicated memory size;
+    // 2) otherwise - the ordinal number among the AMD adapters.
     const uint64_t SIZE_TOLERANCE = 64ULL * 1024ULL * 1024ULL;
     size_t pick = list.size();
 
@@ -1054,13 +1054,13 @@ bool AmdMonitor::QueryVramDXGI(unsigned amdOrdinal, uint64_t adlTotalBytes,
 #endif // PLATFORM_WINDOWS
 
 // ============================================================================
-// Linux: sysfs/hwmon драйвера amdgpu
-// Интерфейсы документированы в Documentation/gpu/amdgpu/thermal:
-//   device: gpu_busy_percent, mem_info_vram_total/used (байты), product_name
+// Linux: amdgpu driver sysfs/hwmon
+// Interfaces are documented in Documentation/gpu/amdgpu/thermal:
+//   device: gpu_busy_percent, mem_info_vram_total/used (bytes), product_name
 //   hwmon (name=amdgpu): temp1_input (mC), power1_average/input (uW),
 //         power1_cap (uW), fan1_input (RPM), pwm1/pwm1_max (0..255),
-//         freq1_input (Гц, gfx), freq2_input (Гц, mem)
-// Внешние процессы не запускаются - стоимость опроса близка к нулю.
+//         freq1_input (Hz, gfx), freq2_input (Hz, mem)
+// No external processes are spawned - the polling cost is close to zero.
 // ============================================================================
 #ifndef PLATFORM_WINDOWS
 
@@ -1071,7 +1071,7 @@ bool AmdMonitor::QueryVramDXGI(unsigned amdOrdinal, uint64_t adlTotalBytes,
 
 namespace {
 
-/// Обрезка пробельных символов с обеих сторон.
+/// Trim whitespace characters from both ends.
 std::string Trim(const std::string& s)
 {
     size_t b = s.find_first_not_of(" \t\r\n");
@@ -1081,7 +1081,7 @@ std::string Trim(const std::string& s)
     return s.substr(b, e - b + 1);
 }
 
-/// Прочитать текстовый sysfs-файл. False, если файла нет или он нечитаем.
+/// Read a text sysfs file. False if the file is missing or unreadable.
 bool ReadSysfsStr(const std::string& path, std::string& out)
 {
     FILE* f = fopen(path.c_str(), "r");
@@ -1096,7 +1096,7 @@ bool ReadSysfsStr(const std::string& path, std::string& out)
     return !out.empty();
 }
 
-/// Прочитать числовой sysfs-файл. False при отсутствии/ошибке/мусоре.
+/// Read a numeric sysfs file. False on absence/error/garbage input.
 bool ReadSysfsLL(const std::string& path, long long& out)
 {
     std::string s;
@@ -1111,7 +1111,7 @@ bool ReadSysfsLL(const std::string& path, long long& out)
     return true;
 }
 
-/// Имя цели симлинка sysfs (basename от readlink). Пусто, если не симлинк.
+/// Target name of a sysfs symlink (basename of readlink). Empty if not a symlink.
 std::string LinkBaseName(const std::string& path)
 {
     char buf[PATH_MAX];
@@ -1124,7 +1124,7 @@ std::string LinkBaseName(const std::string& path)
     return (pos == std::string::npos) ? target : target.substr(pos + 1);
 }
 
-/// Канонический путь (разыменованный симлинк). Пусто при ошибке.
+/// Canonical path (symlink resolved). Empty on error.
 std::string RealPath(const std::string& path)
 {
     char buf[PATH_MAX];
@@ -1133,7 +1133,7 @@ std::string RealPath(const std::string& path)
     return buf;
 }
 
-/// Список имён подкаталогов каталога base.
+/// List of subdirectory names of the base directory.
 std::vector<std::string> ListSubdirs(const std::string& base)
 {
     std::vector<std::string> names;
@@ -1157,17 +1157,17 @@ struct AmdCard
     std::string cardName;  // cardN
     std::string bdf;       // PCI address like 0000:01:00.0 (may be empty)
     std::string device;    // PCI device ID, "0xabcd"
-    std::string driver;    // имя драйвера из device/driver (radeon/amdgpu/...)
-    int cardIndex;         // числовой индекс DRM-драйвера, -1 если неизвестен
+    std::string driver;    // driver name from device/driver (radeon/amdgpu/...)
+    int cardIndex;         // numeric DRM driver index, -1 if unknown
 };
 
-/// Имя драйвера DRM-карты: basename симлинка device/driver. Пусто при ошибке.
+/// DRM card driver name: basename of the device/driver symlink. Empty on error.
 std::string GetDriverName(const std::string& devPath)
 {
     return LinkBaseName(devPath + "/driver");
 }
 
-/// Найти все DRM-карты AMD (vendor 0x1002) в /sys/class/drm.
+/// Find all AMD DRM cards (vendor 0x1002) in /sys/class/drm.
 std::vector<AmdCard> ScanAmdCards()
 {
     std::vector<AmdCard> cards;
@@ -1175,7 +1175,7 @@ std::vector<AmdCard> ScanAmdCards()
 
     for (const std::string& entry : ListSubdirs(drmRoot))
     {
-        // Интересуют только карточки вида cardN (ports cardN-OutputN пропускаем).
+        // Only entries of the form cardN matter (ports cardN-OutputN are skipped).
         if (entry.compare(0, 4, "card") != 0 || entry.size() <= 4)
             continue;
         bool digitsOnly = true;
@@ -1204,7 +1204,7 @@ std::vector<AmdCard> ScanAmdCards()
         card.driver = GetDriverName(devPath);
         ReadSysfsStr(devPath + "/device", card.device);
 
-        // Числовой индекс DRM-драйвера (нужен для путей debugfs).
+        // Numeric DRM driver index (needed for debugfs paths).
         card.cardIndex = -1;
         errno = 0;
         char* end = nullptr;
@@ -1217,13 +1217,13 @@ std::vector<AmdCard> ScanAmdCards()
     return cards;
 }
 
-/// Найти каталоги hwmon, относящиеся к данной DRM-карте.
-/// Основной вариант (документирован в Documentation/gpu/amdgpu/thermal):
-/// /sys/class/drm/cardN/device/hwmon/hwmonX. У современных ядер amdgpu
-/// регистрирует два hwmon-устройства: одно для датчиков (температура,
-/// мощность, частоты), второе для вентилятора, поэтому возвращаем список.
-/// Резервный вариант: обход /sys/class/hwmon с проверкой, что канонический
-/// путь датчика лежит внутри каталога устройства этой карты.
+/// Find hwmon directories belonging to this DRM card.
+/// Primary route (documented in Documentation/gpu/amdgpu/thermal):
+/// /sys/class/drm/cardN/device/hwmon/hwmonX. On modern kernels amdgpu
+/// registers two hwmon devices: one for the sensors (temperature,
+/// power, clocks), the second for the fan, so a list is returned.
+/// Fallback route: walk /sys/class/hwmon, checking that the canonical
+/// path of the sensor lies inside this card's device directory.
 std::vector<std::string> FindHwmonDirsForCard(const std::string& drmPath)
 {
     std::vector<std::string> dirs;
@@ -1248,8 +1248,8 @@ std::vector<std::string> FindHwmonDirsForCard(const std::string& drmPath)
         std::string name;
         if (!ReadSysfsStr(hdir + "/name", name))
             continue;
-        // Имена hwmon-устройств драйверов: amdgpu ("amdgpu"/"gfx")
-        // и radeon ("radeon").
+        // Driver hwmon device names: amdgpu ("amdgpu"/"gfx")
+        // and radeon ("radeon").
         if (name != "amdgpu" && name != "gfx" && name != "radeon")
             continue;
         const std::string hReal = RealPath(hdir);
@@ -1263,7 +1263,7 @@ std::vector<std::string> FindHwmonDirsForCard(const std::string& drmPath)
     return dirs;
 }
 
-/// Прочитать числовой файл hwmon, перебирая все каталоги датчиков карты.
+/// Read a numeric hwmon file, iterating over all sensor directories of the card.
 bool ReadHwmonLL(const std::vector<std::string>& dirs, const char* fileName,
                  long long& value)
 {
@@ -1275,20 +1275,20 @@ bool ReadHwmonLL(const std::vector<std::string>& dirs, const char* fileName,
     return false;
 }
 
-/// Существует ли файл/каталог (для диагностики доступности сенсоров).
+/// Whether the file/directory exists (for sensor availability diagnostics).
 bool HasFile(const std::string& path)
 {
     return access(path.c_str(), F_OK) == 0;
 }
 
 // ---------------------------------------------------------------------------
-// Имя модели из системной базы pci.ids (когда драйвер его не отдает).
-// Формат базы: "V vvvv  Vendor Name", " dddd  Device Name" (4 hex цифры),
-// классы "C class" и строки-продолжения (" \t...") пропускаются, строки
-// комментариев "#" не прерывают секцию вендора.
+// Model name from the system pci.ids database (when the driver does not report it).
+// Database format: "V vvvv  Vendor Name", " dddd  Device Name" (4 hex digits),
+// classes "C class" and continuation lines (" \t...") are skipped, comment
+// lines "#" do not break the vendor section.
 // ---------------------------------------------------------------------------
 
-/// Каталоги pci.ids в распространённых дистрибутивах.
+/// pci.ids directories in common distributions.
 const char* const PCI_IDS_PATHS[] = {
     "/usr/share/misc/pci.ids",       // Debian/Ubuntu
     "/usr/share/hwdata/pci.ids",     // Fedora/openSUSE
@@ -1308,9 +1308,9 @@ std::string PolishPciName(const std::string& raw)
     return Trim(raw);
 }
 
-/// Имя PCI-устройства по vendor:device из pci.ids. Пусто, если базы нет.
-/// Только чтение файлов - внешних процессов не запускается.
-/// vendorId/deviceId в форме "0x1002"/"0x679a" (как в sysfs).
+/// PCI device name by vendor:device from pci.ids. Empty if the database is missing.
+/// File reading only - no external processes are spawned.
+/// vendorId/deviceId in the form "0x1002"/"0x679a" (as in sysfs).
 std::string PciIdsName(const std::string& vendorId, const std::string& deviceId)
 {
     if (deviceId.compare(0, 2, "0x") != 0 || deviceId.size() < 6)
@@ -1344,11 +1344,11 @@ std::string PciIdsName(const std::string& vendorId, const std::string& deviceId)
             {
                 if (!inVendor)
                     continue;
-                // Класс-подкласс ("C ...") и продолжения (" ...") - мимо.
+                // Class-subclass ("C ...") and continuation lines (" ...") - skipped.
                 if (line[1] == 'C' || line[1] == ' ')
                     continue;
-                // Подсистемные строки ("\t\tvvvv dddd ...") - тоже мимо:
-                // ID устройства стоит сразу после одного таба.
+                // Subsystem lines ("\t\tvvvv dddd ...") are skipped as well:
+                // the device ID sits right after a single tab.
                 if (line[2] == '\t')
                     continue;
                 auto isHex = [](char c) {
@@ -1357,7 +1357,7 @@ std::string PciIdsName(const std::string& vendorId, const std::string& deviceId)
                 };
                 if (!isHex(line[1]) || !isHex(line[2]) || !isHex(line[3]) || !isHex(line[4]))
                     continue;
-                // ID устройства - ровно 4 hex цифры после одного таба.
+                // The device ID is exactly 4 hex digits after a single tab.
                 char idBuf[8];
                 for (int k = 0; k < 4; ++k)
                 {
@@ -1376,9 +1376,9 @@ std::string PciIdsName(const std::string& vendorId, const std::string& deviceId)
                 }
                 continue;
             }
-            // Строка вендора: "vvvv  Name". Секция нужного вендора
-            // (1002 AMD, 10de NVIDIA и т.д.). Комментарии "#" внутри
-            // блока устройств не прерывают секцию.
+            // Vendor line: "vvvv  Name". The section of the wanted vendor
+            // (1002 AMD, 10de NVIDIA etc.). "#" comments inside the
+            // device block do not break the section.
             if (line[0] != '#')
                 inVendor = (strncmp(line, wantVen.c_str(), 4) == 0 &&
                             (line[4] == ' ' || line[4] == '\t'));
@@ -1392,8 +1392,8 @@ std::string PciIdsName(const std::string& vendorId, const std::string& deviceId)
 
 } // namespace
 
-// Публичная точка входа для GpuMonitor (листинг NVIDIA-карт без драйвера).
-// Парсер pci.ids остается внутри файла, наружу отдан только результат.
+// Public entry point for GpuMonitor (listing NVIDIA cards without a driver).
+// The pci.ids parser stays inside the file, only the result is exposed.
 std::string AmdMonitor::ResolvePciName(const std::string& vendorId,
                                        const std::string& deviceId)
 {
@@ -1410,9 +1410,9 @@ bool AmdMonitor::LoadSysfs()
     }
     LOGI("AMD: Found %zu AMD card(s) via amdgpu sysfs.", cards.size());
 
-    // Подробная диагностика окружения (один раз при старте): драйвер, PCI ID,
-    // наличие каждого нужного файла. Позволяет по логу определить, какие
-    // сенсоры драйвер реально не предоставляет, а какие недоступны по пути.
+    // Detailed environment diagnostics (once at startup): driver, PCI ID,
+    // presence of each required file. Lets the log reveal which
+    // sensors the driver really does not provide and which are unreachable by path.
     for (const AmdCard& card : cards)
     {
         LOGI("AMD diag: card '%s' dev='%s' path=%s bdf='%s' driver='%s'",
@@ -1445,7 +1445,7 @@ bool AmdMonitor::LoadSysfs()
                 LOGI("AMD diag: hwmon files:%s", files.c_str());
         }
 
-        // Итоговый список того, что код пытается читать.
+        // Final list of what the code tries to read.
         bool busy = HasFile(card.drmPath + "/gpu_busy_percent");
         bool hasHwmonFile[8] = {};
         const char* hwFiles[8] = {"temp1_input", "fan1_input", "pwm1",
@@ -1469,9 +1469,9 @@ bool AmdMonitor::LoadSysfs()
              hasHwmonFile[4] ? 1 : 0, hasHwmonFile[5] ? 1 : 0,
              hasHwmonFile[6] ? 1 : 0, hasHwmonFile[7] ? 1 : 0);
 
-        // Драйвер radeon (GCN первого поколения, TeraScale) не экспортирует
-        // ни загрузку, ни видеопамять, ни мощность - объясняем причину N/A
-        // один раз при старте, чтобы логи были самодостаточными.
+        // The radeon driver (first-generation GCN, TeraScale) exports neither
+        // load, nor video memory, nor power - the reason for N/A is explained
+        // once at startup so that the logs are self-sufficient.
         if (card.driver == "radeon" && !busy &&
             !HasFile(card.drmPath + "/mem_info_vram_total") &&
             !hasHwmonFile[3] && !hasHwmonFile[4])
@@ -1483,7 +1483,7 @@ bool AmdMonitor::LoadSysfs()
         }
     }
 
-    // Одноразовый диагностический вывод первых значений.
+    // One-time diagnostic print of the first values.
     std::vector<GpuMetrics> probe;
     CollectSysfs(probe);
     for (const GpuMetrics& g : probe)
@@ -1506,18 +1506,18 @@ void AmdMonitor::CollectSysfs(std::vector<GpuMetrics>& out)
     for (const AmdCard& card : ScanAmdCards())
     {
         GpuMetrics gm{};
-        // Явный N/A: если сенсор загрузки отсутствует (radeon, старый amdgpu),
-        // GUI скрывает график вместо честного на вид, но лживого "0%".
+        // Explicit N/A: if the load sensor is missing (radeon, old amdgpu),
+        // the GUI hides the graph instead of an honest-looking but lying "0%".
         gm.loadPercent = -1.0;
 
-        // Имя модели: product_name/pretty_name дает amdgpu с powerplay.
-        // radeon и старый amdgpu их не экспортируют - берем модель из
-        // системной базы pci.ids по PCI device ID, это штатный файл дистрибутива.
+        // Model name: product_name/pretty_name is provided by amdgpu with powerplay.
+        // radeon and old amdgpu do not export them - the model is taken from the
+        // system pci.ids database by PCI device ID, a standard distribution file.
         std::string name;
         if (!ReadSysfsStr(card.drmPath + "/product_name", name) &&
             !ReadSysfsStr(card.drmPath + "/pretty_name", name))
         {
-            // База разбирается один раз на PCI ID - см. m_pciNameCache.
+            // The database is parsed once per PCI ID - see m_pciNameCache.
             std::map<std::string, std::string>::iterator it = m_pciNameCache.find(card.device);
             if (it == m_pciNameCache.end())
             {
@@ -1532,9 +1532,9 @@ void AmdMonitor::CollectSysfs(std::vector<GpuMetrics>& out)
             name = "AMD GPU";
         gm.name = name;
 
-        // Загрузка GPU, %. amdgpu отдает gpu_busy_percent в sysfs устройства;
-        // radeon - только в debugfs (доступен лишь root, при обычном запуске
-        // чтение молча не удаётся и загрузка остается N/A).
+        // GPU load, %. amdgpu exposes gpu_busy_percent in the device's sysfs;
+        // radeon has it only in debugfs (accessible to root only; on a normal run
+        // the read silently fails and the load stays N/A).
         long long busy = 0;
         bool busyOk = ReadSysfsLL(card.drmPath + "/gpu_busy_percent", busy);
         if (!busyOk && card.cardIndex >= 0)
@@ -1549,7 +1549,7 @@ void AmdMonitor::CollectSysfs(std::vector<GpuMetrics>& out)
             gm.loadPercent = static_cast<double>(busy);
         }
 
-        // VRAM: файлы отдают байты.
+        // VRAM: the files report bytes.
         long long vramTotal = 0;
         long long vramUsed  = 0;
         const bool haveTotal = ReadSysfsLL(card.drmPath + "/mem_info_vram_total", vramTotal);
@@ -1566,11 +1566,11 @@ void AmdMonitor::CollectSysfs(std::vector<GpuMetrics>& out)
             }
         }
 
-        // Датчики hwmon этой же карты.
+        // hwmon sensors of this same card.
         const std::vector<std::string> hwmonDirs = FindHwmonDirsForCard(card.drmPath);
         if (!hwmonDirs.empty())
         {
-            // Температура, миллиградусы: temp1 - edge, temp2 - junction.
+            // Temperature, millidegrees: temp1 - edge, temp2 - junction.
             long long tempM = 0;
             if (ReadHwmonLL(hwmonDirs, "temp1_input", tempM) ||
                 ReadHwmonLL(hwmonDirs, "temp2_input", tempM))
@@ -1580,12 +1580,12 @@ void AmdMonitor::CollectSysfs(std::vector<GpuMetrics>& out)
                     gm.temperature = c;
             }
 
-            // Обороты вентилятора.
+            // Fan speed in RPM.
             long long rpm = 0;
             if (ReadHwmonLL(hwmonDirs, "fan1_input", rpm) && rpm > 0 && rpm < 30000)
                 gm.fanRpm = static_cast<int>(rpm);
 
-            // ШИМ вентилятора в проценты (pwm1 0..255).
+            // Fan PWM as a percentage (pwm1 0..255).
             long long pwm = 0;
             long long pwmMax = 0;
             if (ReadHwmonLL(hwmonDirs, "pwm1", pwm) &&
@@ -1596,14 +1596,14 @@ void AmdMonitor::CollectSysfs(std::vector<GpuMetrics>& out)
                                 static_cast<double>(pwmMax);
             }
 
-            // Мощность: средняя, иначе мгновенная; микроВатты.
+            // Power: average first, otherwise instant; microWatts.
             long long powerUW = 0;
             if (!ReadHwmonLL(hwmonDirs, "power1_average", powerUW))
                 ReadHwmonLL(hwmonDirs, "power1_input", powerUW);
             if (powerUW > 0 && powerUW < 1200LL * 1000000LL)
                 gm.powerWatts = static_cast<double>(powerUW) / 1000000.0;
 
-            // Лимит мощности.
+            // Power limit.
             long long capUW = 0;
             if (ReadHwmonLL(hwmonDirs, "power1_cap", capUW) &&
                 capUW > 0 && capUW < 1200LL * 1000000LL)
@@ -1611,7 +1611,7 @@ void AmdMonitor::CollectSysfs(std::vector<GpuMetrics>& out)
                 gm.powerLimitWatts = static_cast<double>(capUW) / 1000000.0;
             }
 
-            // Частоты, Гц: freq1 - графический процессор, freq2 - память.
+            // Clocks, Hz: freq1 - graphics processor, freq2 - memory.
             long long gfxHz = 0;
             if (ReadHwmonLL(hwmonDirs, "freq1_input", gfxHz) && gfxHz > 0)
                 gm.gpuFreqMhz = static_cast<double>(gfxHz) / 1000000.0;
@@ -1620,7 +1620,7 @@ void AmdMonitor::CollectSysfs(std::vector<GpuMetrics>& out)
                 gm.vramFreqMhz = static_cast<double>(memHz) / 1000000.0;
         }
 
-        // Резервный источник частоты ядра: devfreq (значения в КГц).
+        // Fallback source of the core clock: devfreq (values in KHz).
         if (gm.gpuFreqMhz <= 0.0 && !card.bdf.empty())
         {
             long long clkKHz = 0;
@@ -1631,8 +1631,8 @@ void AmdMonitor::CollectSysfs(std::vector<GpuMetrics>& out)
             }
         }
 
-        // Логирование значений - только при инициализации (LoadSysfs), чтобы
-        // не засорять лог построчным выводом каждую секунду.
+        // Value logging happens only at initialization (LoadSysfs) so as not to
+        // pollute the log with line-by-line output every second.
         out.push_back(gm);
     }
 }

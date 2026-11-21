@@ -4,7 +4,7 @@
 // MSR temperature reader for Windows.
 // Two back-ends are tried in order:
 //   1. Kernel driver (WinRing0-compatible, e.g. hwinterfacex64.sys) placed next
-//      to the executable — used when present.
+//      to the executable - used when present.
 //   2. Direct __readmsr() intrinsic as a last resort (only works on CPUs where
 //      rdmsr is not hardware-blocked).
 // If neither works temperature is reported as N/A (-1.0).

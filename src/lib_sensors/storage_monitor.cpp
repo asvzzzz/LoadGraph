@@ -12,7 +12,7 @@
 #include <atomic>
 
 // ----------------------------------------------------------------------------
-// Windows implementation — reads disk info via WMI.
+// Windows implementation - reads disk info via WMI.
 // ----------------------------------------------------------------------------
 
 namespace {
@@ -40,7 +40,7 @@ static double EstimatePowerWatts(const std::string& name, const std::string& ifa
     {
         return 3.0;
     }
-    // Unknown — conservative estimate.
+    // Unknown - conservative estimate.
     return 5.0;
 }
 
@@ -80,7 +80,7 @@ protected:
         bool comInit = SUCCEEDED(hrInit);
 
         // CoInitializeSecurity: best-effort. It can be called only once per process;
-        // if cpu_monitor already initialized it (RPC_E_TOO_LATE), proceed anyway —
+        // if cpu_monitor already initialized it (RPC_E_TOO_LATE), proceed anyway -
         // local WMI queries work without explicit security setup on the same machine.
         HRESULT hrSec = RPC_E_TOO_LATE;
         if (comInit)
@@ -90,7 +90,7 @@ protected:
                 NULL, EOAC_NONE, NULL);
             if (FAILED(hrSec) && hrSec != RPC_E_TOO_LATE)
             {
-                // Real failure — not "already initialized". Clean up and return empty.
+                // Real failure - not "already initialized". Clean up and return empty.
                 CoUninitialize();
                 std::lock_guard<std::mutex> lock(m_mutex);
                 m_metrics = std::move(result);
@@ -177,7 +177,7 @@ StorageMonitor* CreateStorageMonitor()
 }
 
 #else
-// Linux/other platforms — placeholder.
+// Linux/other platforms - placeholder.
 StorageMonitor* CreateStorageMonitor()
 {
     return nullptr;

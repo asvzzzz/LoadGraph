@@ -26,7 +26,7 @@ public:
     // Start background polling at 5000ms intervals.
     virtual void Start() = 0;
 
-    // Stop polling thread gracefully — wakes it immediately via cv.
+    // Stop polling thread gracefully - wakes it immediately via cv.
     virtual void Stop()
     {
         {
