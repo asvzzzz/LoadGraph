@@ -8,7 +8,7 @@
 
 ## Скачать
 
-Предсобранный 64-битный Windows-бинарь доступен по адресу [andyk.ru/files/LoadGraph.zip](https://andyk.ru/files/LoadGraph.zip). Распакуйте и запустите `LoadGraph.exe` — установка не требуется. Бинарь самодостаточен: Си-рантайм слинкован статически, поэтому устанавливать "Visual C++ Redistributable" не нужно и рядом с исполняемым файлом ничего не размещается. Для мониторинга температуры CPU поместите совместимый с WinRing0 файл `.sys` рядом с исполняемым (см. [Драйвер](#драйвер)).
+Предсобранный 64-битный Windows-бинарь доступен по адресу [andyk.ru/files/LoadGraph.zip](https://andyk.ru/files/LoadGraph.zip). Распакуйте и запустите `LoadGraph.exe` (сборка даёт `build\bin\Release\LoadGraphGUI.exe`) — установка не требуется. Бинарь самодостаточен: Си-рантайм слинкован статически, поэтому устанавливать "Visual C++ Redistributable" не нужно и рядом с исполняемым файлом ничего не размещается. Для мониторинга температуры CPU поместите совместимый с WinRing0 файл `.sys` рядом с исполняемым (см. [Драйвер](#драйвер)).
 
 > **Примечание для Windows 7:** x64-сборка работает на Windows 7 SP1 и новее. Windows 7 RTM (без пакета обновлений) не поддерживается, а консольная версия (`LoadGraphTTY`) полагается на ANSI escape-последовательности, которые консоль Windows 7 не понимает — там используйте GUI.
 
@@ -27,13 +27,14 @@ LoadGraph решает эту проблему: **все метрики всех
 
 ## Что показывает
 
+- **Шапка** — модель процессора слева и время работы системы справа (такая же шапка в веб-дашборде)
 - **CPU Load (%)** — общая загрузка процессора (дельта-метод `/proc/stat` на Linux, PDH `\\Processor(_Total)\\% Processor Time` на Windows)
 - **RAM Usage (GB)** — использованная память с адаптивной осью Y
-- **GPU Load (%)** — загрузка каждой GPU (один раздел на каждую обнаруженную NVIDIA карту; каждый раздел содержит графики Load, VRAM, Temperature, Fan и Power)
+- **GPU Load (%)** — загрузка каждой GPU (один раздел на каждую обнаруженную карту NVIDIA или AMD, заголовок раздела — название модели; каждый раздел содержит графики Load, VRAM, Temperature, Fan и Power)
 - **VRAM (GB)** — объём видеопамяти на каждой карте
 - **Temperature (°C)** — температура GPU; температура CPU на Windows через MSR (IA32_THERM_STATUS 0x19C, Tjmax по семейству: 84 для Haswell-E/EP, 85 для Broadwell-EP, 100 для Skylake и новее); красная линия тревоги выше 80°C
 - **Fan (% / RPM)** — скорость вентилятора GPU в процентах (или fallback в RPM), вентилятор CPU в RPM (когда датчик доступен)
-- **GPU Power (W)** — энергопотребление каждой карты через NVML `nvmlDeviceGetPowerUsage`
+- **GPU Power (W)** — энергопотребление каждой карты (NVIDIA: NVML `nvmlDeviceGetPowerUsage`; AMD: ADL2 Overdrive6 на Windows, hwmon `power1_average` на Linux)
 - **CPU Power (W)** — реальный счётчик RAPL на Linux, или WMI-сенсор LHM/OpenHardwareMonitor на Windows, или оценка idle-floor как последний резерв
 - **Total Power (W)** — сумма CPU + всех GPU; фиксированная шкала 0..1000 W с 5 делениями
 - **Uptime** — время работы системы с момента загрузки, отображается как `YY:MM:DD HH:MI:SS` или `<N> s` для свежих перезагрузок
@@ -46,13 +47,13 @@ LoadGraph решает эту проблему: **все метрики всех
 
 ### Linux / WSL2
 
-Работает на нативном Linux и внутри WSL2 благодаря GPU-PV bridge (NVML доступен по `/usr/lib/wsl/lib/libnvidia-ml.so.1`). NVAPI — только для Windows; на Linux используется исключительно NVML.
+Работает на нативном Linux и внутри WSL2 благодаря GPU-PV bridge (NVML доступен по `/usr/lib/wsl/lib/libnvidia-ml.so.1`). NVAPI — только для Windows; на Linux используется исключительно NVML. AMD-карты на Linux читаются напрямую из драйвера `amdgpu` — sysfs (`gpu_busy_percent`, `mem_info_vram_*`) и hwmon (`temp1_input`, `power1_average`, `fan1_input`, `freq1_input`) — без внешних утилит и библиотек ROCm.
 
 ![Linux](img/lglin.png)
 
 ### Веб-дашборд (HTTP-сервер)
 
-Включите `"http_enabled": true` в `loadgraph.cfg`. Сервер запускается на заданном порту (по умолчанию `9115`) в отдельном потоке:
+Включите `"http_enabled": true` в `loadgraph.cfg` или переключайте на ходу через **File -> HTTP server (port N)** (`Ctrl+H`) в GUI — выбор сохраняется в `loadgraph.cfg`. Сервер запускается на заданном порту (по умолчанию `9115`) в отдельном потоке:
 
 - **`GET /`** — адаптивный HTML-дашборд с живыми графиками, повторяет компоновку GUI. Чистый vanilla JS + Canvas, без зависимостей.
 - **`GET /api/metrics`** — JSON-эндпоинт со всеми текущими метриками (CPU загрузка/температура/мощность, RAM, данные по каждой GPU, накопители).
@@ -74,12 +75,12 @@ LoadGraphTTY [-port N]
 
 Возможности:
 
-- **Компоновка в стиле htop** — CPU Load и RAM Usage с горизонтальными прогрессбарами (40 ячеек, Unicode block characters)
+- **Компоновка в стиле htop** — CPU Load и RAM Usage с горизонтальными прогрессбарами (ширина масштабируется от ширины консоли, 20..60 ячеек)
 - **Метрики каждой GPU** — Load, Temperature (цветовая индикация: зелёный/жёлтый/красный), VRAM, Fan, Power
 - **Цветной вывод** — читает цвета из `loadgraph.cfg`; Windows использует WinAPI console colors, Linux — ANSI-последовательности
-- **UTF-8 прогрессбары** — Unicode block characters (`░` пустая, `█` заполненная) на обеих платформах
+- **UTF-8 прогрессбары** — `█` block character для заполненной части, обычные пробелы для пустой, на обеих платформах
 - **Опциональный HTTP-сервер** — передайте `-port 9115` для запуска веб-дашборда параллельно с TTY
-- **Файловый лог** — пишет `loadgraph.log` в CWD при `"log_file": true` в конфиге
+- **Файловый лог** — пишет снимки `loadgraph.jsonl` в каталог конфигурации при `"log_file": true` в конфиге (раз в 5 с; файл пересоздаётся на каждом запуске, снимки прошлого сеанса отбрасываются)
 
 ### Скриншоты
 
@@ -96,8 +97,9 @@ LoadGraphTTY [-port N]
 ### Windows
 
 - Visual Studio 2022 (MSVC) — обязателен на Windows (используются SEH-расширения и флаги компилятора MSVC; MinGW не поддерживается)
-- wxWidgets 3.2 статическая сборка (`C:/wxWidgets`). Переопределить: `-DWX_CONFIG_PATH=...`
+- wxWidgets 3.2 статическая сборка со статическим CRT (`C:/wxWidgets`, собирается в `build_static_mt`, см. [Сборка](#сборка)). Переопределить: `-DWX_WIN_BUILD_DIR=<каталог lib>` и `-DWX_CONFIG_PATH=<корень>`
 - Драйвер NVIDIA (для метрик GPU; CPU/RAM работают без GPU)
+- Для метрик AMD GPU нужен установленный драйвер AMD (Adrenalin или старый Catalyst) — `atiadlxx.dll` / `atiadlxy.dll` загружается динамически, дополнительная настройка не требуется. Если ADL не перечисляет адаптер, резервный путь через DXGI всё равно показывает модель и объём VRAM (см. [Известные ограничения](#известные-ограничения))
 - **Температура CPU** требует одного из:
   - Ядерного драйвера, совместимого с WinRing0 (`.sys`), размещённого рядом с исполняемым файлом — см. [Драйвер](#драйвер) ниже
   - Или прямого доступа `rdmsr` (работает на некоторых системах, где HVCI / Integrity памяти выключен и CPU не блокирует пользовательское чтение MSR)
@@ -105,9 +107,10 @@ LoadGraphTTY [-port N]
 ### Linux
 
 - gcc 13+ или clang
-- wxWidgets 3.2: `sudo apt install libwxgtk3.2-dev` (или установите `$WX_CONFIG`)
+- wxWidgets 3.2: `sudo apt install libwxgtk3.2-dev` (или установите `$WX_CONFIG`, либо укажите `$WXSTATIC_ROOT` на собственную статическую сборку — см. [Сборка](#сборка))
 - Драйвер NVIDIA + `libnvidia-ml` для метрик GPU (`nvidia-smi` должен работать)
 - WSL2: GPU-PV bridge автоматически предоставляет NVML, дополнительная настройка не нужна
+- AMD GPU: драйвер `amdgpu` должен показывать карту в `/sys/class/drm` (нативный Linux с видимой картой; обычный WSL2 не показывает AMD-карты, если не настроен GPU partitioning/passthrough). Названия моделей карт, привязанных к старому драйверу `radeon`, читаются из дистрибутивной базы `pci.ids` (`/usr/share/misc/pci.ids` из пакета `pciutils` или `/usr/share/hwdata/pci.ids` из `hwdata`)
 
 ## Драйвер
 
@@ -162,7 +165,7 @@ cmake --build C:\wxWidgets\build_static_mt --config Release `
 cd build
 cmake .. -G "Visual Studio 17 2022" -A x64
 cmake --build . --config Release
-.\bin\Release\LoadGraph.exe
+.\bin\Release\LoadGraphGUI.exe
 ```
 
 `CMakeLists.txt` берёт библиотеки из `C:\wxWidgets\build_static_mt\lib\vc_x64_lib`
@@ -181,7 +184,7 @@ Windows-цели фиксируют `_WIN32_WINNT=0x0601` и линкуются 
 mkdir -p build_linux && cd build_linux
 cmake ..
 make -j$(nproc)
-./bin/LoadGraph
+./bin/LoadGraphGUI
 ```
 
 Переопределить путь к wx-config:
@@ -190,12 +193,28 @@ make -j$(nproc)
 WX_CONFIG=/opt/wx/3.2/bin/wx-config cmake ..
 ```
 
+Вместо пакетной сборки можно использовать собственную статическую сборку wxWidgets
+(именно так собран вариант для WSL2, потому что пакет Ubuntu `libwxgtk3.0-1` собран
+без `wxUSE_GRAPHICS_CONTEXT`, и `graph_panel.cpp` против него не компилируется).
+Переменная `WXSTATIC_ROOT` читается из окружения и должна указывать на каталог с
+`include/`, `include/gtk3-unicode-static-3.2/` и архивами `libwx_*-3.2.a`:
+
+```bash
+WXSTATIC_ROOT=$HOME/wxstatic cmake ..
+```
+
+`WXSTATIC_ROOT` имеет приоритет над `wx-config`, и при её установке из кэша CMake
+явно удаляется устаревшая запись `WX_CONFIG_EXECUTABLE` — без этого повторный `cmake`
+после правки `CMakeLists.txt` незаметно вернул бы сборку на заголовки системного wx.
+
 ## Конфигурация
 
-Все настройки хранятся в одном файле `loadgraph.cfg` формата JSON:
+Все настройки хранятся в одном файле `loadgraph.cfg` формата JSON, в одном и том же пользовательском каталоге на обеих платформах (создаётся при первом запуске):
 
-- **Windows**: рядом с исполняемым файлом (`.<директория exe>/loadgraph.cfg`)
+- **Windows**: `%USERPROFILE%\.config\loadgraph\loadgraph.cfg`
 - **Linux**: `$XDG_CONFIG_HOME/loadgraph/loadgraph.cfg` (по умолчанию `~/.config/loadgraph/loadgraph.cfg`)
+
+`loadgraph.log` (GUI) и `loadgraph.jsonl` (консольная версия) пишутся в тот же каталог — рядом с исполняемым файлом ничего не размещается. Оба файла пересоздаются при каждом запуске: содержимое предыдущего сеанса отбрасывается.
 
 ```jsonc
 {
@@ -240,6 +259,7 @@ src/
   ram_monitor_linux.cpp     # Linux — /proc/meminfo
   gpu_monitor.{h,cpp}       # Windows — NVML основной + NVAPI fallback (GetDynamicPstates)
   gpu_monitor_linux.cpp     # Linux — dlopen libnvidia-ml.so.1 (реальные имена символов)
+  amd_monitor.{h,cpp}       # AMD GPU — ADL2 (динамическая atiadlxx.dll) + DXGI VRAM на Windows, amdgpu sysfs/hwmon на Linux
   ring0_msr.{h,cpp}         # WinRing0 DLL / ядерный драйвер бэкенд, помощники повышения UAC
   msr_sensor.{h,cpp}        # считыватель температуры MSR: декодирование Tjmax, запрос EnsureDriver
   power_table.{h,cpp}       # статическая таблица TDP для CPU Intel/AMD и GPU NVIDIA (match по подстроке)
@@ -247,7 +267,7 @@ src/
   theme_linux.cpp           # Linux — GTK_THEME, XDG_CURRENT_DESKTOP, кэш gsettings на 30 с
   app_config.h/cpp          # структура AppConfig + парсер/эмиттер JSON для loadgraph.cfg
   http_server.{h,cpp}       # кроссплатформенный HTTP-сервер + HTML веб-дашборд
-  logger.{h,cpp}            # файловый логгер (loadgraph.log в CWD; fallback в stderr при ошибке fopen)
+  logger.{h,cpp}            # файловый логгер (loadgraph.log в пользовательском каталоге конфигурации, пересоздаётся при каждом запуске; при ошибке fopen — вывод в stderr)
   platform.h                # PLATFORM_WINDOWS / PLATFORM_LINUX, ReadFileToString, помощник mkdir -p
 ```
 
@@ -262,7 +282,9 @@ src/
 
 ## Известные ограничения
 
-- **AMD / Intel GPU** — не поддерживаются (NVML только для NVIDIA).
+- **AMD GPU (Windows)** — метрики берутся из ADL2 (`atiadlxx.dll` / `atiadlxy.dll`, динамическая загрузка): загрузка и частоты из `ADL2_Overdrive6_CurrentStatus_Get`, резервный источник — `ADL2_Overdrive5_CurrentActivity_Get`; температура (OD6, затем OD5), вентилятор (проценты и RPM) и объём VRAM (`ADL2_Adapter_MemoryInfo2_Get`); использованный VRAM всегда берётся из DXGI (`IDXGIAdapter3::QueryVideoMemoryInfo`) — он же единственный источник VRAM, если ADL не отдаёт данные о памяти. Энергопотребление читается из `ADL2_Overdrive6_CurrentPower_Get` и остаётся N/A на драйверах без этой функции — типично для старых Catalyst и карт до GCN. Лимит мощности в Ваттах через ADL не доступен, поэтому у AMD на Windows он всегда N/A. Одна физическая карта показывается один раз, хотя ADL выдаёт отдельную запись на каждый дисплейный выход (8-выходная R9 280 даёт 8 записей с одним и тем же адресом bus/device/function). Если ADL вообще не перечисляет адаптер, резервный путь через DXGI (`IDXGIAdapter3::QueryVideoMemoryInfo`) всё равно показывает модель и VRAM, остальное — N/A. Startup-лог снимает вопросы о ненайденной карте: `DIAG OS display ...` перечисляет то, что видит ОС (`EnumDisplayDevicesA`), `DIAG ADL[...]` — каждую запись ADL с vendor id, адресом на шине и флагами `iPresent`/`iExist`, а строки `AMD: ...` сообщают, сколько физических адаптеров распознано и какой источник используется.
+- **AMD GPU (Linux/WSL2)** — читается из sysfs/hwmon драйвера `amdgpu` (`gpu_busy_percent`, `mem_info_vram_*`, `temp1_input`, `power1_average`, `power1_cap`, `fan1_input`, `pwm1`, `freq1_input`). Карта должна быть видна Linux: в WSL2 нужен GPU partitioning/passthrough, обычный WSL2 показывает только NVIDIA vGPU bridge. Картам на старом драйвере `radeon` (TeraScale, GCN1) доступно лишь то, что `radeon_pm.c` регистрирует в hwmon: температура (`temp1_input` в миллиградусах), ШИМ вентилятора (`pwm1`/`pwm1_max`, диапазон 0..255, пересчитывается в проценты) и частота GPU (`freq1_input`, сразу в Гц); RPM вентилятора, VRAM, мощность и загрузка этим драйвером не экспортируются вовсе и остаются N/A. Там название модели берётся из дистрибутивной базы `pci.ids`, потому что `product_name`/`pretty_name` — специфичные для amdgpu файлы. Карты SI (например Tahiti / R9 280) можно перевести на `amdgpu` параметрами ядра `radeon.si_support=0 amdgpu.si_support=1` (нужна прошивка SI), что без всяких изменений в коде открывает загрузку, VRAM и мощность. Startup-лог печатает блок `AMD diag:` с именем драйвера, PCI ID и всеми реально присутствующими файлами сенсоров.
+- **Intel GPU** — не поддерживаются.
 - **macOS** — не является целевой платформой.
 - **Температура CPU на Linux** — читается из `/sys/class/thermal/thermal_zone0/temp`; на многих настольных платах тепловая зона отсутствует, поэтому N/A — обычное дело.
 - **HVCI / Integrity памяти** — если включён в Параметрах защиты Windows, пользовательский `rdmsr` заблокирован и требуется ядерный драйвер.

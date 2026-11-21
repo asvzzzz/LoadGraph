@@ -8,7 +8,7 @@ Real-time system resource monitor tailored for visual oversight of local LLM wor
 
 ## Download
 
-A pre-built 64-bit Windows binary is available at [andyk.ru/files/LoadGraph.zip](https://andyk.ru/files/LoadGraph.zip). Extract and run `LoadGraph.exe` — no installation required. The binary is self-contained: the C runtime is linked statically, so *no* "Visual C++ Redistributable" has to be installed and nothing is copied next to the executable. Place a WinRing0-compatible `.sys` file next to the executable for CPU temperature monitoring (see [Driver](#driver)).
+A pre-built 64-bit Windows binary is available at [andyk.ru/files/LoadGraph.zip](https://andyk.ru/files/LoadGraph.zip). Extract and run `LoadGraph.exe` (the build produces `build\bin\Release\LoadGraphGUI.exe`) — no installation required. The binary is self-contained: the C runtime is linked statically, so *no* "Visual C++ Redistributable" has to be installed and nothing is copied next to the executable. Place a WinRing0-compatible `.sys` file next to the executable for CPU temperature monitoring (see [Driver](#driver)).
 
 > **Windows 7 note:** the x64 build runs on Windows 7 SP1 and later. Windows 7 RTM (no service pack) is not supported, and the console version (`LoadGraphTTY`) relies on ANSI escape sequences that the Windows 7 console does not understand - use the GUI there.
 
@@ -27,9 +27,10 @@ LoadGraph solves this: **all metrics for all GPUs are visible at once in a singl
 
 ## What it shows
 
+- **Header** — CPU model name on the left, system uptime on the right (the web dashboard uses the same header)
 - **CPU Load (%)** — overall processor utilization (`/proc/stat` delta-method on Linux, PDH `\\Processor(_Total)\\% Processor Time` on Windows)
 - **RAM Usage (GB)** — used memory with adaptive Y-axis
-- **GPU Load (%)** — per-GPU utilization (one section per detected GPU; each section contains Load, VRAM, Temperature, Fan and Power graphs)
+- **GPU Load (%)** — per-GPU utilization (one section per detected NVIDIA or AMD GPU, titled with the card name; each section contains Load, VRAM, Temperature, Fan and Power graphs)
 - **VRAM (GB)** — video memory used on each card
 - **Temperature (°C)** — GPU temperature; CPU temperature on Windows via MSR (IA32_THERM_STATUS 0x19C, per-family Tjmax: 84 for Haswell-E/EP, 85 for Broadwell-EP, 100 for Skylake and newer); red alarm line above 80°C
 - **Fan (% / RPM)** — GPU fan in percent (or RPM fallback), CPU fan in RPM (when sensor is available)
@@ -74,12 +75,12 @@ LoadGraphTTY [-port N]
 
 Features:
 
-- **HTop-like layout** — CPU Load and RAM Usage with horizontal progress bars (40 cells, Unicode block characters)
+- **HTop-like layout** — CPU Load and RAM Usage with horizontal progress bars (width scales with the console, 20..60 cells)
 - **Per-GPU metrics** — Load, Temperature (color-coded: green/yellow/red), VRAM, Fan, Power
 - **Colored output** — reads colors from `loadgraph.cfg`; Windows uses WinAPI console colors, Linux uses ANSI escape sequences
-- **UTF-8 progress bars** — Unicode block characters (`░` empty, `█` filled) on both platforms
+- **UTF-8 progress bars** — `█` block characters for the filled part, plain spaces for the empty part, on both platforms
 - **Optional HTTP server** — pass `-port 9115` to serve the web dashboard alongside the TTY display
-- **File logging** — writes `loadgraph.jsonl` snapshots to the config directory when `"log_file": true` in config (one file per run: the first snapshot rewrites it)
+- **File logging** — writes `loadgraph.jsonl` snapshots to the config directory when `"log_file": true` in config (one snapshot every 5 s, one file per run: the first snapshot rewrites it)
 
 ### Screenshots
 
@@ -96,8 +97,9 @@ Features:
 ### Windows
 
 - Visual Studio 2022 (MSVC) — required on Windows (SEH extensions and MSVC-style compiler flags are used; MinGW is not supported)
-- wxWidgets 3.2 static build (`C:/wxWidgets`). Override with: `-DWX_CONFIG_PATH=...`
-- NVIDIA driver (for NVIDIA GPU metrics; CPU/RAM work without a GPU). AMD GPU metrics work with any Adrenalin driver (`atiadlxx.dll` is loaded dynamically, no extra setup)
+- wxWidgets 3.2 static build linked against the static CRT (`C:/wxWidgets`, built into `build_static_mt`, see [Building](#building)). Override with: `-DWX_WIN_BUILD_DIR=<lib dir>` and `-DWX_CONFIG_PATH=<root>`
+- NVIDIA driver (for NVIDIA GPU metrics; CPU/RAM work without a GPU)
+- AMD GPU metrics need the AMD display driver installed (Adrenalin or legacy Catalyst) — `atiadlxx.dll` / `atiadlxy.dll` is loaded dynamically, no extra setup. If ADL cannot enumerate the adapter, a DXGI fallback still reports the model name and VRAM (see [Known limitations](#known-limitations))
 - **CPU temperature** requires one of:
   - A WinRing0-compatible kernel driver (`.sys`) placed next to the executable — see [Driver](#driver) below
   - Or direct `rdmsr` access (works on some systems where HVCI / Memory Integrity is off and the CPU does not block user-mode MSR reads)
@@ -105,10 +107,10 @@ Features:
 ### Linux
 
 - gcc 13+ or clang
-- wxWidgets 3.2: `sudo apt install libwxgtk3.2-dev` (or set `$WX_CONFIG`)
+- wxWidgets 3.2: `sudo apt install libwxgtk3.2-dev` (or set `$WX_CONFIG`, or point `$WXSTATIC_ROOT` at your own static build — see [Building](#building))
 - NVIDIA driver + `libnvidia-ml` for GPU metrics (`nvidia-smi` must work)
 - WSL2: GPU-PV bridge exposes NVML automatically, no extra setup needed
-- AMD GPU: `amdgpu` driver must expose the card in `/sys/class/drm` (native Linux with the card visible; plain WSL2 does not expose AMD cards unless GPU partitioning/passthrough is configured)
+- AMD GPU: `amdgpu` driver must expose the card in `/sys/class/drm` (native Linux with the card visible; plain WSL2 does not expose AMD cards unless GPU partitioning/passthrough is configured). Model names of cards bound to the legacy `radeon` driver are read from the distro `pci.ids` database (`/usr/share/misc/pci.ids` from `pciutils`, or `/usr/share/hwdata/pci.ids` from `hwdata`)
 
 ## Driver
 
@@ -163,7 +165,7 @@ Then build the application:
 cd build
 cmake .. -G "Visual Studio 17 2022" -A x64
 cmake --build . --config Release
-.\bin\Release\LoadGraph.exe
+.\bin\Release\LoadGraphGUI.exe
 ```
 
 `CMakeLists.txt` picks the libraries up from `C:\wxWidgets\build_static_mt\lib\vc_x64_lib`
@@ -182,7 +184,7 @@ PE header declares Windows 7 as the minimum OS.
 mkdir -p build_linux && cd build_linux
 cmake ..
 make -j$(nproc)
-./bin/LoadGraph
+./bin/LoadGraphGUI
 ```
 
 Override wx-config path:
@@ -190,6 +192,21 @@ Override wx-config path:
 ```bash
 WX_CONFIG=/opt/wx/3.2/bin/wx-config cmake ..
 ```
+
+Use a self-built static wxWidgets instead (this is what the WSL2 setup does, because
+the Ubuntu `libwxgtk3.0-1` package is built without `wxUSE_GRAPHICS_CONTEXT` and
+`graph_panel.cpp` cannot compile against it). `WXSTATIC_ROOT` is read from the
+environment and must point at a directory holding `include/`, `include/gtk3-unicode-static-3.2/`
+and the `libwx_*-3.2.a` archives:
+
+```bash
+WXSTATIC_ROOT=$HOME/wxstatic cmake ..
+```
+
+`WXSTATIC_ROOT` wins over `wx-config`, and setting it clears any stale
+`WX_CONFIG_EXECUTABLE` entry left in the CMake cache — without that, re-running
+`cmake` after a `CMakeLists.txt` edit would silently switch the build back to the
+system wx headers.
 
 ## Configuration
 
@@ -263,8 +280,8 @@ src/
 
 ## Known limitations
 
-- **AMD GPU (Windows)** — metrics come from ADL2 (`atiadlxx.dll`, loaded dynamically). Load, temperature, fan and power depend on the driver exposing Overdrive6/Overdrive5 sensors; older UWP drivers may omit some of them (shown as N/A). ADL has no power-limit API in watts, so the power limit shows N/A on Windows.
-- **AMD GPU (Linux/WSL2)** — read from `amdgpu` sysfs/hwmon (`gpu_busy_percent`, `mem_info_vram_*`, `temp1_input`, `power1_average`, `fan1_input`, `freq1_input`). Requires the card to be visible to Linux: WSL2 needs GPU partitioning/passthrough, plain WSL2 exposes only the NVIDIA vGPU bridge. Cards bound to the legacy `radeon` driver (TeraScale, GCN1) only get what `radeon_pm.c` registers in hwmon: temperature (`temp1_*`), fan PWM (`pwm1_*`) and GPU clock (`freq1_input`, already in Hz); fan RPM, VRAM, power and utilization are not exported by that driver at all and stay N/A. There the model name is resolved from the distro `pci.ids` database, because `product_name`/`pretty_name` are amdgpu-specific. SI cards (e.g. Tahiti / R9 280) can be switched to `amdgpu` with the kernel parameters `radeon.si_support=0 amdgpu.si_support=1` (SI firmware required), which unlocks load, VRAM and power without any code change. The startup log prints an `AMD diag:` block with the driver name, PCI IDs and every sensor file that is actually present.
+- **AMD GPU (Windows)** — metrics come from ADL2 (`atiadlxx.dll` / `atiadlxy.dll`, loaded dynamically): load and clocks from `ADL2_Overdrive6_CurrentStatus_Get` with `ADL2_Overdrive5_CurrentActivity_Get` as fallback, temperature (OD6 then OD5), fan (percent plus RPM) and VRAM size (`ADL2_Adapter_MemoryInfo2_Get`); VRAM usage always comes from DXGI `IDXGIAdapter3::QueryVideoMemoryInfo`, which is also the only VRAM source when ADL exposes no memory info. Power comes from `ADL2_Overdrive6_CurrentPower_Get` and stays N/A on drivers that do not implement it - typical for legacy Catalyst and pre-GCN cards. ADL exposes no power-limit value in watts, so the AMD power limit is always N/A on Windows. One physical card is listed once even though ADL reports a separate record per display output (an 8-output R9 280 yields 8 records with the same PCI bus/device/function). When ADL cannot enumerate the adapter at all, a DXGI fallback (`IDXGIAdapter3::QueryVideoMemoryInfo`) still shows the model name and VRAM, everything else N/A. The startup log makes a missing card unambiguous: `DIAG OS display ...` lists what the OS sees (`EnumDisplayDevicesA`), `DIAG ADL[...]` every ADL record with vendor id, PCI address and the `iPresent`/`iExist` flags, and the `AMD: ...` lines state how many physical adapters were recognized and which source is in use.
+- **AMD GPU (Linux/WSL2)** - read from `amdgpu` sysfs/hwmon (`gpu_busy_percent`, `mem_info_vram_*`, `temp1_input`, `power1_average`, `power1_cap`, `fan1_input`, `pwm1`, `freq1_input`). Requires the card to be visible to Linux: WSL2 needs GPU partitioning/passthrough, plain WSL2 exposes only the NVIDIA vGPU bridge. Cards bound to the legacy `radeon` driver (TeraScale, GCN1) only get what `radeon_pm.c` registers in hwmon: temperature (`temp1_*`), fan PWM (`pwm1_*`) and GPU clock (`freq1_input`, already in Hz); fan RPM, VRAM, power and utilization are not exported by that driver at all and stay N/A. There the model name is resolved from the distro `pci.ids` database, because `product_name`/`pretty_name` are amdgpu-specific. SI cards (e.g. Tahiti / R9 280) can be switched to `amdgpu` with the kernel parameters `radeon.si_support=0 amdgpu.si_support=1` (SI firmware required), which unlocks load, VRAM and power without any code change. The startup log prints an `AMD diag:` block with the driver name, PCI IDs and every sensor file that is actually present.
 - **Intel GPU** — not supported.
 - **macOS** — not a target platform.
 - **CPU temperature on Linux** — reads `/sys/class/thermal/thermal_zone0/temp`; many desktop boards expose no thermal zone, so N/A is common.
