@@ -58,9 +58,38 @@ private:
     using FnOD6PowerGet    = int (*)(void* pContext, int iAdapterIndex, int iPowerType, int* lpCurrentValue);
     using FnMemInfo2Get    = int (*)(void* pContext, int iAdapterIndex, void* lpMemoryInfo2);
 
+    /// Аппаратный AMD-адаптер, перечисленный DXGI (без ADL).
+    struct DxgiAmdInfo
+    {
+        std::string name;                 // Description из DXGI_ADAPTER_DESC
+        uint64_t    dedicatedBytes = 0;   // объем выделенной видеопамяти
+        uint64_t    usedBytes      = 0;   // использование, если usedValid
+        bool        usedValid      = false;
+    };
+
     bool LoadAdl();
     void FreeAdl();
+
+    /// Инициализация ADL: загрузка atiadlxx.dll, поиск точек входа ADL2 и
+    /// создание контекста. false означает, что метрики ADL недоступны.
+    bool InitAdl();
+
+    /// Загрузка dxgi.dll и создание IDXGIFactory1. Ошибка не фатальна: без DXGI
+    /// недоступен только VRAM.
+    void OpenDxgi();
+
+    /// Сбор метрик: сначала ADL, если он ничего не вернул - DXGI-запас.
     void CollectAdl(std::vector<GpuMetrics>& out);
+
+    /// Метрики только по ADL. diag = печатать одноразовую диагностику ADL.
+    void CollectViaAdl(std::vector<GpuMetrics>& out, bool diag);
+
+    /// Запасной источник: адаптеры, видимые DXGI (имя и VRAM), когда ADL карту
+    /// не перечисляет. diag = печатать сообщение один раз.
+    void CollectDxgiOnly(std::vector<GpuMetrics>& out, bool diag);
+
+    /// Список аппаратных AMD-адаптеров DXGI (софтверный WARP отброшен).
+    bool EnumerateDxgiAmd(std::vector<DxgiAmdInfo>& out);
 
     /// VRAM по DXGI: ADL не отдает использование видеопамяти, поэтому used
     /// берется из IDXGIAdapter3::QueryVideoMemoryInfo. Сопоставление адаптеров

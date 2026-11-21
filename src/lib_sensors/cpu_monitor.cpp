@@ -671,10 +671,12 @@ static int ProbeSuperIoFan()
         if (div == 0)    div = 1; // avoid division by zero.
 
         // Read fan counter register (16-bit). Nuvoton offset 0x4A, ITE 0x48, SMSC 0x49.
-        uint16_t cntRegOff = isNuvoton ? 0x4A : (isIte ? 0x48 : 0x49);
+        // Регистр адресуются байтом, поэтому смещение хранится в uint8_t - это
+        // убирает предупреждение о сужении при вызове WriteIoPortByte.
+        uint8_t cntRegOff = isNuvoton ? 0x4A : (isIte ? 0x48 : 0x49);
         if (!Ring0Msr::WriteIoPortByte(p.cfgPort, cntRegOff)) continue;
         uint32_t cntLow  = Ring0Msr::ReadIoPortDword(p.dataPort);
-        if (!Ring0Msr::WriteIoPortByte(p.cfgPort, cntRegOff + 1)) continue;
+        if (!Ring0Msr::WriteIoPortByte(p.cfgPort, static_cast<uint8_t>(cntRegOff + 1))) continue;
         uint32_t cntHigh = Ring0Msr::ReadIoPortDword(p.dataPort);
         uint16_t fanCnt = static_cast<uint16_t>(
             (static_cast<uint16_t>(cntHigh & 0xFF) << 8) |
@@ -963,7 +965,6 @@ void CpuMonitor::QueryCpuName()
 #else
             strncpy(m_metrics.cpuName, name.c_str(), sizeof(m_metrics.cpuName) - 1);
 #endif
-            LOGI("CPU name: %s", m_metrics.cpuName);
         }
         RegCloseKey(hKey);
     }
@@ -979,6 +980,10 @@ void CpuMonitor::QueryCpuName()
             nameA += *p;
 #endif
     }
+
+    // Логируется ASCII-копия: m_metrics.cpuName на Windows это wchar_t[], а
+    // узкий "%s" прочитал бы из неё один символ ("Intel..." -> "I").
+    LOGI("CPU name: %s", nameA.c_str());
 
     // Resolve the TDP limit once from the static table (unknown CPU -> 125 W).
     const double tdp = static_cast<double>(PowerTable::GetCpuTdpByName(nameA));

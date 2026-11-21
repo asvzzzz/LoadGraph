@@ -4,6 +4,7 @@
 #include <cstdio>
 #include <cstring>
 #include <cstdlib>
+#include <cctype>
 #include <string>
 #include <vector>
 
@@ -13,6 +14,12 @@
 
 // PCI Vendor ID компании AMD.
 static const int AMD_PCI_VENDOR_ID = 0x1002;
+
+// ADLAdapterInfo.iVendorID заполняется не hex-кодом PCI, а числом, собранным из
+// десятичных цифр идентификатора: для AMD это "1002" = 0x03EA, для NVIDIA - 10.
+// Проверка по одному только 0x1002 отбрасывает все рабочие адаптеры (проверено
+// дапом: у живых AMD-записей vendor равен 0x03EA).
+static const int ADL_VENDOR_ID_AMD_DECIMAL = 1002;
 
 // ============================================================================
 // Каркас класса (общий для всех платформ)
@@ -183,6 +190,146 @@ struct ADLMemoryInfo2
     long long iVisibleMemorySize;
 };
 
+/// Символ, входящий в состав слова (буква латиницы или цифра).
+bool IsWordChar(char c)
+{
+    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+           (c >= '0' && c <= '9');
+}
+
+/// Поиск подстроки без учета регистра (только ASCII). Сравнение идет по
+/// длинам строк: чтения за терминирующим нулем нет. wordBounds требует, чтобы
+/// совпадение было отдельным словом.
+bool FindNoCase(const char* text, const char* needle, bool wordBounds)
+{
+    if (!text || !needle)
+        return false;
+
+    const size_t n = strlen(needle);
+    if (n == 0)
+        return false;
+
+    for (const char* p = text; *p != '\0'; ++p)
+    {
+        size_t i = 0;
+        while (i < n)
+        {
+            if (p[i] == '\0')
+                break;
+            if (tolower(static_cast<unsigned char>(p[i])) !=
+                tolower(static_cast<unsigned char>(needle[i])))
+                break;
+            ++i;
+        }
+        if (i != n)
+            continue;
+        if (!wordBounds)
+            return true;
+
+        // p[0..n-1] заведомо существуют (иначе прервались выше), поэтому
+        // p[n] - минимум терминирующий ноль, чтение безопасно.
+        const bool leftOk  = (p == text) || !IsWordChar(p[-1]);
+        const bool rightOk = !IsWordChar(p[n]);
+        if (leftOk && rightOk)
+            return true;
+    }
+    return false;
+}
+
+/// Косвенный признак AMD-адаптера по имени ("AMD Radeon RX 5700 XT",
+/// "ATI Radeon E2460", "AMD FirePro W5100", "Ryzen Graphics"). Нужен потому,
+/// что часть версий драйвера не заполняет ADLAdapterInfo.iVendorID.
+bool LooksLikeAmdName(const char* name)
+{
+    static const char* const kWords[] = { "radeon", "ati", "amd", "firepro",
+                                          "firegl", "ryzen" };
+    for (const char* word : kWords)
+    {
+        if (FindNoCase(name, word, true))
+            return true;
+    }
+    return false;
+}
+
+/// True, если iVendorID из ADL соответствует AMD. Драйверы отдают это поле в
+/// "десятичной" записи (см. ADL_VENDOR_ID_AMD_DECIMAL), поэтому принимаем оба
+/// варианта; сравнение только с 0x1002 рабочие адаптеры не находит.
+bool IsAmdAdlVendor(int vendorId)
+{
+    return vendorId == AMD_PCI_VENDOR_ID || vendorId == ADL_VENDOR_ID_AMD_DECIMAL;
+}
+
+/// WCHAR[] -> UTF-8. Длина источника передана явно, поэтому незавершенная
+/// строка в DXGI Description не приведет к чтению за буфером.
+std::string WideToUtf8(const wchar_t* text, size_t chars)
+{
+    if (!text || chars == 0)
+        return std::string();
+
+    size_t len = 0;
+    while (len < chars && text[len] != L'\0')
+        ++len;
+    if (len == 0)
+        return std::string();
+
+    const int need = WideCharToMultiByte(CP_UTF8, 0, text, static_cast<int>(len),
+                                         nullptr, 0, nullptr, nullptr);
+    if (need <= 0 || need > 4096)
+        return std::string();
+
+    std::string out(static_cast<size_t>(need), '\0');
+    const int written = WideCharToMultiByte(CP_UTF8, 0, text, static_cast<int>(len),
+                                            &out[0], need, nullptr, nullptr);
+    if (written <= 0)
+        return std::string();
+    out.resize(static_cast<size_t>(written));
+    return out;
+}
+
+/// Одноразовый дамп всех записей ADL. Позволяет по логу отличить "карты нет"
+/// от "ADL видит адаптер, но не тот вендор/флаги".
+void LogAdlAdapters(const std::vector<ADLAdapterInfo>& adapters)
+{
+    for (size_t i = 0; i < adapters.size(); ++i)
+    {
+        const ADLAdapterInfo& a = adapters[i];
+        LOGI("DIAG ADL[%zu]: idx=%d bus=%d dev=%d func=%d vendor=0x%04X (%d) "
+             "present=%d exist=%d name='%.48s' display='%.48s'",
+             i, a.iAdapterIndex, a.iBusNumber, a.iDeviceNumber,
+             a.iFunctionNumber, static_cast<unsigned>(a.iVendorID), a.iVendorID,
+             a.iPresent, a.iExist, a.strAdapterName, a.strDisplayName);
+    }
+}
+
+/// Перечисляет дисплейные устройства Windows (user32 EnumDisplayDevices,
+/// документированный API, прав администратора не требует) и печатает их.
+/// Возвращает true, если ОС сообщает о PCI-устройстве vendor 0x1002 - это
+/// независимая от ADL проверка того, что AMD-карта в системе есть.
+bool LogOsDisplayDevices()
+{
+    bool seesAmd = false;
+
+    // 16 - разумный предел: EnumDisplayDevices возвращает FALSE на первом же
+    // индексе за списком устройств, цикл защищен на случай сбоя драйвера.
+    for (DWORD i = 0; i < 16; ++i)
+    {
+        DISPLAY_DEVICEA dev{};
+        dev.cb = sizeof(DISPLAY_DEVICEA);
+        if (!EnumDisplayDevicesA(nullptr, i, &dev, 0))
+            break;
+
+        const bool amd = FindNoCase(dev.DeviceID, "VEN_1002", false) ||
+                         LooksLikeAmdName(dev.DeviceString);
+        if (amd)
+            seesAmd = true;
+
+        LOGI("DIAG OS display %lu%s: id='%.96s' name='%.48s' flags=0x%08X",
+             i, amd ? " (AMD)" : "", dev.DeviceID, dev.DeviceString,
+             static_cast<unsigned>(dev.StateFlags));
+    }
+    return seesAmd;
+}
+
 /// Колбэк аллокации ADL (ADL_MAIN_MALLOC_CALLBACK).
 /// ADL вызывает его для своих внутренних буферов.
 void* __stdcall AdlMallocCallback(int iSize)
@@ -214,6 +361,73 @@ double NormalizeAdlTemperature(int raw)
 
 bool AmdMonitor::LoadAdl()
 {
+    // DXGI поднимается первым: он единственный источник объема и использования
+    // VRAM, а когда ADL недоступен (базовый драйвер дисплея, карта без ADL2) -
+    // единственный способ вообще увидеть карту.
+    OpenDxgi();
+
+    const bool adlOk = InitAdl();
+
+    // Независимая от ADL проверка: сообщает ли Windows о дисплейном устройстве
+    // PCI vendor 0x1002. Дешевый вызов, делаем один раз при старте.
+    const bool osSeesAmd = LogOsDisplayDevices();
+
+    // Проверка наличия хотя бы одной AMD карты.
+    std::vector<GpuMetrics> probe;
+    CollectAdl(probe);
+    if (probe.empty())
+    {
+        if (osSeesAmd)
+        {
+            LOGI("AMD: the OS reports an AMD display device, but neither ADL nor "
+                 "DXGI returned data - check the display driver in Device Manager.");
+        }
+        else
+        {
+            LOGI("AMD: the OS reports no AMD display device (PCI vendor 0x1002).");
+        }
+        LOGI("AMD: no AMD GPU available (ADL %s, DXGI %s).",
+             adlOk ? "initialized" : "unavailable",
+             m_dxgiFactory ? "available" : "unavailable");
+        FreeAdl();
+        return false;
+    }
+
+    // Диагностика необязательных точек входа: отсутствующая функция означает,
+    // что соответствующая метрика будет N/A на этом драйвере.
+    if (adlOk)
+    {
+        if (!m_fnOD6Status)   LOGI("AMD: ADL2_Overdrive6_CurrentStatus_Get missing - load/clocks unavailable.");
+        if (!m_fnOD5Activity) LOGI("AMD: ADL2_Overdrive5_CurrentActivity_Get missing - no legacy load source.");
+        if (!m_fnOD6Temp)     LOGI("AMD: ADL2_Overdrive6_Temperature_Get missing.");
+        if (!m_fnOD5Temp)     LOGI("AMD: ADL2_Overdrive5_Temperature_Get missing.");
+        if (!m_fnOD6Fan)      LOGI("AMD: ADL2_Overdrive6_FanSpeed_Get missing.");
+        if (!m_fnOD5FanInfo || !m_fnOD5Fan) LOGI("AMD: ADL2_Overdrive5_FanSpeed* missing - fan unavailable.");
+        if (!m_fnOD6Power)    LOGI("AMD: ADL2_Overdrive6_CurrentPower_Get missing - power unavailable.");
+        if (!m_fnMemInfo2)    LOGI("AMD: ADL2_Adapter_MemoryInfo2_Get missing - VRAM size from DXGI only.");
+    }
+
+    for (const GpuMetrics& g : probe)
+    {
+        LOGI("AMD: GPU '%s': load=%.0f%%, temp=%.0fC, power=%.1f/%.1f W, "
+             "vram=%llu/%llu MB, fan=%.0f%%/%d rpm",
+             g.name.c_str(), g.loadPercent, g.temperature, g.powerWatts,
+             g.powerLimitWatts,
+             static_cast<unsigned long long>(g.vramUsedBytes / (1024ULL * 1024ULL)),
+             static_cast<unsigned long long>(g.vramTotalBytes / (1024ULL * 1024ULL)),
+             g.fanPercent, g.fanRpm);
+    }
+
+    LOGI("AMD: monitor ready, %zu AMD GPU(s), source: %s.",
+         probe.size(), adlOk ? "ADL" : "DXGI");
+    return true;
+}
+
+/// Загружает atiadlxx.dll, резолвит точки входа ADL2 и создает контекст ADL.
+/// False означает, что метрики ADL на этой системе недоступны - мониторинг тогда
+/// возможен только по DXGI.
+bool AmdMonitor::InitAdl()
+{
     // atiadlxx.dll - 64-битная библиотека современных драйверов Adrenalin,
     // atiadlxy.dll - устаревшее 32-битное имя.
     const char* dllNames[] = { "atiadlxx.dll", "atiadlxy.dll" };
@@ -225,7 +439,7 @@ bool AmdMonitor::LoadAdl()
     }
     if (!m_hAdl)
     {
-        LOGI("AMD: ADL library not found, AMD GPU support disabled.");
+        LOGI("AMD: ADL library not found (no AMD display driver installed?).");
         return false;
     }
 
@@ -264,76 +478,48 @@ bool AmdMonitor::LoadAdl()
     if (!m_fnCreate || !m_fnDestroy || !m_fnNumAdapters || !m_fnAdapterInfo)
     {
         LOGI("AMD: ADL loaded but required ADL2 entry points are missing.");
-        FreeAdl();
         return false;
     }
 
     // iEnumConnectedAdapters = 0: перечисляем все адаптеры (фильтр по
-    // iVendorID/iPresent делаем сами).
+    // вендору/флагам присутствия делаем сами).
     int rc = m_fnCreate(reinterpret_cast<void*>(AdlMallocCallback), 0, &m_adlContext);
     if (rc != ADL_OK || !m_adlContext)
     {
+        m_adlContext = nullptr;
         LOGI("AMD: ADL2_Main_Control_Create failed (code %d).", rc);
-        FreeAdl();
         return false;
     }
-
-    // DXGI - источник VRAM (объем и использование). Не обязателен: без него
-    // VRAM останется N/A, но прочие метрики продолжат работать.
-    m_hDxgi = LoadLibraryA("dxgi.dll");
-    if (m_hDxgi)
-    {
-        using FnCreateDXGIFactory1 = HRESULT (*)(REFIID riid, void** ppFactory);
-        FnCreateDXGIFactory1 createFactory = reinterpret_cast<FnCreateDXGIFactory1>(
-            GetProcAddress(m_hDxgi, "CreateDXGIFactory1"));
-        if (createFactory)
-        {
-            HRESULT hr = createFactory(IID_IDXGIFactory1,
-                                       reinterpret_cast<void**>(&m_dxgiFactory));
-            if (FAILED(hr) || !m_dxgiFactory)
-            {
-                LOGI("AMD: CreateDXGIFactory1 failed, VRAM metrics unavailable.");
-                m_dxgiFactory = nullptr;
-            }
-        }
-    }
-    if (!m_hDxgi)
-        LOGI("AMD: dxgi.dll not loaded, VRAM metrics unavailable.");
-
-    // Проверка наличия хотя бы одной AMD карты.
-    std::vector<GpuMetrics> probe;
-    CollectAdl(probe);
-    if (probe.empty())
-    {
-        LOGI("AMD: No active AMD GPU found via ADL.");
-        FreeAdl();
-        return false;
-    }
-
-    // Диагностика необязательных точек входа: отсутствующая функция означает,
-    // что соответствующая метрика будет N/A на этом драйвере.
-    if (!m_fnOD6Status)   LOGI("AMD: ADL2_Overdrive6_CurrentStatus_Get missing - load/clocks unavailable.");
-    if (!m_fnOD5Activity) LOGI("AMD: ADL2_Overdrive5_CurrentActivity_Get missing - no legacy load source.");
-    if (!m_fnOD6Temp)     LOGI("AMD: ADL2_Overdrive6_Temperature_Get missing.");
-    if (!m_fnOD5Temp)     LOGI("AMD: ADL2_Overdrive5_Temperature_Get missing.");
-    if (!m_fnOD6Fan)      LOGI("AMD: ADL2_Overdrive6_FanSpeed_Get missing.");
-    if (!m_fnOD5FanInfo || !m_fnOD5Fan) LOGI("AMD: ADL2_Overdrive5_FanSpeed* missing - fan unavailable.");
-    if (!m_fnOD6Power)    LOGI("AMD: ADL2_Overdrive6_CurrentPower_Get missing - power unavailable.");
-    if (!m_fnMemInfo2)    LOGI("AMD: ADL2_Adapter_MemoryInfo2_Get missing - VRAM size from DXGI only.");
-
-    for (const GpuMetrics& g : probe)
-    {
-        LOGI("AMD: GPU '%s': load=%.0f%%, temp=%.0fC, power=%.1f/%.1f W, "
-             "vram=%llu/%llu MB, fan=%.0f%%/%d rpm",
-             g.name.c_str(), g.loadPercent, g.temperature, g.powerWatts,
-             g.powerLimitWatts,
-             static_cast<unsigned long long>(g.vramUsedBytes / (1024ULL * 1024ULL)),
-             static_cast<unsigned long long>(g.vramTotalBytes / (1024ULL * 1024ULL)),
-             g.fanPercent, g.fanRpm);
-    }
-
-    LOGI("AMD: ADL initialized, found %zu AMD GPU(s).", probe.size());
     return true;
+}
+
+/// Загружает dxgi.dll и создает IDXGIFactory1. Без него VRAM останется N/A, но
+/// остальные метрики продолжают работать, поэтому ошибка не считается фатальной.
+void AmdMonitor::OpenDxgi()
+{
+    m_hDxgi = LoadLibraryA("dxgi.dll");
+    if (!m_hDxgi)
+    {
+        LOGI("AMD: dxgi.dll not loaded, VRAM metrics unavailable.");
+        return;
+    }
+
+    using FnCreateDXGIFactory1 = HRESULT (*)(REFIID riid, void** ppFactory);
+    FnCreateDXGIFactory1 createFactory = reinterpret_cast<FnCreateDXGIFactory1>(
+        GetProcAddress(m_hDxgi, "CreateDXGIFactory1"));
+    if (!createFactory)
+    {
+        LOGI("AMD: CreateDXGIFactory1 export missing, VRAM metrics unavailable.");
+        return;
+    }
+
+    HRESULT hr = createFactory(IID_IDXGIFactory1,
+                               reinterpret_cast<void**>(&m_dxgiFactory));
+    if (FAILED(hr) || !m_dxgiFactory)
+    {
+        LOGI("AMD: CreateDXGIFactory1 failed, VRAM metrics unavailable.");
+        m_dxgiFactory = nullptr;
+    }
 }
 
 void AmdMonitor::FreeAdl()
@@ -382,6 +568,26 @@ void AmdMonitor::FreeAdl()
 void AmdMonitor::CollectAdl(std::vector<GpuMetrics>& out)
 {
     out.clear();
+
+    // Одноразовая диагностика печатается только на первой пробе (вызов из
+    // LoadAdl): дальше опрос идет раз в секунду и засорять лог нельзя.
+    const bool diag = !m_enumLogged;
+
+    CollectViaAdl(out, diag);
+
+    // ADL не дал ни одной карты, но адаптер виден операционной системе:
+    // показываем то, что умеет DXGI (имя и VRAM), вместо того чтобы прятать
+    // карту целиком.
+    if (out.empty())
+        CollectDxgiOnly(out, diag);
+
+    m_enumLogged = true;
+}
+
+/// Метрики по ADL: перечисление адаптеров и опрос Overdrive5/Overdrive6.
+/// diag = true печатает одноразовый дамп того, что вернул ADL.
+void AmdMonitor::CollectViaAdl(std::vector<GpuMetrics>& out, bool diag)
+{
     if (!m_adlContext || !m_fnNumAdapters || !m_fnAdapterInfo)
         return;
 
@@ -391,7 +597,7 @@ void AmdMonitor::CollectAdl(std::vector<GpuMetrics>& out)
     if (numAdapters <= 0 || numAdapters > ADL_MAX_ADAPTERS)
         return;
 
-    if (!m_enumLogged)
+    if (diag)
         LOGI("AMD: ADL reports %d OS adapter(s).", numAdapters);
 
     std::vector<ADLAdapterInfo> adapters(static_cast<size_t>(numAdapters));
@@ -402,8 +608,11 @@ void AmdMonitor::CollectAdl(std::vector<GpuMetrics>& out)
     if (m_fnAdapterInfo(m_adlContext, adapters.data(), bufBytes) != ADL_OK)
         return;
 
+    if (diag)
+        LogAdlAdapters(adapters);
+
     // Один физический адаптер может занимать несколько записей с одинаковым
-    // iAdapterIndex - оставляем первую с нужным вендором.
+    // iAdapterIndex - оставляем первую подходящую.
     struct AdapterRef
     {
         int         index;      // ADL adapter index
@@ -414,7 +623,21 @@ void AmdMonitor::CollectAdl(std::vector<GpuMetrics>& out)
 
     for (const ADLAdapterInfo& a : adapters)
     {
-        if (a.iVendorID != AMD_PCI_VENDOR_ID || !a.iPresent)
+        // Вендор берем из iVendorID (с учетом "десятичной" записи ADL); если
+        // драйвер поле не заполнил - ориентируемся на имя адаптера.
+        const bool isAmd = IsAmdAdlVendor(a.iVendorID) ||
+                           LooksLikeAmdName(a.strAdapterName) ||
+                           LooksLikeAmdName(a.strDisplayName);
+        if (!isAmd)
+            continue;
+
+        // iPresent - адаптер активен сейчас, iExist - установлен. Карта без
+        // подключенного монитора (типовой LLM-сценарий) часто отвечает
+        // present=0, поэтому достаточно любого из двух флагов. Если драйвер не
+        // выставил ни одного, но адаптер имеет адрес на шине PCI и имя - это
+        // реальное устройство (пустые записи-заполнители имеют bus=-1).
+        const bool onPciBus = (a.iBusNumber >= 0) && (a.strAdapterName[0] != '\0');
+        if (!a.iPresent && !a.iExist && !onPciBus)
             continue;
 
         bool dup = false;
@@ -441,22 +664,24 @@ void AmdMonitor::CollectAdl(std::vector<GpuMetrics>& out)
         targets.push_back(ref);
     }
 
-    // Одноразовая диагностика инициализации - дальше не засоряем лог.
-    if (!m_enumLogged)
-    {
-        LOGI("AMD: %zu adapter(s) matched PCI vendor 0x%04X.",
-             targets.size(), static_cast<unsigned>(AMD_PCI_VENDOR_ID));
-        m_enumLogged = true;
-    }
+    if (diag)
+        LOGI("AMD: %zu adapter(s) recognized as AMD GPU(s).", targets.size());
 
     for (const AdapterRef& t : targets)
     {
-        if (m_fnActiveGet)
+        // ADL2_Adapter_Active_Get не используется как фильтр: адаптер, который
+        // ADL считает неактивным (карта без подключенного монитора, режим
+        // вычислений), по-прежнему отдает метрики Overdrive. Адаптер без каких
+        // либо данных отбрасывается ниже, по итогам опроса.
+        int active = 1;
+        if (m_fnActiveGet &&
+            m_fnActiveGet(m_adlContext, t.index, &active) != ADL_OK)
         {
-            int active = 0;
-            if (m_fnActiveGet(m_adlContext, t.index, &active) == ADL_OK && !active)
-                continue;
+            active = 1;
         }
+        if (diag && !active)
+            LOGI("AMD: adapter %d is reported inactive by ADL, probing anyway.",
+                 t.index);
 
         GpuMetrics gm{};
         gm.name = t.name;
@@ -617,9 +842,56 @@ void AmdMonitor::CollectAdl(std::vector<GpuMetrics>& out)
                                  static_cast<double>(gm.vramTotalBytes) * 100.0;
         }
 
-        // Логирование значений - только при инициализации (LoadAdl), чтобы
-        // не засорять лог построчным выводом каждую секунду.
+        // Адаптер, на который ADL не ответил ни одним валидным значением
+        // (отключенное устройство, гибрид без поддержки Overdrive), на экран не
+        // выводим: вместо него сработает DXGI-запас в CollectAdl. loadPercent в
+        // расчет не берется: у GpuMetrics он по умолчанию 0.0, а не признак
+        // ответа драйвера.
+        const bool noData = (gm.temperature  < 0.0) && (gm.fanPercent < 0.0) &&
+                            (gm.fanRpm       < 0)   && (gm.powerWatts < 0.0) &&
+                            (gm.vramTotalBytes == 0) && (gm.gpuFreqMhz <= 0.0);
+        if (noData)
+        {
+            if (diag)
+            {
+                LOGI("AMD: adapter %d ('%s') answered no ADL query, skipped.",
+                     t.index, t.name.c_str());
+            }
+            continue;
+        }
+
         out.push_back(gm);
+    }
+}
+
+/// Запасной источник метрик: адаптеры, видимые DXGI. Применяется, когда ADL карту
+/// не перечисляет (базовый драйвер дисплея, драйвер без ADL2). Доступны только
+/// имя и видеопамять, все остальные метрики остаются N/A.
+void AmdMonitor::CollectDxgiOnly(std::vector<GpuMetrics>& out, bool diag)
+{
+    std::vector<DxgiAmdInfo> list;
+    if (!EnumerateDxgiAmd(list))
+        return;
+
+    for (const DxgiAmdInfo& d : list)
+    {
+        GpuMetrics gm{};
+        gm.name           = d.name.empty() ? std::string("AMD GPU") : d.name;
+        gm.loadPercent    = -1.0;
+        gm.vramTotalBytes = d.dedicatedBytes;
+        gm.vramUsedBytes  = d.usedValid ? d.usedBytes : 0;
+        if (gm.vramTotalBytes > 0 && gm.vramUsedBytes <= gm.vramTotalBytes)
+        {
+            gm.vramLoadPercent = static_cast<double>(gm.vramUsedBytes) /
+                                 static_cast<double>(gm.vramTotalBytes) * 100.0;
+        }
+        out.push_back(gm);
+    }
+
+    if (diag && !out.empty())
+    {
+        LOGI("AMD: %zu adapter(s) seen by DXGI but not by ADL - VRAM metrics only.",
+             out.size());
     }
 }
 
@@ -627,30 +899,31 @@ void AmdMonitor::CollectAdl(std::vector<GpuMetrics>& out)
 // VRAM через DXGI
 // ---------------------------------------------------------------------------
 
-bool AmdMonitor::QueryVramDXGI(unsigned amdOrdinal, uint64_t adlTotalBytes,
-                               uint64_t& totalBytes, uint64_t& usedBytes)
+/// Список аппаратных AMD-адаптеров DXGI (софтверный WARP отбрасывается).
+/// Возвращает false, если DXGI недоступен или AMD-адаптеров нет.
+bool AmdMonitor::EnumerateDxgiAmd(std::vector<DxgiAmdInfo>& out)
 {
-    totalBytes = 0;
-    usedBytes  = 0;
+    out.clear();
     if (!m_dxgiFactory)
         return false;
 
-    // Собираем все аппаратные AMD-адаптеры DXGI (софтверный WARP отбрасываем).
-    struct DxgiAmd
-    {
-        uint64_t dedicated;
-        uint64_t used;
-        bool     usedValid;
-    };
-    std::vector<DxgiAmd> list;
-
-    for (UINT i = 0;; ++i)
+    // 16 - защитный предел: EnumAdapters1 возвращает DXGI_ERROR_NOT_FOUND после
+    // последнего адаптера, но цикл застрахован на случай сбоя драйвера.
+    for (UINT i = 0; i < 16; ++i)
     {
         IDXGIAdapter1* adapter = nullptr;
         HRESULT hr = m_dxgiFactory->EnumAdapters1(i, &adapter);
         if (hr == DXGI_ERROR_NOT_FOUND)
             break;
-        if (FAILED(hr) || !adapter)
+        if (FAILED(hr))
+        {
+            // На сбое перечисления адаптер все равно может быть выдан -
+            // отпускаем ссылку, чтобы не терять счетчик COM.
+            if (adapter)
+                adapter->Release();
+            continue;
+        }
+        if (!adapter)
             continue;
 
         DXGI_ADAPTER_DESC1 desc{};
@@ -658,10 +931,10 @@ bool AmdMonitor::QueryVramDXGI(unsigned amdOrdinal, uint64_t adlTotalBytes,
             desc.VendorId == static_cast<UINT>(AMD_PCI_VENDOR_ID) &&
             (desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) == 0)
         {
-            DxgiAmd item{};
-            item.dedicated = static_cast<uint64_t>(desc.DedicatedVideoMemory);
-            item.used      = 0;
-            item.usedValid = false;
+            DxgiAmdInfo item;
+            item.name = WideToUtf8(desc.Description,
+                                   sizeof(desc.Description) / sizeof(wchar_t));
+            item.dedicatedBytes = static_cast<uint64_t>(desc.DedicatedVideoMemory);
 
             // Used: IDXGIAdapter3::QueryVideoMemoryInfo (Windows 10 и новее).
             IDXGIAdapter3* adapter3 = nullptr;
@@ -672,18 +945,28 @@ bool AmdMonitor::QueryVramDXGI(unsigned amdOrdinal, uint64_t adlTotalBytes,
                 if (SUCCEEDED(adapter3->QueryVideoMemoryInfo(
                         0, DXGI_MEMORY_SEGMENT_GROUP_LOCAL, &vmi)))
                 {
-                    item.used      = vmi.CurrentUsage;
+                    item.usedBytes = vmi.CurrentUsage;
                     item.usedValid = true;
                 }
                 adapter3->Release();
             }
-            list.push_back(item);
+            out.push_back(item);
         }
 
         adapter->Release();
     }
 
-    if (list.empty())
+    return !out.empty();
+}
+
+bool AmdMonitor::QueryVramDXGI(unsigned amdOrdinal, uint64_t adlTotalBytes,
+                               uint64_t& totalBytes, uint64_t& usedBytes)
+{
+    totalBytes = 0;
+    usedBytes  = 0;
+
+    std::vector<DxgiAmdInfo> list;
+    if (!EnumerateDxgiAmd(list))
         return false;
 
     // Сопоставление с адаптером ADL. DXGI не предоставляет адрес PCI, поэтому:
@@ -694,14 +977,14 @@ bool AmdMonitor::QueryVramDXGI(unsigned amdOrdinal, uint64_t adlTotalBytes,
 
     if (adlTotalBytes > 0)
     {
-        size_t  best    = list.size();
-        uint64_t bestDelta = SIZE_TOLERANCE + 1;
-        bool     ambiguous = false;
+        size_t   best       = list.size();
+        uint64_t bestDelta  = SIZE_TOLERANCE + 1;
+        bool     ambiguous  = false;
         for (size_t j = 0; j < list.size(); ++j)
         {
-            uint64_t delta = (list[j].dedicated > adlTotalBytes)
-                           ? (list[j].dedicated - adlTotalBytes)
-                           : (adlTotalBytes - list[j].dedicated);
+            uint64_t delta = (list[j].dedicatedBytes > adlTotalBytes)
+                           ? (list[j].dedicatedBytes - adlTotalBytes)
+                           : (adlTotalBytes - list[j].dedicatedBytes);
             if (delta <= SIZE_TOLERANCE)
             {
                 if (delta == bestDelta)
@@ -724,8 +1007,8 @@ bool AmdMonitor::QueryVramDXGI(unsigned amdOrdinal, uint64_t adlTotalBytes,
     if (pick >= list.size())
         return false;
 
-    totalBytes = list[pick].dedicated;
-    usedBytes  = list[pick].usedValid ? list[pick].used : 0;
+    totalBytes = list[pick].dedicatedBytes;
+    usedBytes  = list[pick].usedValid ? list[pick].usedBytes : 0;
     return true;
 }
 
