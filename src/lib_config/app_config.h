@@ -42,8 +42,9 @@ struct AppConfig
     // Auth on/off switch: false serves the dashboard with no login prompt.
     bool    http_auth      = true;
     // Separate HTTP access log (loadgraph_http.log in the config dir):
-    // one line per connection with the client IP:port; invalid requests
-    // (401/404/no request) also log the raw request text.
+    // invalid requests only (no request bytes / 401 / 404) with client
+    // IP:port and raw request text. Created lazily on the first event and
+    // appended to across restarts, never truncated.
     bool    http_log       = true;
     bool    log_file       = false; // console (TTY): write loadgraph.jsonl snapshots when true
     bool    superio_fan    = false; // enable Super I/O fan probe via WinRing0

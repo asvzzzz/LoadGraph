@@ -313,28 +313,48 @@ static bool AuthorizeRequest(const std::string& req, const char* path)
 
 // ============================================================================
 // HTTP access log (loadgraph_http.log, kept separate from loadgraph.log).
-// Opened in StartHttpServer() with mode "w" (previous run's contents are
-// discarded, same rule as the other per-user files) and written ONLY from
-// the server thread, so no locking is needed. Only INVALID requests are
-// logged - connections that sent no request bytes (scanners), 401 auth
-// failures and 404 unknown paths - one line each with the client IP:port
-// plus the raw request text. Valid 200 responses are never logged, so the
-// file stays quiet while the dashboard polls.
+// Only INVALID requests are logged - connections that sent no request bytes
+// (scanners), 401 auth failures and 404 unknown paths - one line each with
+// the client IP:port plus the raw request text. Valid 200 responses are
+// never logged, so the file stays quiet while the dashboard polls. The file
+// is created lazily on the first logged event and opened in append mode:
+// app restarts never truncate it. Written ONLY from the server thread, so
+// no locking is needed.
 // ============================================================================
 
-static FILE* g_httpLogFile = nullptr;
+static FILE* g_httpLogFile    = nullptr;
+static bool  g_httpLogEnabled = false;  // cfg.http_log, set before the thread starts
+static bool  g_httpLogFailed  = false;  // open error: report once, do not spam
 
-static void HttpLogOpen(const AppConfig& cfg)
+// Records the config switch on the caller thread before the server thread
+// starts (happens-before via std::thread construction), so the server
+// thread can read it without synchronization.
+static void HttpLogInit(const AppConfig& cfg)
 {
-    if (!cfg.http_log) return;
+    g_httpLogEnabled = cfg.http_log;
+    g_httpLogFile    = nullptr;
+    g_httpLogFailed  = false;
+}
+
+// Open the log on first use, in append mode: the file is not created until
+// something is actually worth logging, and previous sessions' lines survive.
+static bool HttpLogEnsureOpen()
+{
+    if (g_httpLogFile) return true;
+    if (g_httpLogFailed) return false;
     const std::string dir = GetAppConfigDir();
     const std::string path = dir.empty() ? std::string("./loadgraph_http.log")
                                          : dir + "/loadgraph_http.log";
-    g_httpLogFile = fopen(path.c_str(), "w");
+    g_httpLogFile = fopen(path.c_str(), "a");
     if (!g_httpLogFile)
+    {
+        g_httpLogFailed = true;
         fprintf(stderr, "HTTP: cannot open %s for logging\n", path.c_str());
+    }
+    return g_httpLogFile != nullptr;
 }
 
+// Flush and close the (possibly never opened) log file.
 static void HttpLogClose()
 {
     if (!g_httpLogFile) return;
@@ -400,7 +420,8 @@ static std::string EscapeRaw(const std::string& rawReq)
 static void HttpLogAccess(const char* peer, const char* method, const char* path,
                           int status, const std::string* rawReq)
 {
-    if (!g_httpLogFile) return;
+    if (!g_httpLogEnabled) return;
+    if (!HttpLogEnsureOpen()) return;
     char ts[16];
     time_t now = time(nullptr);
     struct tm tmNow{};
@@ -796,9 +817,9 @@ bool StartHttpServer(const AppConfig& cfg)
     // Snapshot credentials before the thread starts: request handling then
     // never touches the caller's AppConfig object.
     RefreshAuthSnapshot(cfg);
-    // Open the access log on the caller thread (bind already succeeded);
-    // only the server thread writes it, so plain FILE* is enough.
-    HttpLogOpen(cfg);
+    // Record the access-log switch; the file itself is opened lazily on the
+    // first invalid request (append mode, never truncated on restart).
+    HttpLogInit(cfg);
     try
     {
         g_httpThread = std::thread([srv, cfg]
