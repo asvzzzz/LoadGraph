@@ -8,7 +8,7 @@ Real-time system resource monitor tailored for visual oversight of local LLM wor
 
 ## Download
 
-A pre-built 64-bit Windows binary is available at [andyk.ru/files/LoadGraph.zip](https://andyk.ru/files/LoadGraph.zip). Extract and run `LoadGraph.exe` (the build produces `build\bin\Release\LoadGraphGUI.exe`) — no installation required. The binary is self-contained: the C runtime is linked statically, so *no* "Visual C++ Redistributable" has to be installed and nothing is copied next to the executable. Place a WinRing0-compatible `.sys` file next to the executable for CPU temperature monitoring (see [Driver](#driver)).
+A pre-built 64-bit Windows binary is available at [andyk.ru/files/LoadGraph.zip](https://andyk.ru/files/LoadGraph.zip). Extract and run `LoadGraph.exe` (the build produces `build\bin\Release\LoadGraphGUI.exe`) — no installation required. The binary is self-contained: the C runtime is linked statically, so *no* "Visual C++ Redistributable" has to be installed and nothing is copied next to the executable. Place a WinRing0-compatible `.sys` file next to the executable for CPU temperature and fan RPM monitoring (see [Driver](#driver)).
 
 > **Windows 7 note:** the x64 build runs on Windows 7 SP1 and later. Windows 7 RTM (no service pack) is not supported, and the console version (`LoadGraphTTY`) relies on ANSI escape sequences that the Windows 7 console does not understand - use the GUI there.
 
@@ -104,8 +104,8 @@ Features:
 - wxWidgets 3.2 static build linked against the static CRT (`C:/wxWidgets`, built into `build_static_mt`, see [Building](#building)). Override with: `-DWX_WIN_BUILD_DIR=<lib dir>` and `-DWX_CONFIG_PATH=<root>`
 - NVIDIA driver (for NVIDIA GPU metrics; CPU/RAM work without a GPU)
 - AMD GPU metrics need the AMD display driver installed (Adrenalin or legacy Catalyst) — `atiadlxx.dll` / `atiadlxy.dll` is loaded dynamically, no extra setup. If ADL cannot enumerate the adapter, a DXGI fallback still reports the model name and VRAM (see [Known limitations](#known-limitations))
-- **CPU temperature** requires one of:
-  - A WinRing0-compatible kernel driver (`.sys`) placed next to the executable — see [Driver](#driver) below
+- **CPU temperature** (and the opt-in Super I/O fan probe) requires one of:
+  - A WinRing0-compatible kernel driver (`.sys`) placed next to the executable — not included, see [Driver](#driver) below
   - Or direct `rdmsr` access (works on some systems where HVCI / Memory Integrity is off and the CPU does not block user-mode MSR reads)
 
 ### Linux
@@ -118,11 +118,13 @@ Features:
 
 ## Driver
 
-CPU temperature on Windows is read from IA32_THERM_STATUS (MSR 0x19C). This requires a kernel-mode driver because user-mode `rdmsr` is blocked by default on modern Intel CPUs.
+CPU temperature on Windows is read from IA32_THERM_STATUS (MSR 0x19C), and the opt-in Super I/O fan tachometer is read through the same driver's port I/O. Both require a kernel-mode driver because user-mode `rdmsr` and direct port access are blocked by default on modern systems.
 
 ### Shipping the driver
 
-Place a WinRing0-compatible `.sys` file next to the executable before distribution. Supported names (checked in order):
+**The driver itself is intentionally not shipped with this project.** Drivers of the WinRing0 kind (`WinRing0x64.sys`, `inpoutx64.sys`, `hwinterfacex64.sys`) are flagged as malware / riskware ("vulnerable driver") by many antivirus products, so no `.sys` file is included in this repository or in the downloadable archive, and antivirus detections of these files are a known blanket reaction to that driver class rather than a sign of anything malicious in LoadGraph. A legitimate copy can be taken from RealTemp and similar hardware-monitoring utilities: RealTemp, HWiNFO, Open Hardware Monitor and LibreHardwareMonitor all ship a WinRing0-compatible driver. If one of them is already installed, LoadGraph reuses its running service and no file is needed at all.
+
+Otherwise place a WinRing0-compatible `.sys` file next to the executable before distribution. Supported names (checked in order):
 
 ```
 hwinterfacex64.sys
