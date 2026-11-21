@@ -321,7 +321,11 @@ void MainFrame::RealizeUI()
 
 void MainFrame::BuildCpuSection(wxBoxSizer* container, wxWindow* parent)
 {
-	// Row 1: CPU Load + RAM Usage side by side.
+	// The CPU rows mirror the GPU section row by row: Load + Temp first,
+	// then RAM + Fan (RAM takes the slot a GPU VRAM chart occupies), then
+	// Power across the full width, so both sections read the same way.
+
+	// Row 1: CPU Load + CPU Temp.
 	wxBoxSizer* row1 = new wxBoxSizer(wxHORIZONTAL);
 
 	m_cpuLoadGraph = new GraphPanel(parent, "Load", "%");
@@ -329,6 +333,33 @@ void MainFrame::BuildCpuSection(wxBoxSizer* container, wxWindow* parent)
 	m_cpuLoadGraph->SetYMode(GraphYMode::Percent);
 	m_cpuLoadGraph->SetColor(HexColor(m_cfg.cpu_load_color));
 	m_cpuLoadGraph->SetBgColor(HexColor(m_cfg.chart_bg_color));
+	row1->Add(m_cpuLoadGraph, 1, wxEXPAND | wxLEFT | wxRIGHT, 5);
+	m_viewToggles["cpu_load"] = m_cpuLoadGraph;
+
+	CpuData cpuInit{};
+	MetricsGetCpu(cpuInit);
+
+	if (cpuInit.temperature >= 0.0)
+	{
+		m_cpuTempGraph = new GraphPanel(parent, "Temp", "C");
+		m_cpuTempGraph->SetYRange(0.0, 100.0);
+		m_cpuTempGraph->SetYMode(GraphYMode::Celsius);
+		m_cpuTempGraph->SetAlarmThreshold(kAlarmTempC);
+		m_cpuTempGraph->SetColor(HexColor(m_cfg.cpu_temp_color));
+		m_cpuTempGraph->SetBgColor(HexColor(m_cfg.chart_bg_color));
+		row1->Add(m_cpuTempGraph, 1, wxEXPAND | wxLEFT | wxRIGHT, 5);
+		m_viewToggles["cpu_temp"] = m_cpuTempGraph;
+	}
+
+	// No vertical padding: rows share vertical space proportionally so all
+	// graphs scale together when the window is resized.
+	container->Add(row1, 1, wxEXPAND);
+	container->AddSpacer(5);
+
+	// Row 2: RAM Usage (+ CPU Fan when a fan sensor exists).
+	wxBoxSizer* row2 = new wxBoxSizer(wxHORIZONTAL);
+	// Remembered so EnsureCpuFanPanel() can extend this row later.
+	m_cpuFanRow = row2;
 
 	m_ramUsageGraph = new GraphPanel(parent, "RAM", "GB");
 	m_ramUsageGraph->SetYMode(GraphYMode::Gigabytes);
@@ -339,56 +370,24 @@ void MainFrame::BuildCpuSection(wxBoxSizer* container, wxWindow* parent)
 	MetricsGetRam(ramInit);
 	if (ramInit.totalBytes > 0)
 		m_ramUsageGraph->SetYRange(0.0, std::ceil(BytesToGbs(ramInit.totalBytes)));
+	row2->Add(m_ramUsageGraph, (cpuInit.fanRpm > 0) ? 1 : 2,
+	          wxEXPAND | wxLEFT | wxRIGHT, 5);
+	m_viewToggles["ram"] = m_ramUsageGraph;
 
-	// No vertical padding: rows share vertical space proportionally so all
-	// graphs scale together when the window is resized.
-	row1->Add(m_cpuLoadGraph,  1, wxEXPAND | wxLEFT | wxRIGHT, 5);
-	row1->Add(m_ramUsageGraph, 1, wxEXPAND | wxLEFT | wxRIGHT, 5);
-	container->Add(row1, 1, wxEXPAND);
-	container->AddSpacer(5);
-
-	m_viewToggles["cpu_load"]  = m_cpuLoadGraph;
-	m_viewToggles["ram"]       = m_ramUsageGraph;
-
-	CpuData cpuInit{};
-	MetricsGetCpu(cpuInit);
-
-	// Row 2: CPU Temp (+ CPU Fan when a fan sensor exists).
-	if (cpuInit.temperature >= 0.0 || cpuInit.fanRpm > 0)
+	if (cpuInit.fanRpm > 0)
 	{
-		wxBoxSizer* row2 = new wxBoxSizer(wxHORIZONTAL);
-		// Remembered so EnsureCpuFanPanel() can extend this row later.
-		m_cpuTempRow = row2;
-
-		m_cpuTempGraph = new GraphPanel(parent, "Temp", "C");
-		m_cpuTempGraph->SetYRange(0.0, 100.0);
-		m_cpuTempGraph->SetYMode(GraphYMode::Celsius);
-		m_cpuTempGraph->SetAlarmThreshold(kAlarmTempC);
-		m_cpuTempGraph->SetColor(HexColor(m_cfg.cpu_temp_color));
-		m_cpuTempGraph->SetBgColor(HexColor(m_cfg.chart_bg_color));
-		row2->Add(m_cpuTempGraph, (cpuInit.fanRpm > 0) ? 1 : 2,
-		          wxEXPAND | wxLEFT | wxRIGHT, 5);
-
-		if (cpuInit.fanRpm > 0)
-		{
-			m_cpuFanGraph = new GraphPanel(parent, "Fan", "RPM");
-			// Same scale and colour as a GPU fan chart in RPM mode, and the
-			// web dashboard uses the configured fan colour for this chart too.
-			m_cpuFanGraph->SetYRange(0.0, 3000.0);
-			m_cpuFanGraph->SetColor(HexColor(m_cfg.gpu_fan_color));
-			m_cpuFanGraph->SetBgColor(HexColor(m_cfg.chart_bg_color));
-			row2->Add(m_cpuFanGraph, 1, wxEXPAND | wxLEFT | wxRIGHT, 5);
-		}
-
-		container->Add(row2, 1, wxEXPAND);
-
-		m_viewToggles["cpu_temp"] = m_cpuTempGraph;
-
-		if (m_cpuFanGraph)
-		{
-			m_viewToggles["fan"] = m_cpuFanGraph;
-		}
+		m_cpuFanGraph = new GraphPanel(parent, "Fan", "RPM");
+		// Same scale and colour as a GPU fan chart in RPM mode, and the
+		// web dashboard uses the configured fan colour for this chart too.
+		m_cpuFanGraph->SetYRange(0.0, 3000.0);
+		m_cpuFanGraph->SetColor(HexColor(m_cfg.gpu_fan_color));
+		m_cpuFanGraph->SetBgColor(HexColor(m_cfg.chart_bg_color));
+		row2->Add(m_cpuFanGraph, 1, wxEXPAND | wxLEFT | wxRIGHT, 5);
+		m_viewToggles["fan"] = m_cpuFanGraph;
 	}
+
+	container->Add(row2, 1, wxEXPAND);
+	container->AddSpacer(5);
 
 	// Row 3: CPU Power (only when a TDP or a real power sensor is known).
 	if (cpuInit.tdpWatts > 0.0)
@@ -765,7 +764,7 @@ void MainFrame::ApplyHeightAdjustment(const std::string& key, bool showingItem)
 void MainFrame::EnsureCpuFanPanel(int fanRpm)
 {
 	if (m_cpuFanGraph || fanRpm <= 0) return;
-	if (!m_cpuTempRow || !m_cpuTempGraph || !m_content) return;
+	if (!m_cpuFanRow || !m_ramUsageGraph || !m_content) return;
 
 	m_cpuFanGraph = new GraphPanel(m_content, "Fan", "RPM");
 	// Same scale and colour the build path gives a fan chart, so a panel that
@@ -777,11 +776,11 @@ void MainFrame::EnsureCpuFanPanel(int fanRpm)
 	// is not an empty panel.
 	m_cpuFanGraph->AddPoint(static_cast<double>(fanRpm));
 
-	// The Temp panel was given proportion 2 while it was alone in the row;
+	// The RAM panel was given proportion 2 while it was alone in the row;
 	// both panels share the row now.
-	wxSizerItem* tempItem = m_cpuTempRow->GetItem(m_cpuTempGraph);
-	if (tempItem) tempItem->SetProportion(1);
-	m_cpuTempRow->Add(m_cpuFanGraph, 1, wxEXPAND | wxLEFT | wxRIGHT, 5);
+	wxSizerItem* ramItem = m_cpuFanRow->GetItem(m_ramUsageGraph);
+	if (ramItem) ramItem->SetProportion(1);
+	m_cpuFanRow->Add(m_cpuFanGraph, 1, wxEXPAND | wxLEFT | wxRIGHT, 5);
 	m_viewToggles["fan"] = m_cpuFanGraph;
 
 	// Honour the saved View menu choice; no entry means the row is visible.

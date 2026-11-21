@@ -84,15 +84,16 @@ private:
     GraphPanel* m_cpuLoadGraph  = nullptr;
     GraphPanel* m_ramUsageGraph = nullptr;
 
-    // ---- CPU sensor row (created only when sensors exist) ----
+    // ---- CPU sensor panels ----
     GraphPanel* m_cpuTempGraph  = nullptr;
     GraphPanel* m_cpuFanGraph   = nullptr;
 
-    // Sizer of the CPU Temp row. Kept because the fan chart can appear later:
-    // a sensor may start reporting only after the UI was built (Super I/O
-    // probe, LibreHardwareMonitor started afterwards), and the row is then
-    // extended in place, like the web dashboard shows its Fan cell.
-    wxBoxSizer* m_cpuTempRow = nullptr;
+    // Sizer of the CPU RAM row (the slot a GPU VRAM chart occupies). Kept
+    // because the fan chart can appear later: a sensor may start reporting
+    // only after the UI was built (Super I/O probe, LibreHardwareMonitor
+    // started afterwards), and the row is then extended in place, like the
+    // web dashboard shows its Fan cell.
+    wxBoxSizer* m_cpuFanRow = nullptr;
 
     // ---- CPU power row (watts) ----
     GraphPanel* m_cpuPowerGraph = nullptr;

@@ -71,24 +71,24 @@ static const char* kHtmlPageBody1 = R"(<body>
 <div id="connWarn">Warning -- retrying...</div>
 <div class="content">
 
-<!-- CPU section - rows mirror GUI layout -->
+<!-- CPU section - rows mirror GUI layout and the GPU section row by row -->
 <div class="section" id="cpuSection">
-  <!-- Row 1: Load | RAM -->
+  <!-- Row 1: Load | Temp (same slots as a GPU Load | Temp row) -->
   <div class="chart-row">
     <div class="chart-cell">
       <div class="val-row">Load <span class="val-val" id="cpuLoadVal">--%</span></div>
       <canvas id="cpuChart" class="chart"></canvas>
     </div>
     <div class="chart-cell">
-      <div class="val-row">RAM <span class="val-val" id="ramUsedVal">-- GB</span></div>
-      <canvas id="ramChart" class="chart"></canvas>
-    </div>
-  </div>
-  <!-- Row 2: Temp | Fan -->
-  <div class="chart-row">
-    <div class="chart-cell">
       <div class="val-row">Temp <span class="val-val" id="cpuTempVal">N/A</span></div>
       <canvas id="tempChart" class="chart"></canvas>
+    </div>
+  </div>
+  <!-- Row 2: RAM | Fan (RAM takes the slot a GPU VRAM cell occupies) -->
+  <div class="chart-row">
+    <div class="chart-cell">
+      <div class="val-row">RAM <span class="val-val" id="ramUsedVal">-- GB</span></div>
+      <canvas id="ramChart" class="chart"></canvas>
     </div>
     <div class="chart-cell" id="fanCell" style="display:none">
       <div class="val-row">Fan <span class="val-val" id="fanVal">N/A</span></div>
