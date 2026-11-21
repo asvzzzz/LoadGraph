@@ -321,6 +321,34 @@ AppConfig LoadAppConfig()
             if (ReadJsonString(p, v) && v.size() <= 128)
                 cfg.http_pass = v;
         }
+        else if (key == "http_auth")
+        {
+            bool v = false;
+            SkipSpaces(p);
+            if (strncmp(p, "true", 4) == 0)       { p += 4;  v = true;  }
+            else if (strncmp(p, "false", 5) == 0) { p += 5;  v = false; }
+            else if (*p == '"')
+            {
+                std::string sv;
+                if (ReadJsonString(p, sv))
+                    v = (sv == "true");
+            }
+            cfg.http_auth = v;
+        }
+        else if (key == "http_log")
+        {
+            bool v = false;
+            SkipSpaces(p);
+            if (strncmp(p, "true", 4) == 0)       { p += 4;  v = true;  }
+            else if (strncmp(p, "false", 5) == 0) { p += 5;  v = false; }
+            else if (*p == '"')
+            {
+                std::string sv;
+                if (ReadJsonString(p, sv))
+                    v = (sv == "true");
+            }
+            cfg.http_log = v;
+        }
         else if (key == "window_x")
         {
             double v = 0.0;
@@ -523,6 +551,8 @@ void SaveAppConfig(const AppConfig& cfg)
     out += "  \"http_enabled\": " + std::string(cfg.http_enabled ? "true" : "false") + ",\n";
     out += "  \"http_user\": "   + EmitJsonString(cfg.http_user)   + ",\n";
     out += "  \"http_pass\": "   + EmitJsonString(cfg.http_pass)   + ",\n";
+    out += "  \"http_auth\": "   + std::string(cfg.http_auth ? "true" : "false") + ",\n";
+    out += "  \"http_log\": "    + std::string(cfg.http_log  ? "true" : "false") + ",\n";
     out += "  \"log_file\": "    + std::string(cfg.log_file     ? "true"  : "false") + ",\n";
     out += "  \"superio_fan\": "  + std::string(cfg.superio_fan  ? "true"  : "false") + ",\n";
     out += "  \"window_x\": "    + EmitJsonNumber((double)cfg.window_x)     + ",\n";

@@ -59,7 +59,9 @@ Enable with `"http_enabled": true` in `loadgraph.cfg` or toggle at runtime via *
 - **`GET /api/metrics`** — JSON endpoint exposing all current metrics (CPU load/temp/power, RAM, per-GPU stats, storage).
 - **`GET /favicon.ico`** — embedded favicon.
 
-All endpoints are protected with **HTTP Basic auth**. Login and password live in `loadgraph.cfg` as `"http_user": "load"` and `"http_pass": "graph"` (defaults `load` / `graph`). The browser prompts for credentials on the first visit; set `"http_user": ""` to disable auth. Credentials are captured when the server starts, so after editing them restart the server (`Ctrl+H` toggle or app restart). The password is stored in plaintext in the config file - protect it with user/profile permissions.
+All endpoints are protected with **HTTP Basic auth**. Login and password live in `loadgraph.cfg` as `"http_user": "load"` and `"http_pass": "graph"` (defaults `load` / `graph`). The browser prompts for credentials on the first visit; set `"http_auth": false` (or `"http_user": ""`) to serve the dashboard without a login. Credentials are captured when the server starts, so after editing them restart the server (`Ctrl+H` toggle or app restart). The password is stored in plaintext in the config file - protect it with user/profile permissions.
+
+Every handled connection is recorded in a **separate access log** `loadgraph_http.log` (same per-user directory, rewritten on each start): client `IP:port`, method, path and status code. Invalid requests - connections that sent no request bytes (port scanners), `401` auth failures and `404` unknown paths - additionally log the raw request text on a single line (control bytes escaped, length-capped, the `Authorization` header masked as `***`). Disable it with `"http_log": false`.
 
 Works on both Windows and Linux. The dashboard auto-refreshes every second via polling.
 
@@ -217,7 +219,7 @@ All settings are stored in a single `loadgraph.cfg` JSON file, in the same per-u
 - **Windows**: `%USERPROFILE%\.config\loadgraph\loadgraph.cfg`
 - **Linux**: `$XDG_CONFIG_HOME/loadgraph/loadgraph.cfg` (defaults to `~/.config/loadgraph/loadgraph.cfg`)
 
-`loadgraph.log` (GUI) and `loadgraph.jsonl` (console) are written to that same directory — nothing is placed next to the executable. Both are recreated on every start: the previous run's contents are discarded.
+`loadgraph.log` (GUI) and `loadgraph.jsonl` (console) are written to that same directory — nothing is placed next to the executable. Both are recreated on every start: the previous run's contents are discarded. When the HTTP server runs with `"http_log": true`, `loadgraph_http.log` (access log: client IPs, invalid request texts) is written there too.
 
 ```jsonc
 {
@@ -225,6 +227,8 @@ All settings are stored in a single `loadgraph.cfg` JSON file, in the same per-u
   "http_enabled": false,
   "http_user": "load",
   "http_pass": "graph",
+  "http_auth": true,
+  "http_log": true,
   "log_file": false,
   // Window position and size — (0,0,0,0 = let OS decide)
   "window_x": 100,

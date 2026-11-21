@@ -38,6 +38,13 @@ struct AppConfig
     // Empty http_user disables auth entirely.
     std::string http_user  = "load";
     std::string http_pass  = "graph";
+
+    // Auth on/off switch: false serves the dashboard with no login prompt.
+    bool    http_auth      = true;
+    // Separate HTTP access log (loadgraph_http.log in the config dir):
+    // one line per connection with the client IP:port; invalid requests
+    // (401/404/no request) also log the raw request text.
+    bool    http_log       = true;
     bool    log_file       = false; // console (TTY): write loadgraph.jsonl snapshots when true
     bool    superio_fan    = false; // enable Super I/O fan probe via WinRing0
     // Window position and size saved between sessions.

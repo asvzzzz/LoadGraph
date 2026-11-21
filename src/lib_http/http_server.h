@@ -12,8 +12,11 @@
 
 // Starts the HTTP web dashboard server on cfg.http_port.
 // All endpoints are protected with HTTP Basic auth using cfg.http_user /
-// cfg.http_pass captured at this moment (empty user = auth disabled);
-// edits to the credentials in loadgraph.cfg apply after the next start.
+// cfg.http_pass captured at this moment (cfg.http_auth = false or empty
+// user = auth disabled); edits to the credentials in loadgraph.cfg apply
+// after the next start. When cfg.http_log is set, opens the separate
+// access log loadgraph_http.log (client IP:port per request, raw text for
+// invalid requests).
 // Returns true if the socket was bound and the accept thread is running;
 // false on bind/listen failure or invalid port. Idempotent: if the server is
 // already running, returns true without restarting it.

@@ -19,7 +19,9 @@
 #endif
 
 #include <atomic>
+#include <cstdio>    // fopen, fprintf, fflush for the access log
 #include <cstring>   // strlen, strcmp for auth header parsing
+#include <ctime>     // time, strftime, localtime_s/_r for log timestamps
 #include <mutex>
 #include <string>
 #include <system_error>
@@ -171,7 +173,8 @@ static std::mutex  g_httpMtx;
 // ============================================================================
 // HTTP Basic auth (RFC 7617). Credentials come from loadgraph.cfg
 // (http_user / http_pass) and are captured once in StartHttpServer();
-// edits to the file apply after the next start. Empty http_user = no auth.
+// edits to the file apply after the next start. Auth is skipped when
+// http_auth = false or http_user is empty.
 // ============================================================================
 
 // Immutable copy of the configured credentials. Written in StartHttpServer()
@@ -179,6 +182,7 @@ static std::mutex  g_httpMtx;
 // the mutex makes that hand-off explicit and race-free.
 struct AuthSnapshot
 {
+    bool        enabled = true;  // http_auth config switch
     std::string user;
     std::string pass;
 };
@@ -189,8 +193,9 @@ static AuthSnapshot g_auth;
 static void RefreshAuthSnapshot(const AppConfig& cfg)
 {
     std::lock_guard<std::mutex> lk(g_authMutex);
-    g_auth.user = cfg.http_user;
-    g_auth.pass = cfg.http_pass;
+    g_auth.enabled = cfg.http_auth;
+    g_auth.user    = cfg.http_user;
+    g_auth.pass    = cfg.http_pass;
 }
 
 // Base64 decoder; padding is optional. Returns false on any character
@@ -289,7 +294,7 @@ static bool AuthorizeRequest(const std::string& req, const char* path)
         std::lock_guard<std::mutex> lk(g_authMutex);
         auth = g_auth;
     }
-    if (auth.user.empty())
+    if (!auth.enabled || auth.user.empty())
         return true;
 
     std::string hdrval, userpass;
@@ -304,6 +309,123 @@ static bool AuthorizeRequest(const std::string& req, const char* path)
 
     fprintf(stderr, "HTTP: auth denied for %s\n", path);
     return false;
+}
+
+// ============================================================================
+// HTTP access log (loadgraph_http.log, kept separate from loadgraph.log).
+// Opened in StartHttpServer() with mode "w" (previous run's contents are
+// discarded, same rule as the other per-user files) and written ONLY from
+// the server thread, so no locking is needed. Every connection produces
+// one line with the client IP:port; invalid requests (no request bytes,
+// 401, 404) additionally log the raw request text.
+// ============================================================================
+
+static FILE* g_httpLogFile = nullptr;
+
+static void HttpLogOpen(const AppConfig& cfg)
+{
+    if (!cfg.http_log) return;
+    const std::string dir = GetAppConfigDir();
+    const std::string path = dir.empty() ? std::string("./loadgraph_http.log")
+                                         : dir + "/loadgraph_http.log";
+    g_httpLogFile = fopen(path.c_str(), "w");
+    if (!g_httpLogFile)
+        fprintf(stderr, "HTTP: cannot open %s for logging\n", path.c_str());
+}
+
+static void HttpLogClose()
+{
+    if (!g_httpLogFile) return;
+    fflush(g_httpLogFile);
+    fclose(g_httpLogFile);
+    g_httpLogFile = nullptr;
+}
+
+// Replace the Authorization header value with *** before logging, so a
+// failed-login trace never stores real credentials (base64 is trivially
+// decodable). Header name matched exactly, case-insensitive - same rule
+// as FindAuthHeader.
+static std::string MaskAuthorization(const std::string& req)
+{
+    std::string out;
+    out.reserve(req.size());
+    size_t lineStart = 0;
+    while (lineStart < req.size())
+    {
+        size_t lineEnd = req.find('\n', lineStart);
+        if (lineEnd == std::string::npos) lineEnd = req.size();
+        std::string line = req.substr(lineStart, lineEnd - lineStart);
+        const size_t colon = line.find(':');
+        if (colon != std::string::npos)
+        {
+            std::string name = line.substr(0, colon);
+            for (char& c : name)
+                if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
+            if (name == "authorization") line = "Authorization: ***";
+        }
+        out += line;
+        if (lineEnd < req.size()) out += '\n';
+        lineStart = lineEnd + 1;
+    }
+    return out;
+}
+
+// Collapse a raw request into one printable ASCII log line: CR/LF/TAB are
+// escaped, other control and non-ASCII bytes become \xNN, and the result is
+// capped so request floods cannot grow the log without bound.
+static std::string EscapeRaw(const std::string& rawReq)
+{
+    static const size_t kMaxLen = 1024;
+    const std::string masked = MaskAuthorization(rawReq);
+    std::string r;
+    r.reserve(256);
+    for (unsigned char c : masked)
+    {
+        if (r.size() >= kMaxLen) { r += "...[cut]"; break; }
+        if      (c == '\r') r += "\\r";
+        else if (c == '\n') r += "\\n";
+        else if (c == '\t') r += "\\t";
+        else if (c < 0x20 || c >= 0x7F)
+        { char hex[8]; snprintf(hex, sizeof(hex), "\\x%02x", c); r += hex; }
+        else r += (char)c;
+    }
+    return r;
+}
+
+// One line per connection: "HH:MM:SS ip:port METHOD PATH -> CODE".
+// rawReq != nullptr appends the sanitized request text (invalid requests).
+static void HttpLogAccess(const char* peer, const char* method, const char* path,
+                          int status, const std::string* rawReq)
+{
+    if (!g_httpLogFile) return;
+    char ts[16];
+    time_t now = time(nullptr);
+    struct tm tmNow{};
+#ifdef PLATFORM_WINDOWS
+    localtime_s(&tmNow, &now);
+#else
+    localtime_r(&now, &tmNow);
+#endif
+    if (strftime(ts, sizeof(ts), "%H:%M:%S", &tmNow) == 0) ts[0] = '\0';
+    if (rawReq)
+        fprintf(g_httpLogFile, "%s %s %s %s -> %d raw: %s\n",
+                ts, peer, method, path, status, EscapeRaw(*rawReq).c_str());
+    else
+        fprintf(g_httpLogFile, "%s %s %s %s -> %d\n",
+                ts, peer, method, path, status);
+    fflush(g_httpLogFile);
+}
+
+// Format the accepted peer as "a.b.c.d:port" (IPv4-only listener).
+static void PeerText(const sockaddr_in& peer, char* out, size_t outSz)
+{
+    char ip[INET_ADDRSTRLEN] = {};
+#ifdef PLATFORM_WINDOWS
+    InetNtopA(AF_INET, &peer.sin_addr, ip, (DWORD)sizeof(ip));
+#else
+    inet_ntop(AF_INET, &peer.sin_addr, ip, (socklen_t)sizeof(ip));
+#endif
+    snprintf(out, outSz, "%s:%u", ip[0] ? ip : "?", (unsigned)ntohs(peer.sin_port));
 }
 
 #ifdef PLATFORM_WINDOWS
@@ -370,26 +492,41 @@ static void HttpServeLoop(SOCKET srv, int port, const AppConfig& cfg)
         timeval tv{}; tv.tv_sec = 1; tv.tv_usec = 0;
         if (select(0, &rf, nullptr, nullptr, &tv) <= 0 || !FD_ISSET(srv, &rf)) continue;
 
-        SOCKET client = accept(srv, nullptr, nullptr);
+        // Capture the peer address: every connection is logged in the
+        // access log, so client IPs stay visible even for failed requests.
+        sockaddr_in peer{};
+        int peerLen = sizeof(peer);
+        SOCKET client = accept(srv, (sockaddr*)&peer, &peerLen);
         if (client == INVALID_SOCKET) continue;
+        char peerTxt[40];
+        PeerText(peer, peerTxt, sizeof(peerTxt));
 
         setsockopt(client, SOL_SOCKET, SO_RCVTIMEO, (const char*)&rcvTimeout, sizeof(rcvTimeout));
         setsockopt(client, SOL_SOCKET, SO_SNDTIMEO, (const char*)&sndTimeout, sizeof(sndTimeout));
 
         char req[4096] = {};
         int n = recv(client, req, sizeof(req) - 1, 0);
-        if (n <= 0) { closesocket(client); continue; }
+        if (n <= 0)
+        {
+            // Connection with no request bytes (port scan, aborted client):
+            // record the IP anyway.
+            HttpLogAccess(peerTxt, "-", "-", 0, nullptr);
+            closesocket(client);
+            continue;
+        }
         req[n] = '\0';
 
         char method[8] = {}, path[512] = {};
         sscanf(req, "%7s %511s", method, path);
+        const std::string reqStr(req);  // full text, logged for invalid requests
         bool isMetrics   = (strcmp(method, "GET") == 0 && strcmp(path, "/api/metrics") == 0);
         bool isIndex     = (strcmp(method, "GET") == 0 && strcmp(path, "/") == 0);
         bool isFavicon   = (strcmp(method, "GET") == 0 && strcmp(path, "/favicon.ico") == 0);
 
         // Basic auth gate for all endpoints (metrics JSON included).
-        if (!AuthorizeRequest(std::string(req), path))
+        if (!AuthorizeRequest(reqStr, path))
         {
+            HttpLogAccess(peerTxt, method, path, 401, &reqStr);
             SendUnauthorized(client);
             closesocket(client);
             continue;
@@ -400,6 +537,7 @@ static void HttpServeLoop(SOCKET srv, int port, const AppConfig& cfg)
         else if (isIndex)    body = RenderDashboard(port, cfg);
         else if (isFavicon)
         {
+            HttpLogAccess(peerTxt, method, path, 200, nullptr);
             // Build the full header in one string to avoid partial-send over-read.
             char hdr[128];
             int hlen = snprintf(hdr, sizeof(hdr),
@@ -428,6 +566,8 @@ static void HttpServeLoop(SOCKET srv, int port, const AppConfig& cfg)
         }
         else
         {
+            // Unknown path or method: invalid request, log the raw text.
+            HttpLogAccess(peerTxt, method, path, 404, &reqStr);
             const char* notFound = "HTTP/1.1 404 Not Found\r\n"
                                    "Content-Type: text/plain\r\n"
                                    "Connection: close\r\n\r\nNot Found";
@@ -437,6 +577,9 @@ static void HttpServeLoop(SOCKET srv, int port, const AppConfig& cfg)
             closesocket(client);
             continue;
         }
+
+        // Remaining route: metrics/index answered with 200 below.
+        HttpLogAccess(peerTxt, method, path, 200, nullptr);
 
         char hdr[512] = {};
         int hlen = snprintf(hdr, sizeof(hdr),
@@ -517,23 +660,38 @@ static void HttpServeLoop(int srv, int port, const AppConfig& cfg)
         timeval tv{}; tv.tv_sec = 1; tv.tv_usec = 0;
         if (select(srv + 1, &rf, nullptr, nullptr, &tv) <= 0 || !FD_ISSET(srv, &rf)) continue;
 
-        int client = accept(srv, nullptr, nullptr);
+        // Capture the peer address: every connection is logged in the
+        // access log, so client IPs stay visible even for failed requests.
+        sockaddr_in peer{};
+        socklen_t peerLen = sizeof(peer);
+        int client = accept(srv, (sockaddr*)&peer, &peerLen);
         if (client < 0) continue;
+        char peerTxt[40];
+        PeerText(peer, peerTxt, sizeof(peerTxt));
 
         char req[4096] = {};
         int n = recv(client, req, sizeof(req) - 1, 0);
-        if (n <= 0) { close(client); continue; }
+        if (n <= 0)
+        {
+            // Connection with no request bytes (port scan, aborted client):
+            // record the IP anyway.
+            HttpLogAccess(peerTxt, "-", "-", 0, nullptr);
+            close(client);
+            continue;
+        }
         req[n] = '\0';
 
         char method[8] = {}, path[512] = {};
         sscanf(req, "%7s %511s", method, path);
+        const std::string reqStr(req);  // full text, logged for invalid requests
         bool isMetrics   = (strcmp(method, "GET") == 0 && strcmp(path, "/api/metrics") == 0);
         bool isIndex     = (strcmp(method, "GET") == 0 && strcmp(path, "/") == 0);
         bool isFavicon   = (strcmp(method, "GET") == 0 && strcmp(path, "/favicon.ico") == 0);
 
         // Basic auth gate for all endpoints (metrics JSON included).
-        if (!AuthorizeRequest(std::string(req), path))
+        if (!AuthorizeRequest(reqStr, path))
         {
+            HttpLogAccess(peerTxt, method, path, 401, &reqStr);
             SendUnauthorized(client);
             close(client);
             continue;
@@ -544,6 +702,7 @@ static void HttpServeLoop(int srv, int port, const AppConfig& cfg)
         else if (isIndex)    body = RenderDashboard(port, cfg);
         else if (isFavicon)
         {
+            HttpLogAccess(peerTxt, method, path, 200, nullptr);
             char hdr[128];
             int hlen = snprintf(hdr, sizeof(hdr),
                 "HTTP/1.1 200 OK\r\n"
@@ -569,6 +728,8 @@ static void HttpServeLoop(int srv, int port, const AppConfig& cfg)
         }
         else
         {
+            // Unknown path or method: invalid request, log the raw text.
+            HttpLogAccess(peerTxt, method, path, 404, &reqStr);
             const char* notFound = "HTTP/1.1 404 Not Found\r\n"
                                    "Content-Type: text/plain\r\n"
                                    "Connection: close\r\n\r\nNot Found";
@@ -578,6 +739,9 @@ static void HttpServeLoop(int srv, int port, const AppConfig& cfg)
             close(client);
             continue;
         }
+
+        // Remaining route: metrics/index answered with 200 below.
+        HttpLogAccess(peerTxt, method, path, 200, nullptr);
 
         char hdr[512] = {};
         int hlen = snprintf(hdr, sizeof(hdr),
@@ -637,18 +801,23 @@ bool StartHttpServer(const AppConfig& cfg)
     // Snapshot credentials before the thread starts: request handling then
     // never touches the caller's AppConfig object.
     RefreshAuthSnapshot(cfg);
+    // Open the access log on the caller thread (bind already succeeded);
+    // only the server thread writes it, so plain FILE* is enough.
+    HttpLogOpen(cfg);
     try
     {
         g_httpThread = std::thread([srv, cfg]
         {
             HttpServeLoop(srv, cfg.http_port, cfg);
             HttpClose(srv);
+            HttpLogClose();
         });
     }
     catch (const std::system_error& e)
     {
         fprintf(stderr, "HTTP: cannot create server thread: %s\n", e.what());
         HttpClose(srv);
+        HttpLogClose();
         return false;
     }
     return true;
