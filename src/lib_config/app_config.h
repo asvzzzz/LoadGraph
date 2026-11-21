@@ -33,6 +33,11 @@ struct AppConfig
     int     http_port      = 9115;
     bool    http_enabled   = false;
 
+    // Interface the dashboard listens on: "all" (default, INADDR_ANY - the
+    // dashboard is reachable from the whole network), "localhost" / "loopback"
+    // (127.0.0.1 only) or a concrete dotted IPv4 address.
+    std::string http_bind   = "all";
+
     // HTTP Basic auth for the web dashboard (RFC 7617). Stored in plaintext
     // in loadgraph.cfg: protect the file via user/profile permissions.
     // Empty http_user disables auth entirely.

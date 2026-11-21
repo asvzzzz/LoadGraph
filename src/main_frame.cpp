@@ -974,8 +974,9 @@ void MainFrame::OnExitMenu(wxCommandEvent&)
 
 void MainFrame::OnHttpToggle(wxCommandEvent&)
 {
-	// StopHttpServer() may block up to ~1 s (accept loop select timeout)
-	// plus finishing one in-flight response - acceptable for a menu click.
+	// StopHttpServer() may block up to ~1 s (accept loop select timeout), plus
+	// up to the 5 s socket I/O timeout if a client stalls mid-request -
+	// acceptable for a menu click.
 	if (IsHttpServerRunning())
 	{
 		StopHttpServer();

@@ -61,7 +61,11 @@ Enable with `"http_enabled": true` in `loadgraph.cfg` or toggle at runtime via *
 
 All endpoints are protected with **HTTP Basic auth**. Login and password live in `loadgraph.cfg` as `"http_user": "load"` and `"http_pass": "graph"` (defaults `load` / `graph`). The browser prompts for credentials on the first visit; set `"http_auth": false` (or `"http_user": ""`) to serve the dashboard without a login. Credentials are captured when the server starts, so after editing them restart the server (`Ctrl+H` toggle or app restart). The password is stored in plaintext in the config file - protect it with user/profile permissions.
 
-**Invalid requests only** are recorded in a separate access log `loadgraph_http.log` (same per-user directory): connections that sent no request bytes (port scanners), `401` auth failures and `404` unknown paths. The file is created lazily on the first logged event and is never truncated - app restarts append to it. Each line carries the client `IP:port`, method, path, status code and the raw request text on one line (control bytes escaped, length-capped, the `Authorization` header masked as `***`). Valid responses - including the dashboard's per-second `/api/metrics` polls - are never logged, so in normal use the file is not even created. Disable it with `"http_log": false`.
+By default the server listens on **every interface** (`0.0.0.0`), so the dashboard is also reachable from other machines on the network, where the plain HTTP login can be probed. Narrow it with `"http_bind"`: `"localhost"` (or `"loopback"`) binds `127.0.0.1` on this machine only, `"all"` binds every interface (the default), a concrete address such as `"192.168.50.240"` binds one of them. The actual mode is printed at startup: `HTTP: dashboard on http://0.0.0.0:9115 (all interfaces)`.
+
+A request whose `Host` header names a DNS domain (dotted name) instead of an IP address or `localhost` is answered with `403`. That blocks DNS rebinding, where a remote page points its own domain at your `127.0.0.1` and reads `/api/metrics` as same origin. IP literals, `localhost` and single-label network names (`nas-box`) are allowed. Every response carries `X-Content-Type-Options: nosniff`, `Cache-Control: no-store`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer` and a `Content-Security-Policy` that lets the page run only its own inline scripts/styles and talk to its own origin.
+
+**Invalid requests only** are recorded in a separate access log `loadgraph_http.log` (same per-user directory): connections that sent no request bytes (port scanners), `401` auth failures and `404` unknown paths. The file is created lazily on the first logged event and is never truncated - app restarts append to it. Each line carries the client `IP:port`, method, path, status code and the raw request text on one line (control bytes escaped, length-capped, the `Authorization` header masked as `***`). Valid responses - including the dashboard's per-second `/api/metrics` polls - are never logged, so in normal use the file is not even created. The log is rate limited to 25 lines per second (skipped events are marked with `=== N more events suppressed in the previous second ===`) and capped at 1 MiB on disk - past that the file is restarted with the marker `=== log exceeded 1024 KiB: older entries discarded ===`, so flooding the port cannot fill the disk. Disable it with `"http_log": false`.
 
 Works on both Windows and Linux. The dashboard auto-refreshes every second via polling.
 
@@ -227,6 +231,7 @@ All settings are stored in a single `loadgraph.cfg` JSON file, in the same per-u
 {
   "http_port": 9115,
   "http_enabled": false,
+  "http_bind": "all",
   "http_user": "load",
   "http_pass": "graph",
   "http_auth": true,
@@ -252,6 +257,12 @@ All settings are stored in a single `loadgraph.cfg` JSON file, in the same per-u
   "view_menu": { "cpu_load": true, "ram": true, "gpu_temp": false, ... }
 }
 ```
+
+`http_bind` picks the interface the dashboard listens on: `"all"` (default) binds every
+interface, `"localhost"` / `"loopback"` binds `127.0.0.1` only, a concrete value such as
+`"192.168.50.240"` binds that address. It is read when the server starts, so change it with
+the **File -> HTTP server** toggle or an app restart; the effective address is printed on the
+console at startup.
 
 `superio_fan` (Windows only) turns on the direct Super I/O tachometer read described in
 the limitations section; the same switch is available at runtime under **View -> CPU Fan

@@ -56,6 +56,46 @@ static std::string JsonEscape(const char* s)
 
 static double SafeDouble(double v) { return std::isfinite(v) ? v : 0.0; }
 
+// Headers sent with EVERY response (200, 401, 403, 404):
+//   nosniff     - old browsers (IE on Windows 7 era) must not reinterpret the
+//                 JSON metrics as HTML: device names from the drivers reach
+//                 the response and would otherwise be a script vector.
+//   no-store    - hardware telemetry never lands in a browser or proxy cache.
+//   DENY        - the dashboard cannot be framed by another page (clickjacking).
+//   no-referrer - no URL/credential leak through the Referer header.
+//   CSP         - the page may only run its own inline scripts/styles and talk
+//                 to this origin, so injected markup cannot fetch out.
+static const char kSecurityHeaders[] =
+    "X-Content-Type-Options: nosniff\r\n"
+    "Cache-Control: no-store\r\n"
+    "X-Frame-Options: DENY\r\n"
+    "Referrer-Policy: no-referrer\r\n"
+    "Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'; "
+    "script-src 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; "
+    "frame-ancestors 'none'; base-uri 'none'\r\n";
+
+// Resolve the http_bind config value into the IPv4 address to listen on.
+// Accepted: "all" or empty (every interface - the default), "localhost" /
+// "loopback" (127.0.0.1) or a dotted IPv4 literal. Returns false when the
+// value cannot be parsed; the caller then falls back to every interface.
+static bool ResolveBindAddress(const std::string& text, in_addr& out)
+{
+    std::string v = text;
+    for (char& c : v)
+        if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
+
+    if (v.empty() || v == "all" || v == "any")
+    { out.s_addr = INADDR_ANY; return true; }
+    if (v == "localhost" || v == "loopback")
+    { out.s_addr = htonl(0x7F000001u); return true; }
+
+#ifdef PLATFORM_WINDOWS
+    return InetPtonA(AF_INET, v.c_str(), &out) == 1;
+#else
+    return inet_pton(AF_INET, v.c_str(), &out) == 1;
+#endif
+}
+
 #ifdef PLATFORM_WINDOWS
 // Convert a wchar_t string (UTF-16 on Windows) to UTF-8.
 static std::string WcharToUtf8(const std::wstring& w)
@@ -226,9 +266,9 @@ static bool Base64Decode(const std::string& in, std::string& out)
     return true;
 }
 
-// Value of the "Authorization" request header (exact name, case-insensitive;
-// headers merely containing the word are not matched).
-static bool FindAuthHeader(const std::string& req, std::string& value)
+// Value of the named request header (exact name, case-insensitive; headers
+// merely containing the word are not matched). Returns false when absent.
+static bool FindHeader(const std::string& req, const char* name, std::string& value)
 {
     size_t lineStart = 0;
     while (lineStart < req.size())
@@ -241,10 +281,10 @@ static bool FindAuthHeader(const std::string& req, std::string& value)
         const size_t colon = line.find(':');
         if (colon != std::string::npos)
         {
-            std::string name = line.substr(0, colon);
-            for (char& c : name)
+            std::string hname = line.substr(0, colon);
+            for (char& c : hname)
                 if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
-            if (name == "authorization")
+            if (hname == name)
             {
                 value = line.substr(colon + 1);
                 return true;
@@ -253,6 +293,58 @@ static bool FindAuthHeader(const std::string& req, std::string& value)
         lineStart = lineEnd + 1;
     }
     return false;
+}
+
+// Host header guard against DNS rebinding. The value is accepted when it is
+// an IP literal (the normal LAN case, http://192.168.x.x:9115), "localhost"
+// or a dot-free LAN name (NetBIOS/mDNS single label such as "nas-box"); a
+// dotted DNS name that is not an IP is rejected, because that is exactly how
+// a page on the internet points its own domain at this machine and then reads
+// /api/metrics as same origin. Requests without a Host header (HTTP/1.0) are
+// accepted - they cannot carry a hostile name.
+static bool HostAllowed(const std::string& req)
+{
+    std::string host;
+    if (!FindHeader(req, "host", host)) return true;
+
+    const size_t b = host.find_first_not_of(" \t");
+    if (b == std::string::npos) return true;
+    const size_t e = host.find_last_not_of(" \t");
+    host = host.substr(b, e - b + 1);
+
+    // Drop the ":port" suffix, keeping an IPv6 literal [::1]:9115 intact.
+    size_t cut = std::string::npos;
+    if (host[0] == '[')
+    {
+        const size_t rb = host.find(']');
+        if (rb != std::string::npos && rb + 1 < host.size() && host[rb + 1] == ':')
+            cut = rb + 1;
+    }
+    else
+    {
+        cut = host.find(':');
+    }
+    if (cut != std::string::npos) host.resize(cut);
+
+    // Unbracket the IPv6 literal before testing it.
+    if (host.size() >= 2 && host.front() == '[' && host.back() == ']')
+        host = host.substr(1, host.size() - 2);
+
+    if (host.empty()) return true;
+    for (char& c : host)
+        if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
+    if (host == "localhost") return true;
+
+    in_addr  a4;
+    in6_addr a6;
+#ifdef PLATFORM_WINDOWS
+    if (InetPtonA(AF_INET,  host.c_str(), &a4) == 1) return true;
+    if (InetPtonA(AF_INET6, host.c_str(), &a6) == 1) return true;
+#else
+    if (inet_pton(AF_INET,  host.c_str(), &a4) == 1) return true;
+    if (inet_pton(AF_INET6, host.c_str(), &a6) == 1) return true;
+#endif
+    return host.find('.') == std::string::npos;
 }
 
 // Parse "<scheme> <base64(user:pass)>" from an Authorization value.
@@ -298,7 +390,7 @@ static bool AuthorizeRequest(const std::string& req, const char* path)
         return true;
 
     std::string hdrval, userpass;
-    if (FindAuthHeader(req, hdrval) && ExtractBasicCreds(hdrval, userpass))
+    if (FindHeader(req, "authorization", hdrval) && ExtractBasicCreds(hdrval, userpass))
     {
         const size_t sep = userpass.find(':');
         const std::string user = userpass.substr(0, sep);
@@ -319,12 +411,24 @@ static bool AuthorizeRequest(const std::string& req, const char* path)
 // never logged, so the file stays quiet while the dashboard polls. The file
 // is created lazily on the first logged event and opened in append mode:
 // app restarts never truncate it. Written ONLY from the server thread, so
-// no locking is needed.
+// no locking is needed. The log is both rate limited and size capped (see
+// HttpLogAllowLine): a remote client that only opens connections or sends
+// garbage cannot grow the file without bound.
 // ============================================================================
 
 static FILE* g_httpLogFile    = nullptr;
 static bool  g_httpLogEnabled = false;  // cfg.http_log, set before the thread starts
 static bool  g_httpLogFailed  = false;  // open error: report once, do not spam
+static std::string g_httpLogPath;       // kept for the reopen on size overflow
+static long long   g_httpLogBytes = 0;  // bytes currently in the file
+static time_t      g_httpLogWin   = 0;  // start of the current 1 s window
+static int         g_httpLogCount = 0;  // lines written in that window
+static int         g_httpLogDrop  = 0;  // lines skipped in that window
+
+// Hard limits for the access log: at most 25 lines per second and 1 MiB on
+// disk. Over the size cap the file is restarted, keeping the newest entries.
+static const int       kHttpLogMaxPerSec = 25;
+static const long long kHttpLogMaxBytes  = 1024 * 1024;
 
 // Records the config switch on the caller thread before the server thread
 // starts (happens-before via std::thread construction), so the server
@@ -334,6 +438,11 @@ static void HttpLogInit(const AppConfig& cfg)
     g_httpLogEnabled = cfg.http_log;
     g_httpLogFile    = nullptr;
     g_httpLogFailed  = false;
+    g_httpLogPath.clear();
+    g_httpLogBytes = 0;
+    g_httpLogWin   = 0;
+    g_httpLogCount = 0;
+    g_httpLogDrop  = 0;
 }
 
 // Open the log on first use, in append mode: the file is not created until
@@ -343,15 +452,75 @@ static bool HttpLogEnsureOpen()
     if (g_httpLogFile) return true;
     if (g_httpLogFailed) return false;
     const std::string dir = GetAppConfigDir();
-    const std::string path = dir.empty() ? std::string("./loadgraph_http.log")
-                                         : dir + "/loadgraph_http.log";
-    g_httpLogFile = fopen(path.c_str(), "a");
+    g_httpLogPath = dir.empty() ? std::string("./loadgraph_http.log")
+                                : dir + "/loadgraph_http.log";
+    g_httpLogFile = fopen(g_httpLogPath.c_str(), "a");
     if (!g_httpLogFile)
     {
         g_httpLogFailed = true;
-        fprintf(stderr, "HTTP: cannot open %s for logging\n", path.c_str());
+        fprintf(stderr, "HTTP: cannot open %s for logging\n", g_httpLogPath.c_str());
+    }
+    else
+    {
+        // Length of the existing (appended) file, base for the size cap.
+        const long pos = ftell(g_httpLogFile);
+        g_httpLogBytes = (pos > 0) ? (long long)pos : 0;
     }
     return g_httpLogFile != nullptr;
+}
+
+// Size and rate guard for one log line. Returns false when the line must be
+// skipped because the per-second budget is used up (skips are counted and
+// reported by the next allowed line). When the file passes the size cap it is
+// restarted here, so an attacker flooding the port cannot fill the disk; the
+// newest entries are kept and the loss is marked in the log itself.
+// Called only from the server thread, after HttpLogEnsureOpen() succeeded.
+static bool HttpLogAllowLine()
+{
+    const time_t now = time(nullptr);
+    if (now != g_httpLogWin)
+    {
+        g_httpLogWin   = now;
+        g_httpLogCount = 0;
+        if (g_httpLogDrop > 0)
+        {
+            fprintf(g_httpLogFile, "=== %d more events suppressed in the previous second ===\n",
+                    g_httpLogDrop);
+            g_httpLogDrop = 0;
+        }
+    }
+    if (g_httpLogCount >= kHttpLogMaxPerSec)
+    {
+        ++g_httpLogDrop;
+        return false;
+    }
+    ++g_httpLogCount;
+
+    if (g_httpLogBytes > kHttpLogMaxBytes)
+    {
+        // Marker text is derived from the constant so it can never state a
+        // limit that differs from the one actually applied.
+        char mark[96];
+        int mlen = snprintf(mark, sizeof(mark),
+            "=== log exceeded %d KiB: older entries discarded ===\n",
+            (int)(kHttpLogMaxBytes / 1024));
+        if (mlen <= 0 || mlen >= (int)sizeof(mark))
+        {
+            mark[0] = '\0';
+            mlen = 0;
+        }
+        fclose(g_httpLogFile);
+        g_httpLogFile = fopen(g_httpLogPath.c_str(), "w");
+        if (!g_httpLogFile)
+        {
+            g_httpLogFailed = true;
+            fprintf(stderr, "HTTP: cannot reopen %s for logging\n", g_httpLogPath.c_str());
+            return false;
+        }
+        if (mlen > 0) fputs(mark, g_httpLogFile);
+        g_httpLogBytes = (long long)mlen;
+    }
+    return true;
 }
 
 // Flush and close the (possibly never opened) log file.
@@ -366,7 +535,7 @@ static void HttpLogClose()
 // Replace the Authorization header value with *** before logging, so a
 // failed-login trace never stores real credentials (base64 is trivially
 // decodable). Header name matched exactly, case-insensitive - same rule
-// as FindAuthHeader.
+// as FindHeader.
 static std::string MaskAuthorization(const std::string& req)
 {
     std::string out;
@@ -393,8 +562,8 @@ static std::string MaskAuthorization(const std::string& req)
 }
 
 // Collapse a raw request into one printable ASCII log line: CR/LF/TAB are
-// escaped, other control and non-ASCII bytes become \xNN, and the result is
-// capped so request floods cannot grow the log without bound.
+// escaped, other control and non-ASCII bytes become \xNN, and the line length
+// is bounded (the per-second and total size limits are in HttpLogAllowLine).
 static std::string EscapeRaw(const std::string& rawReq)
 {
     static const size_t kMaxLen = 1024;
@@ -415,13 +584,14 @@ static std::string EscapeRaw(const std::string& rawReq)
 }
 
 // One line per invalid event: "HH:MM:SS ip:port METHOD PATH -> CODE".
-// rawReq != nullptr appends the sanitized request text (401/404); the
+// rawReq != nullptr appends the sanitized request text (401/403/404); the
 // no-request case has no text to log. Never called for valid 200 responses.
 static void HttpLogAccess(const char* peer, const char* method, const char* path,
                           int status, const std::string* rawReq)
 {
     if (!g_httpLogEnabled) return;
     if (!HttpLogEnsureOpen()) return;
+    if (!HttpLogAllowLine()) return;
     char ts[16];
     time_t now = time(nullptr);
     struct tm tmNow{};
@@ -438,6 +608,9 @@ static void HttpLogAccess(const char* peer, const char* method, const char* path
         fprintf(g_httpLogFile, "%s %s %s %s -> %d\n",
                 ts, peer, method, path, status);
     fflush(g_httpLogFile);
+    // Track the real file length for the size cap.
+    const long pos = ftell(g_httpLogFile);
+    if (pos > 0) g_httpLogBytes = (long long)pos;
 }
 
 // Format the accepted peer as "a.b.c.d:port" (IPv4-only listener).
@@ -456,7 +629,7 @@ static void PeerText(const sockaddr_in& peer, char* out, size_t outSz)
 // Create + bind + listen the server socket on the CALLER thread so bind()
 // errors (port in use) are visible to the caller synchronously.
 // Returns INVALID_SOCKET on failure; WSACleanup() is done in HttpClose().
-static SOCKET HttpOpenListen(int port)
+static SOCKET HttpOpenListen(int port, in_addr bindAddr)
 {
     WSADATA wsa{};
     if (WSAStartup(MAKEWORD(2,2), &wsa) != 0)
@@ -472,7 +645,7 @@ static SOCKET HttpOpenListen(int port)
 
     sockaddr_in addr{};
     addr.sin_family      = AF_INET;
-    addr.sin_addr.s_addr = INADDR_ANY;
+    addr.sin_addr        = bindAddr;
     addr.sin_port        = htons(static_cast<unsigned short>(port));
 
     if (bind(srv, (sockaddr*)&addr, sizeof(addr)) == SOCKET_ERROR)
@@ -488,20 +661,63 @@ static SOCKET HttpOpenListen(int port)
     return srv;
 }
 
+// Send an already formatted response buffer in full.
+static void SendBuffer(SOCKET client, const char* data, int len)
+{
+    int sent = 0;
+    while (sent < len)
+    { int sn = send(client, data + sent, len - sent, 0); if (sn <= 0) break; sent += sn; }
+}
+
 // 401 challenge: after the user enters credentials the browser sends the
 // Authorization header on every request (including the metrics polls).
 static void SendUnauthorized(SOCKET client)
 {
-    static const char resp[] =
+    static const char body[] = "Authorization required.";
+    char resp[512];
+    int len = snprintf(resp, sizeof(resp),
         "HTTP/1.1 401 Unauthorized\r\n"
         "WWW-Authenticate: Basic realm=\"LoadGraph\", charset=\"UTF-8\"\r\n"
         "Content-Type: text/plain\r\n"
         "Connection: close\r\n"
-        "Content-Length: 23\r\n\r\n"
-        "Authorization required.";
-    int total = (int)strlen(resp), sent = 0;
-    while (sent < total)
-    { int sn = send(client, resp + sent, total - sent, 0); if (sn <= 0) break; sent += sn; }
+        "%s"
+        "Content-Length: %u\r\n\r\n%s",
+        kSecurityHeaders, (unsigned int)strlen(body), body);
+    if (len <= 0 || len >= (int)sizeof(resp)) return;
+    SendBuffer(client, resp, len);
+}
+
+// 403: the Host header names a dotted DNS domain instead of an IP address or
+// localhost (DNS rebinding pattern). Nothing about the host is revealed.
+static void SendForbidden(SOCKET client)
+{
+    static const char body[] = "Invalid Host header.";
+    char resp[512];
+    int len = snprintf(resp, sizeof(resp),
+        "HTTP/1.1 403 Forbidden\r\n"
+        "Content-Type: text/plain\r\n"
+        "Connection: close\r\n"
+        "%s"
+        "Content-Length: %u\r\n\r\n%s",
+        kSecurityHeaders, (unsigned int)strlen(body), body);
+    if (len <= 0 || len >= (int)sizeof(resp)) return;
+    SendBuffer(client, resp, len);
+}
+
+// 404 for unknown paths and methods.
+static void SendNotFound(SOCKET client)
+{
+    static const char body[] = "Not Found";
+    char resp[512];
+    int len = snprintf(resp, sizeof(resp),
+        "HTTP/1.1 404 Not Found\r\n"
+        "Content-Type: text/plain\r\n"
+        "Connection: close\r\n"
+        "%s"
+        "Content-Length: %u\r\n\r\n%s",
+        kSecurityHeaders, (unsigned int)strlen(body), body);
+    if (len <= 0 || len >= (int)sizeof(resp)) return;
+    SendBuffer(client, resp, len);
 }
 
 // Accept loop on the already-bound socket; runs on the server thread.
@@ -547,6 +763,16 @@ static void HttpServeLoop(SOCKET srv, int port, const AppConfig& cfg)
         bool isIndex     = (strcmp(method, "GET") == 0 && strcmp(path, "/") == 0);
         bool isFavicon   = (strcmp(method, "GET") == 0 && strcmp(path, "/favicon.ico") == 0);
 
+        // Host guard first: a rebinding request is refused before the server
+        // even reveals that it needs credentials.
+        if (!HostAllowed(reqStr))
+        {
+            HttpLogAccess(peerTxt, method, path, 403, &reqStr);
+            SendForbidden(client);
+            closesocket(client);
+            continue;
+        }
+
         // Basic auth gate for all endpoints (metrics JSON included).
         if (!AuthorizeRequest(reqStr, path))
         {
@@ -562,13 +788,15 @@ static void HttpServeLoop(SOCKET srv, int port, const AppConfig& cfg)
         else if (isFavicon)
         {
             // Build the full header in one string to avoid partial-send over-read.
-            char hdr[128];
+            char hdr[1024];
             int hlen = snprintf(hdr, sizeof(hdr),
                 "HTTP/1.1 200 OK\r\n"
                 "Content-Type: image/x-icon\r\n"
                 "Connection: close\r\n"
+                "%s"
                 "Content-Length: %u\r\n\r\n",
-                (unsigned int)kLoadGraphIcoSize);
+                kSecurityHeaders, (unsigned int)kLoadGraphIcoSize);
+            if (hlen <= 0 || hlen >= (int)sizeof(hdr)) { closesocket(client); continue; }
             // Send header - if client disconnected mid-header, stop immediately.
             int sent = 0;
             while (sent < hlen)
@@ -591,25 +819,23 @@ static void HttpServeLoop(SOCKET srv, int port, const AppConfig& cfg)
         {
             // Unknown path or method: invalid request, log the raw text.
             HttpLogAccess(peerTxt, method, path, 404, &reqStr);
-            const char* notFound = "HTTP/1.1 404 Not Found\r\n"
-                                   "Content-Type: text/plain\r\n"
-                                   "Connection: close\r\n\r\nNot Found";
-            int total = (int)strlen(notFound), sent = 0;
-            while (sent < total)
-            { int sn = send(client, notFound + sent, total - sent, 0); if (sn <= 0) break; sent += sn; }
+            SendNotFound(client);
             closesocket(client);
             continue;
         }
 
-        char hdr[512] = {};
+        char hdr[1024] = {};
         int hlen = snprintf(hdr, sizeof(hdr),
             "HTTP/1.1 200 OK\r\n"
             "Content-Type: %s\r\n"
             "Connection: close\r\n"
+            "%s"
             "Content-Length: %u\r\n"
             "\r\n",
             isMetrics ? "application/json" : "text/html; charset=utf-8",
+            kSecurityHeaders,
             (unsigned int)body.size());
+        if (hlen <= 0 || hlen >= (int)sizeof(hdr)) { closesocket(client); continue; }
 
         int total = hlen, sent = 0;
         while (sent < total)
@@ -633,7 +859,7 @@ static void HttpClose(SOCKET srv)
 #else // PLATFORM_LINUX - POSIX sockets
 // Create + bind + listen the server socket on the CALLER thread (see the
 // Windows variant above). Returns -1 on failure; close() is done in HttpClose.
-static int HttpOpenListen(int port)
+static int HttpOpenListen(int port, in_addr bindAddr)
 {
     int srv = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     if (srv < 0) { fprintf(stderr, "HTTP: socket() failed\n"); return -1; }
@@ -643,7 +869,7 @@ static int HttpOpenListen(int port)
 
     sockaddr_in addr{};
     addr.sin_family      = AF_INET;
-    addr.sin_addr.s_addr = INADDR_ANY;
+    addr.sin_addr        = bindAddr;
     addr.sin_port        = htons(static_cast<unsigned short>(port));
 
     if (bind(srv, (sockaddr*)&addr, sizeof(addr)) < 0)
@@ -653,22 +879,64 @@ static int HttpOpenListen(int port)
     return srv;
 }
 
+// Send an already formatted response buffer in full. MSG_NOSIGNAL: a client
+// that hangs up mid-response must not raise SIGPIPE and kill the application.
+static void SendBuffer(int client, const char* data, int len)
+{
+    int sent = 0;
+    while (sent < len)
+    { int sn = send(client, data + sent, len - sent, MSG_NOSIGNAL); if (sn <= 0) break; sent += sn; }
+}
+
 // 401 challenge: after the user enters credentials the browser sends the
 // Authorization header on every request (including the metrics polls).
 static void SendUnauthorized(int client)
 {
-    static const char resp[] =
+    static const char body[] = "Authorization required.";
+    char resp[512];
+    int len = snprintf(resp, sizeof(resp),
         "HTTP/1.1 401 Unauthorized\r\n"
         "WWW-Authenticate: Basic realm=\"LoadGraph\", charset=\"UTF-8\"\r\n"
         "Content-Type: text/plain\r\n"
         "Connection: close\r\n"
-        "Content-Length: 23\r\n\r\n"
-        "Authorization required.";
-    int total = (int)strlen(resp), sent = 0;
-    // MSG_NOSIGNAL: a client that hangs up mid-response must not raise
-    // SIGPIPE and kill the whole application.
-    while (sent < total)
-    { int sn = send(client, resp + sent, total - sent, MSG_NOSIGNAL); if (sn <= 0) break; sent += sn; }
+        "%s"
+        "Content-Length: %u\r\n\r\n%s",
+        kSecurityHeaders, (unsigned int)strlen(body), body);
+    if (len <= 0 || len >= (int)sizeof(resp)) return;
+    SendBuffer(client, resp, len);
+}
+
+// 403: the Host header names a dotted DNS domain instead of an IP address or
+// localhost (DNS rebinding pattern). Nothing about the host is revealed.
+static void SendForbidden(int client)
+{
+    static const char body[] = "Invalid Host header.";
+    char resp[512];
+    int len = snprintf(resp, sizeof(resp),
+        "HTTP/1.1 403 Forbidden\r\n"
+        "Content-Type: text/plain\r\n"
+        "Connection: close\r\n"
+        "%s"
+        "Content-Length: %u\r\n\r\n%s",
+        kSecurityHeaders, (unsigned int)strlen(body), body);
+    if (len <= 0 || len >= (int)sizeof(resp)) return;
+    SendBuffer(client, resp, len);
+}
+
+// 404 for unknown paths and methods.
+static void SendNotFound(int client)
+{
+    static const char body[] = "Not Found";
+    char resp[512];
+    int len = snprintf(resp, sizeof(resp),
+        "HTTP/1.1 404 Not Found\r\n"
+        "Content-Type: text/plain\r\n"
+        "Connection: close\r\n"
+        "%s"
+        "Content-Length: %u\r\n\r\n%s",
+        kSecurityHeaders, (unsigned int)strlen(body), body);
+    if (len <= 0 || len >= (int)sizeof(resp)) return;
+    SendBuffer(client, resp, len);
 }
 
 // Accept loop on the already-bound socket; runs on the server thread.
@@ -689,6 +957,15 @@ static void HttpServeLoop(int srv, int port, const AppConfig& cfg)
         char peerTxt[40];
         PeerText(peer, peerTxt, sizeof(peerTxt));
 
+        // Bounded I/O on the accepted socket (same 5 s as on Windows): without
+        // it a client that connects and sends nothing blocks this loop in
+        // recv() forever, which freezes the dashboard AND makes
+        // StopHttpServer() hang in thread::join() during shutdown.
+        timeval rcvTo{}; rcvTo.tv_sec  = 5; rcvTo.tv_usec = 0;
+        timeval sndTo{}; sndTo.tv_sec  = 5; sndTo.tv_usec = 0;
+        setsockopt(client, SOL_SOCKET, SO_RCVTIMEO, &rcvTo, sizeof(rcvTo));
+        setsockopt(client, SOL_SOCKET, SO_SNDTIMEO, &sndTo, sizeof(sndTo));
+
         char req[4096] = {};
         int n = recv(client, req, sizeof(req) - 1, 0);
         if (n <= 0)
@@ -708,6 +985,16 @@ static void HttpServeLoop(int srv, int port, const AppConfig& cfg)
         bool isIndex     = (strcmp(method, "GET") == 0 && strcmp(path, "/") == 0);
         bool isFavicon   = (strcmp(method, "GET") == 0 && strcmp(path, "/favicon.ico") == 0);
 
+        // Host guard first: a rebinding request is refused before the server
+        // even reveals that it needs credentials.
+        if (!HostAllowed(reqStr))
+        {
+            HttpLogAccess(peerTxt, method, path, 403, &reqStr);
+            SendForbidden(client);
+            close(client);
+            continue;
+        }
+
         // Basic auth gate for all endpoints (metrics JSON included).
         if (!AuthorizeRequest(reqStr, path))
         {
@@ -722,23 +1009,28 @@ static void HttpServeLoop(int srv, int port, const AppConfig& cfg)
         else if (isIndex)    body = RenderDashboard(port, cfg);
         else if (isFavicon)
         {
-            char hdr[128];
+            char hdr[1024];
             int hlen = snprintf(hdr, sizeof(hdr),
                 "HTTP/1.1 200 OK\r\n"
                 "Content-Type: image/x-icon\r\n"
                 "Connection: close\r\n"
+                "%s"
                 "Content-Length: %u\r\n\r\n",
-                (unsigned int)kLoadGraphIcoSize);
+                kSecurityHeaders, (unsigned int)kLoadGraphIcoSize);
+            if (hlen <= 0 || hlen >= (int)sizeof(hdr)) { close(client); continue; }
+            // MSG_NOSIGNAL in every send below: SIGPIPE is not ignored in this
+            // application, so writing to a socket the browser already closed
+            // would terminate the whole program.
             int sent = 0;
             while (sent < hlen)
-            { int sn = send(client, hdr + sent, hlen - sent, 0); if (sn <= 0) break; sent += sn; }
+            { int sn = send(client, hdr + sent, hlen - sent, MSG_NOSIGNAL); if (sn <= 0) break; sent += sn; }
             if (sent < hlen) { close(client); continue; }
             const unsigned char* p = kLoadGraphIcoBytes;
             size_t rem = kLoadGraphIcoSize;
             while (rem > 0)
             {
                 int chunk = (int)(rem > 4096 ? 4096 : rem);
-                int sn = send(client, (const char*)p, chunk, 0);
+                int sn = send(client, (const char*)p, chunk, MSG_NOSIGNAL);
                 if (sn <= 0) break;
                 p += sn; rem -= sn;
             }
@@ -749,32 +1041,30 @@ static void HttpServeLoop(int srv, int port, const AppConfig& cfg)
         {
             // Unknown path or method: invalid request, log the raw text.
             HttpLogAccess(peerTxt, method, path, 404, &reqStr);
-            const char* notFound = "HTTP/1.1 404 Not Found\r\n"
-                                   "Content-Type: text/plain\r\n"
-                                   "Connection: close\r\n\r\nNot Found";
-            int total = (int)strlen(notFound), sent = 0;
-            while (sent < total)
-            { int sn = send(client, notFound + sent, total - sent, 0); if (sn <= 0) break; sent += sn; }
+            SendNotFound(client);
             close(client);
             continue;
         }
 
-        char hdr[512] = {};
+        char hdr[1024] = {};
         int hlen = snprintf(hdr, sizeof(hdr),
             "HTTP/1.1 200 OK\r\n"
             "Content-Type: %s\r\n"
             "Connection: close\r\n"
+            "%s"
             "Content-Length: %u\r\n"
             "\r\n",
             isMetrics ? "application/json" : "text/html; charset=utf-8",
+            kSecurityHeaders,
             (unsigned int)body.size());
+        if (hlen <= 0 || hlen >= (int)sizeof(hdr)) { close(client); continue; }
 
         int total = hlen, sent = 0;
         while (sent < total)
-        { int sn = send(client, hdr + sent, total - sent, 0); if (sn <= 0) break; sent += sn; }
+        { int sn = send(client, hdr + sent, total - sent, MSG_NOSIGNAL); if (sn <= 0) break; sent += sn; }
         total = (int)body.size(); sent = 0;
         while (sent < total)
-        { int sn = send(client, body.c_str() + sent, total - sent, 0); if (sn <= 0) break; sent += sn; }
+        { int sn = send(client, body.c_str() + sent, total - sent, MSG_NOSIGNAL); if (sn <= 0) break; sent += sn; }
 
         close(client);
     }
@@ -803,15 +1093,37 @@ bool StartHttpServer(const AppConfig& cfg)
     if (cfg.http_port <= 0 || cfg.http_port > 65535)
     { fprintf(stderr, "HTTP: invalid port %d\n", cfg.http_port); return false; }
 
+    // Listen interface from cfg.http_bind. An unparseable value falls back to
+    // every interface (the documented default) with a warning.
+    in_addr bindAddr{};
+    if (!ResolveBindAddress(cfg.http_bind, bindAddr))
+    {
+        fprintf(stderr, "HTTP: unknown http_bind value, listening on all interfaces\n");
+        fflush(stderr);  // stderr may be fully buffered when redirected to a file
+        bindAddr.s_addr = INADDR_ANY;
+    }
+
 #ifdef PLATFORM_WINDOWS
-    SOCKET srv = HttpOpenListen(cfg.http_port);
+    SOCKET srv = HttpOpenListen(cfg.http_port, bindAddr);
     if (srv == INVALID_SOCKET)
         return false;
 #else
-    int srv = HttpOpenListen(cfg.http_port);
+    int srv = HttpOpenListen(cfg.http_port, bindAddr);
     if (srv < 0)
         return false;
 #endif
+
+    // Report what is actually reachable: an all-interface bind means every
+    // host on the network can reach the dashboard (and brute force the login).
+    char bindTxt[INET_ADDRSTRLEN] = {};
+#ifdef PLATFORM_WINDOWS
+    InetNtopA(AF_INET, &bindAddr, bindTxt, (DWORD)sizeof(bindTxt));
+#else
+    inet_ntop(AF_INET, &bindAddr, bindTxt, (socklen_t)sizeof(bindTxt));
+#endif
+    fprintf(stdout, "HTTP: dashboard on http://%s:%d (%s)\n",
+            bindTxt[0] ? bindTxt : "0.0.0.0", cfg.http_port,
+            bindAddr.s_addr == INADDR_ANY ? "all interfaces" : "single interface");
 
     g_httpStopReq = false;
     // Snapshot credentials before the thread starts: request handling then

@@ -264,6 +264,14 @@ AppConfig LoadAppConfig()
             if (ReadJsonNumber(p, v) && v >= 1 && v <= 65535)
                 cfg.http_port = static_cast<int>(v);
         }
+        else if (key == "http_bind")
+        {
+            // Listen interface: "all", "localhost"/"loopback" or a dotted
+            // IPv4 address. Length-capped; the server validates the value.
+            std::string v;
+            if (ReadJsonString(p, v) && v.size() <= 64)
+                cfg.http_bind = v;
+        }
         else if (key == "http_enabled")
         {
             bool v = false;
@@ -565,6 +573,7 @@ void SaveAppConfig(const AppConfig& cfg)
     out += "{\n";
     out += "  \"http_port\": "   + EmitJsonNumber((double)cfg.http_port)   + ",\n";
     out += "  \"http_enabled\": " + std::string(cfg.http_enabled ? "true" : "false") + ",\n";
+    out += "  \"http_bind\": "   + EmitJsonString(cfg.http_bind)   + ",\n";
     out += "  \"http_user\": "   + EmitJsonString(cfg.http_user)   + ",\n";
     out += "  \"http_pass\": "   + EmitJsonString(cfg.http_pass)   + ",\n";
     out += "  \"http_auth\": "   + std::string(cfg.http_auth ? "true" : "false") + ",\n";
