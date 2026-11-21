@@ -355,6 +355,8 @@ void MainFrame::BuildCpuSection(wxBoxSizer* container, wxWindow* parent)
 	if (cpuInit.temperature >= 0.0 || cpuInit.fanRpm > 0)
 	{
 		wxBoxSizer* row2 = new wxBoxSizer(wxHORIZONTAL);
+		// Remembered so EnsureCpuFanPanel() can extend this row later.
+		m_cpuTempRow = row2;
 
 		m_cpuTempGraph = new GraphPanel(parent, "Temp", "C");
 		m_cpuTempGraph->SetYRange(0.0, 100.0);
@@ -368,6 +370,11 @@ void MainFrame::BuildCpuSection(wxBoxSizer* container, wxWindow* parent)
 		if (cpuInit.fanRpm > 0)
 		{
 			m_cpuFanGraph = new GraphPanel(parent, "Fan", "RPM");
+			// Same scale and colour as a GPU fan chart in RPM mode, and the
+			// web dashboard uses the configured fan colour for this chart too.
+			m_cpuFanGraph->SetYRange(0.0, 3000.0);
+			m_cpuFanGraph->SetColor(HexColor(m_cfg.gpu_fan_color));
+			m_cpuFanGraph->SetBgColor(HexColor(m_cfg.chart_bg_color));
 			row2->Add(m_cpuFanGraph, 1, wxEXPAND | wxLEFT | wxRIGHT, 5);
 		}
 
@@ -693,6 +700,83 @@ void MainFrame::ApplyHeightAdjustment(const std::string& key, bool showingItem)
 	if (m_content) m_content->Refresh();
 }
 
+void MainFrame::EnsureCpuFanPanel(int fanRpm)
+{
+	if (m_cpuFanGraph || fanRpm <= 0) return;
+	if (!m_cpuTempRow || !m_cpuTempGraph || !m_content) return;
+
+	m_cpuFanGraph = new GraphPanel(m_content, "Fan", "RPM");
+	// Same scale and colour the build path gives a fan chart, so a panel that
+	// appears later is not drawn differently from one created at startup.
+	m_cpuFanGraph->SetYRange(0.0, 3000.0);
+	m_cpuFanGraph->SetColor(HexColor(m_cfg.gpu_fan_color));
+	m_cpuFanGraph->SetBgColor(HexColor(m_cfg.chart_bg_color));
+	// Seed the chart with the value that triggered the row so the first paint
+	// is not an empty panel.
+	m_cpuFanGraph->AddPoint(static_cast<double>(fanRpm));
+
+	// The Temp panel was given proportion 2 while it was alone in the row;
+	// both panels share the row now.
+	wxSizerItem* tempItem = m_cpuTempRow->GetItem(m_cpuTempGraph);
+	if (tempItem) tempItem->SetProportion(1);
+	m_cpuTempRow->Add(m_cpuFanGraph, 1, wxEXPAND | wxLEFT | wxRIGHT, 5);
+	m_viewToggles["fan"] = m_cpuFanGraph;
+
+	// Honour the saved View menu choice; no entry means the row is visible.
+	const auto itS = m_cfg.view_menu.find("fan");
+	m_cpuFanGraph->Show(itS == m_cfg.view_menu.end() ? true : itS->second);
+
+	AddViewToggleItem("fan", "Fan", "cpu_temp");
+
+	// No window resize: the row already existed, only its horizontal split
+	// changes, and the minimum height of the content is unchanged.
+	m_content->InvalidateBestSize();
+	if (m_content->GetSizer()) m_content->GetSizer()->Layout();
+	Layout();
+	m_content->Refresh();
+	LOGI("CPU fan sensor reported %d RPM, Fan chart added to the CPU row.", fanRpm);
+}
+
+void MainFrame::AddViewToggleItem(const std::string& key, const wxString& label,
+                                  const std::string& afterKey)
+{
+	wxMenuBar* mb = GetMenuBar();
+	if (!mb) return;
+
+	wxMenu* vm = nullptr;
+	for (size_t m = 0; m < mb->GetMenuCount(); ++m)
+	{
+		wxMenu* menu = mb->GetMenu(m);
+		if (menu && menu->GetTitle() == "&View") { vm = menu; break; }
+	}
+	if (!vm) return;
+
+	// wxMenu has no lookup by id, so walk the positions to find the reference
+	// entry; when it is absent the item goes to the end of the menu.
+	size_t pos = vm->GetMenuItemCount();
+	for (size_t i = 0; i < vm->GetMenuItemCount(); ++i)
+	{
+		wxMenuItem* mi = vm->FindItemByPosition(i);
+		if (!mi) continue;
+		const auto itId = m_menuIdToKey.find(mi->GetId());
+		if (itId != m_menuIdToKey.end() && itId->second == afterKey)
+		{
+			pos = i + 1;
+			break;
+		}
+	}
+
+	// Same id block as BuildViewMenu, continued past the highest used id.
+	const int id = wxID_HIGHEST + 100 + static_cast<int>(m_menuIdToKey.size());
+	m_menuIdToKey[id] = key;
+
+	wxMenuItem* mi = vm->InsertCheckItem(pos, id, label);
+	if (!mi) return;
+	const auto itS = m_cfg.view_menu.find(key);
+	mi->Check(itS == m_cfg.view_menu.end() ? true : itS->second);
+	Bind(wxEVT_MENU, &MainFrame::OnViewToggle, this, id);
+}
+
 void MainFrame::OnTimer(wxTimerEvent&)
 {
 	// A shutdown signal (Ctrl+C, pkill, terminal or WSL session closed) closes
@@ -736,7 +820,9 @@ void MainFrame::OnTimer(wxTimerEvent&)
 		m_ramUsageGraph->AddPoint(BytesToGbs(usedBytes));
 	}
 
-	// CPU sensors.
+	// CPU sensors. The fan panel is created on the fly the first time the
+	// sensor reports data, so a late sensor also gets a chart here.
+	EnsureCpuFanPanel(cpu.fanRpm);
 	if (m_cpuTempGraph && cpu.temperature >= 0.0)
 		m_cpuTempGraph->AddPoint(cpu.temperature);
 	if (m_cpuFanGraph && cpu.fanRpm > 0)

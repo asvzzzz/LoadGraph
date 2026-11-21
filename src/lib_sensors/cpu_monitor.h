@@ -88,6 +88,11 @@ private:
 #ifdef PLATFORM_WINDOWS
     bool QueryOverallLoad(double& loadPercent);
     unsigned int ProbeWmiSensor(double& tempC, int& fanRpm);
+    // Runs ProbeWmiSensor() and merges only the sensors that are still
+    // missing into tempC/fanRpm, so a working MSR temperature is never
+    // replaced by a WMI value. Stores what WMI supplied in m_wmiMask and
+    // returns the updated 'filled' mask (bit0 = temp, bit1 = fan).
+    unsigned int RefreshWmiSensors(double& tempC, int& fanRpm, unsigned int filled);
     PDH_HQUERY   m_pdhQuery   = nullptr;
     PDH_HCOUNTER m_pdhCounter = nullptr;
     bool         m_pdhTried   = false;
@@ -97,7 +102,23 @@ private:
     ULONGLONG m_prevUser   = 0;
     bool      m_prevTimesValid = false;
     int  m_wmiCooldown = 0;
+    // Sensors supplied by the last successful WMI probe (bit0 = temp,
+    // bit1 = fan). While WMI owns the fan the value is polled on the 5 s
+    // cadence, because RPM is dynamic and the temperature may come from MSR.
+    unsigned int m_wmiMask = 0;
+    // Ticks until the whole WMI probe is retried while a sensor is still
+    // missing: LibreHardwareMonitor / OpenHardwareMonitor and the port I/O
+    // driver can be started long after LoadGraph.
+    int  m_wmiRetry  = 0;
     bool m_fanIoTried  = false;  // true after first Super I/O fan probe attempt
+    // Super I/O state after a successful identification: the monitor window
+    // base is cached so the tachometers can be re-read without touching the
+    // LPC config ports again.
+    bool     m_fanIoOk      = false; // true when a supported chip was found
+    uint16_t m_fanIoBase    = 0;     // I/O base of the monitor window
+    int      m_fanIoCool    = 0;     // ticks until the tachometers are read again
+    int      m_fanIoLastRpm = -1;    // last decoded RPM, -1 when none was found
+    bool     m_fanIoLogged  = false; // true after the channel table was logged
     // Optional real CPU package power sensor (LibreHardwareMonitor /
     // OpenHardwareMonitor WMI namespace). Probed once, then read each tick.
     bool        m_powerLhmTried = false;

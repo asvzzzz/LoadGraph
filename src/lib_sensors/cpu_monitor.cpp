@@ -300,8 +300,17 @@ double CpuMonitor::SampleLoad()
 
 // Forward declaration: probes every non-admin temp source on startup.
 static void ProbeAllTempSources();
-// Forward declaration: probes Super I/O fan via WinRing0 port I/O.
-static int ProbeSuperIoFan();
+// Forward declaration: identifies the Super I/O chip and returns the I/O base
+// of its hardware monitor window, or 0 when no supported chip answers.
+static uint16_t ProbeSuperIoHwm();
+// Forward declaration: decodes the fan tachometers of that window.
+static int ReadSuperIoFanRpm(uint16_t base, bool verbose);
+// Slow retry period of the full WMI probe in polling ticks (1 tick = 1000 ms).
+// A single WMI round trip per 30 s is unmeasurable for the CPU budget and lets
+// a LibreHardwareMonitor instance started after LoadGraph fill the fan row.
+static constexpr int kWmiRetryTicks = 30;
+// Re-read period of the Super I/O fan counters in polling ticks.
+static constexpr int kSuperIoRefreshTicks = 5;
 
 void CpuMonitor::Collect()
 {
@@ -360,37 +369,58 @@ void CpuMonitor::Collect()
         if (temp >= 0.0) filled = 1u;
     }
 
-    // --- WMI fallback ------------------------------------------------------
-    if (!m_wmiTried && !(filled & 1u))
+    // --- WMI sensors -------------------------------------------------------
+    // Independent of the MSR path: a machine can have a working MSR
+    // temperature and still need WMI for the fan, because LibreHardwareMonitor
+    // and OpenHardwareMonitor are the only source that exposes fan RPM to a
+    // non-admin process. The previous gate looked at the temperature bit only,
+    // so whenever MSR worked the fan query never ran at all.
+    if (!m_wmiTried && (filled & 3u) != 3u)
     {
         m_wmiTried = true;
-        filled = ProbeWmiSensor(temp, fan);
-        m_wmiOk = (filled != 0);
+        m_wmiRetry = kWmiRetryTicks;
+        filled = RefreshWmiSensors(temp, fan, filled);
+        m_wmiOk = (m_wmiMask != 0);
         LOGI("WMI sensor probe: temp=%hs fan=%hs",
-             (filled & 1u) ? "OK" : "N/A",
-             (filled & 2u) ? "OK" : "N/A");
+             (m_wmiMask & 1u) ? "OK" : "N/A",
+             (m_wmiMask & 2u) ? "OK" : "N/A");
         // Probe every available non-admin source so we know what works on this machine.
         ProbeAllTempSources();
     }
-    else if (m_wmiOk && !(filled & 1u))
+    else if (m_wmiTried)
     {
-        if (m_wmiCooldown <= 0)
+        // WMI owns a sensor when its last probe supplied one. The fan RPM is
+        // dynamic and the WMI temperature is only useful while MSR is down, so
+        // either case keeps the 5 s refresh. While some sensor is still
+        // missing the full probe is retried on the slow 30 s cycle instead.
+        const bool ownsFan  = (m_wmiMask & 2u) != 0;
+        const bool ownsTemp = (m_wmiMask & 1u) != 0 && !m_msrOk;
+        const bool missing  = (filled & 3u) != 3u;
+        const bool owns     = ownsFan || ownsTemp;
+        if ((owns || missing) && m_wmiCooldown <= 0)
         {
-            filled = ProbeWmiSensor(temp, fan);
-            m_wmiCooldown = 5;
+            const unsigned int before = filled;
+            filled = RefreshWmiSensors(temp, fan, filled);
+            m_wmiOk       = (m_wmiMask != 0);
+            m_wmiCooldown = owns ? 5 : kWmiRetryTicks;
+            // Only report a change: the retry cycle must not add log lines
+            // while the machine simply has no fan sensor at all.
+            if ((filled & 2u) && !(before & 2u))
+                LOGI("WMI fan sensor appeared: %d RPM", fan);
+            if ((filled & 1u) && !(before & 1u))
+                LOGI("WMI temperature sensor appeared: %.1f C", temp);
         }
-        else
+        else if (owns || missing)
         {
             --m_wmiCooldown;
         }
     }
 
     // --- Super I/O fan probe (WinRing0 I/O port access) --------------------
-    // Runs once per session: if no fan RPM yet but the kernel driver is loaded,
-    // try reading the hardware monitoring chip directly. Guarded by m_wmiTried
-    // so we only attempt after WMI has been tried at least once.
-    // Disabled by default - direct port I/O can affect unknown LPC devices.
-    // Enable via config: superio_fan = true in loadgraph.cfg
+    // The chip is identified once per session; its tachometers are then
+    // re-read on a 5 s cadence because RPM is dynamic. Disabled by default -
+    // direct port I/O can affect unknown LPC devices. Enable in loadgraph.cfg:
+    // "superio_fan": true
     static bool s_superioEnabled = []() -> bool {
         extern AppConfig LoadAppConfig();
         static const AppConfig cfg = LoadAppConfig();
@@ -399,13 +429,35 @@ void CpuMonitor::Collect()
     if (s_superioEnabled && fan < 0 && Ring0Msr::IsOpen() && !m_fanIoTried)
     {
         m_fanIoTried = true;
-        LOGI("Super I/O fan probe enabled via LOADGRAPH_SUPERIO_FAN=1");
-        int ioFan = ProbeSuperIoFan();
-        if (ioFan > 0)
+        LOGI("Super I/O fan probe enabled by config (\"superio_fan\": true)");
+        m_fanIoBase = ProbeSuperIoHwm();
+        m_fanIoOk   = (m_fanIoBase != 0);
+    }
+    if (m_fanIoOk && fan < 0)
+    {
+        if (m_fanIoCool <= 0)
         {
-            fan = ioFan;
-            filled |= 2u;
-            LOGI("Super I/O fan probe: RPM=%d", fan);
+            m_fanIoCool = kSuperIoRefreshTicks;
+            // The channel table is logged once, later reads stay quiet unless
+            // the sensor appears or disappears.
+            const int ioFan = ReadSuperIoFanRpm(m_fanIoBase, !m_fanIoLogged);
+            m_fanIoLogged = true;
+            if (ioFan > 0)
+            {
+                fan = ioFan;
+                filled |= 2u;
+                if (m_fanIoLastRpm < 0)
+                    LOGI("Super I/O fan sensor: %d RPM", fan);
+            }
+            else if (m_fanIoLastRpm >= 0)
+            {
+                LOGI("Super I/O fan sensor lost - no tachometer data.");
+            }
+            m_fanIoLastRpm = ioFan;
+        }
+        else
+        {
+            --m_fanIoCool;
         }
     }
 
@@ -575,127 +627,424 @@ unsigned int CpuMonitor::ProbeWmiSensor(double& tempC, int& fanRpm)
     return filled;
 }
 
-// ----------------------------------------------------------------------------
-// Super I/O hardware monitoring probe via WinRing0 I/O port access.
-// Reads CPU fan RPM from common Super I/O chips (Nuvoton, ITE, SMSC).
-// Returns the RPM value, or -1 if unavailable.
-// ----------------------------------------------------------------------------
-static int ProbeSuperIoFan()
+// Merge helper for the WMI sensors. Runs ProbeWmiSensor() and takes over only
+// the values that are still missing, so a temperature already supplied by the
+// MSR path is never replaced by a coarser WMI reading.
+unsigned int CpuMonitor::RefreshWmiSensors(double& tempC, int& fanRpm,
+                                           unsigned int filled)
 {
-    // Need WinRing0 backend for port I/O.
-    if (!Ring0Msr::IsOpen()) return -1;
-
-    // Common Super I/O config ports and their data ports.
-    static const struct { uint16_t cfgPort; uint16_t dataPort; } kPorts[] = {
-        { 0x2E, 0x2F },
-        { 0x4E, 0x4F },
-    };
-
-    for (const auto& p : kPorts)
-    {
-        // Exit config mode first (some chips stay locked from previous use).
-        Ring0Msr::WriteIoPortByte(p.cfgPort, 0xAA);
-        Sleep(1);
-
-        // Enter config mode: write 0x55 to config port.
-        if (!Ring0Msr::WriteIoPortByte(p.cfgPort, 0x55))
-            continue;
-        Sleep(1);
-        if (!Ring0Msr::WriteIoPortByte(p.cfgPort, 0x55))
-            continue;
-        Sleep(1);
-
-        // Read vendor ID from logical device config register 0x20.
-        if (!Ring0Msr::WriteIoPortByte(p.cfgPort, 0x20))
-            continue;
-        uint32_t vidReg = Ring0Msr::ReadIoPortDword(p.dataPort);
-        // Vendor IDs: Nuvoton=0xBCDE, ITE=0xACAD, SMSC=0x114B (low word), F718xx=0xF0F1.
-        uint16_t vid = static_cast<uint16_t>(vidReg & 0xFFFF);
-        bool isNuvoton = (vid == 0xBCDE);
-        bool isIte     = (vid == 0xACAD);
-        bool isSmss    = (vid == 0x114B || vid == 0xF0F1);
-        if (!isNuvoton && !isIte && !isSmss) continue;
-
-        LOGI("Super I/O detected at port 0x%04X: vendor=0x%04X", p.cfgPort, vid);
-
-        // Read base I/O address from registers 0x60 (low byte) and 0x61 (high byte).
-        if (!Ring0Msr::WriteIoPortByte(p.cfgPort, 0x60)) continue;
-        uint32_t baseLow = Ring0Msr::ReadIoPortDword(p.dataPort);
-        if (!Ring0Msr::WriteIoPortByte(p.cfgPort, 0x61)) continue;
-        uint32_t baseHigh = Ring0Msr::ReadIoPortDword(p.dataPort);
-        uint16_t baseAddr = static_cast<uint16_t>(
-            (static_cast<uint16_t>(baseHigh & 0xFF) << 8) |
-             static_cast<uint16_t>(baseLow  & 0xFF));
-
-        if (baseAddr < 0x100) continue;
-        LOGI("Super I/O base I/O = 0x%04X", baseAddr);
-
-        // Select logical device #1 (typically fan controller) - config reg 0x07.
-        if (!Ring0Msr::WriteIoPortByte(p.cfgPort, 0x07)) continue;
-        Ring0Msr::ReadIoPortDword(p.dataPort); // LD selection ack.
-        // If LD#1 is not enabled (bit 0 of status reg at offset 0x30), try another.
-        if (!Ring0Msr::WriteIoPortByte(p.cfgPort, 0x30)) continue;
-        uint32_t stReg = Ring0Msr::ReadIoPortDword(p.dataPort);
-        if (!(stReg & 1u))
-        {
-            // Try logical device #2 (some boards route fan to LD#2).
-            if (!Ring0Msr::WriteIoPortByte(p.cfgPort, 0x07)) continue;
-            Ring0Msr::WriteIoPortByte(p.cfgPort, 0x02);
-            Sleep(1);
-            if (!Ring0Msr::WriteIoPortByte(p.cfgPort, 0x30)) continue;
-            stReg = Ring0Msr::ReadIoPortDword(p.dataPort);
-            if (!(stReg & 1u)) continue;
-        }
-
-        // Read fan divisor register. Layout depends on chip family.
-        uint8_t div = 0;
-        if (isNuvoton)
-        {
-            // Nuvoton: fan divisor at config offset 0x43 (low 4 bits of dword read).
-            if (!Ring0Msr::WriteIoPortByte(p.cfgPort, 0x43)) continue;
-            div = static_cast<uint8_t>(Ring0Msr::ReadIoPortDword(p.dataPort) & 0x0F);
-        }
-        else if (isIte)
-        {
-            // ITE: fan divisor at config offset 0x41.
-            if (!Ring0Msr::WriteIoPortByte(p.cfgPort, 0x41)) continue;
-            div = static_cast<uint8_t>(Ring0Msr::ReadIoPortDword(p.dataPort) & 0x0F);
-        }
-        else // SMSC
-        {
-            if (!Ring0Msr::WriteIoPortByte(p.cfgPort, 0x42)) continue;
-            div = static_cast<uint8_t>(Ring0Msr::ReadIoPortDword(p.dataPort) & 0x0F);
-        }
-        // Divisor 0xF means fan input not connected.
-        if (div == 0x0F) { LOGI("Super I/O: fan divisor=0xF (no fan connected)"); return -1; }
-        if (div == 0)    div = 1; // avoid division by zero.
-
-        // Read fan counter register (16-bit). Nuvoton offset 0x4A, ITE 0x48, SMSC 0x49.
-        // The register is addressed with a byte, so the offset is kept in uint8_t -
-        // this removes the narrowing warning in the WriteIoPortByte call.
-        uint8_t cntRegOff = isNuvoton ? 0x4A : (isIte ? 0x48 : 0x49);
-        if (!Ring0Msr::WriteIoPortByte(p.cfgPort, cntRegOff)) continue;
-        uint32_t cntLow  = Ring0Msr::ReadIoPortDword(p.dataPort);
-        if (!Ring0Msr::WriteIoPortByte(p.cfgPort, static_cast<uint8_t>(cntRegOff + 1))) continue;
-        uint32_t cntHigh = Ring0Msr::ReadIoPortDword(p.dataPort);
-        uint16_t fanCnt = static_cast<uint16_t>(
-            (static_cast<uint16_t>(cntHigh & 0xFF) << 8) |
-             static_cast<uint16_t>(cntLow  & 0xFF));
-
-        // Decode RPM from counter. Formula varies by chip:
-        //   Nuvoton/ITE: RPM = 1_350_000 / (div * cnt)   (12 pulses per rev, 90ms sample)
-        //   SMSC F718xx: RPM = 1_350_000 / (div * cnt)   (same convention).
-        if (fanCnt == 0) return -1;
-        int rpm = static_cast<int>(1350000.0 / (static_cast<double>(div) * fanCnt) + 0.5);
-        if (rpm > 0 && rpm < 50000)
-        {
-            LOGI("Super I/O fan: base=0x%04X div=%u cnt=0x%04X RPM=%d",
-                 baseAddr, div, fanCnt, rpm);
-            return rpm;
-        }
-    }
-    return -1;
+    double wmiTemp = -1.0;
+    int    wmiFan  = -1;
+    const unsigned int w = ProbeWmiSensor(wmiTemp, wmiFan);
+    m_wmiMask = w;
+    if ((w & 1u) && !(filled & 1u)) tempC  = wmiTemp;
+    if ((w & 2u) && !(filled & 2u)) fanRpm = wmiFan;
+    return filled | w;
 }
+
+// ----------------------------------------------------------------------------
+// Nuvoton NCT6793 Super I/O access through WinRing0 port I/O.
+//
+// The LPC config interface is an index/data port pair (0x2E and 0x2F, or 0x4E
+// and 0x4F). Writing the key byte 0x87 twice enters config mode, after which a
+// config register is read by writing its number to the index port and reading
+// the data port. Registers 0x20/0x21 hold the 16 bit device ID; masked with
+// 0xFFF8 it names the chip (0xD120 = NCT6793). Logical device 0x0B is the
+// hardware monitor: register 0x30 tells whether it is active and 0x60/0x61
+// hold the base of the I/O window it decodes.
+//
+// Inside that window the index register is NOT at base + 0: the NCT679x maps
+// it to base + 5 with the data register at base + 6, exactly as the Linux
+// nct6775 driver and LibreHardwareMonitor (Nct677X: ADDRESS_REGISTER_OFFSET
+// 0x05, DATA_REGISTER_OFFSET 0x06) address it. Reading base + 0 instead hits
+// an unclaimed port, which mirrors the last write back and makes a perfectly
+// live window look dead. Register numbers are 16 bit wide, so the high byte
+// selects a bank through index register 0x4E before the low byte is written.
+//
+// On the NCT679x family config register 0x28 bit 4, the hardware monitor I/O
+// space lock, also keeps the window dark and LibreHardwareMonitor clears it
+// while still in config mode. Only that lock and the identification registers
+// are written: no fan control, limit or divisor register is touched, so the
+// chip keeps running exactly the way the firmware configured it.
+// ----------------------------------------------------------------------------
+
+// Device ID of the supported chip, as read from config registers 0x20/0x21
+// and masked with 0xFFF8 (the low 3 bits are a stepping revision).
+static constexpr unsigned int kNct6793Id = 0xD120u;
+// Config register that locks the monitor I/O space on the NCT679x family.
+static constexpr uint8_t kNct6791RegIoLock = 0x28;
+// Index and data ports inside a monitor window, plus the bank select register
+// used to reach the registers above 0xFF.
+static constexpr uint16_t kNctIndexOffset = 0x05;
+static constexpr uint16_t kNctDataOffset  = 0x06;
+static constexpr uint8_t  kNctBankReg     = 0x4E;
+// Vendor ID pair: bank 0x80 register 0x4F holds the high byte, bank 0x00
+// register 0x4F the low byte. A window that decodes answers 0x5CA3 there.
+static constexpr uint16_t kNctVendorIdHigh = 0x804F;
+static constexpr uint16_t kNctVendorIdLow  = 0x004F;
+static constexpr int      kNuvotonVendorId = 0x5CA3;
+// 13 bit fan tachometer counters of the NCT679x family: the high byte sits at
+// the register itself, the low 5 bits at register + 1 (bank 4). Fan 1 is the
+// CPU fan header on the reference design of this chip family.
+static constexpr uint16_t kNctFanCountRegs[] = { 0x4B0, 0x4B2, 0x4B4, 0x4B6,
+                                                 0x4B8, 0x4BA, 0x4CC };
+// Counter bounds: a count at or above the maximum means the tachometer sees a
+// stopped fan, a count below the minimum cannot be turned into RPM. The RPM
+// bound rejects a stuck or unimplemented register, whose value would otherwise
+// stretch the chart scale.
+static constexpr unsigned int kNctMaxFanCount = 0x1FFFu;
+static constexpr unsigned int kNctMinFanCount = 0x0015u;
+static constexpr unsigned int kNctMaxFanRpm   = 15000u;
+
+// Reads one config register of the LPC interface. Returns the byte value, or
+// -1 when either the index write or the data read was rejected by the driver.
+static int ReadSuperIoConfig(uint16_t cfgPort, uint8_t reg)
+{
+    if (!Ring0Msr::WriteIoPortByte(cfgPort, reg))
+        return -1;
+    uint8_t v = 0;
+    if (!Ring0Msr::ReadIoPortByte(cfgPort + 1, v))
+        return -1;
+    return static_cast<int>(v);
+}
+
+// Writes one config register: index byte, then the value on the data port.
+static bool WriteSuperIoConfig(uint16_t cfgPort, uint8_t reg, uint8_t value)
+{
+    return Ring0Msr::WriteIoPortByte(cfgPort, reg) &&
+           Ring0Msr::WriteIoPortByte(cfgPort + 1, value);
+}
+
+// Reads one byte of a monitor window (defined below). Forward declaration so
+// the identification can test a window before it is selected.
+static int NctReadByte(uint16_t base, uint16_t reg);
+
+// Reports whether a monitor window really decodes and returns what the probe
+// reads. The reliable test is the vendor ID pair: only a live NCT679x answers
+// 0x5CA3 there. The failure modes stay visible in the log - a window no device
+// claims leaves the data bus undriven and an unclaimed I/O read mirrors the
+// payload of the last write back (probing bank 0 and bank 4 therefore reports
+// the echo pair), while a range another device owns reads all ones. Chip ID
+// and revision of bank 0 are reported alongside for diagnostics.
+static bool NctWindowAlive(uint16_t base, int& vendorId, int& chipId, int& chipRev)
+{
+    const int vhi = NctReadByte(base, kNctVendorIdHigh);
+    const int vlo = NctReadByte(base, kNctVendorIdLow);
+    vendorId = (vhi >= 0 && vlo >= 0) ? ((vhi << 8) | vlo) : -1;
+
+    chipId  = NctReadByte(base, 0x000);
+    chipRev = NctReadByte(base, 0x001);
+
+    return vendorId == kNuvotonVendorId;
+}
+
+// Identifies the Super I/O chip on both port pairs and returns the I/O base of
+// its hardware monitor window, or 0 when no supported chip answers.
+static uint16_t ProbeSuperIoHwm()
+{
+    // Need the port I/O backend.
+    if (!Ring0Msr::IsOpen()) return 0;
+
+    // Canary: port 0x61 (8042 keyboard status) exists on every x86 PC and is
+    // never claimed by a PnP device, so a successful byte read proves that the
+    // loaded driver implements its port IOCTLs at all.
+    uint8_t canary = 0;
+    const bool canaryOk = Ring0Msr::ReadIoPortByte(0x61, canary);
+    LOGI("Super I/O: canary port 0x61 ok=%d value=0x%02X",
+         canaryOk ? 1 : 0, canary);
+
+    static const uint16_t kCfgPorts[] = { 0x2E, 0x4E };
+
+    // Base addresses reported by the monitor logical devices of both port
+    // pairs. A candidate is only usable once it proves that it decodes.
+    struct Candidate { uint16_t cfgPort; uint16_t base; };
+    Candidate candidates[16];
+    int nCand = 0;
+
+    for (const uint16_t cfg : kCfgPorts)
+    {
+        // Leave config mode first so the following reads are meaningful.
+        Ring0Msr::WriteIoPortByte(cfg, 0xAA);
+        Sleep(1);
+
+        // Unlock key used by Nuvoton, ITE and SMSC/Fintek compatible chips.
+        if (!Ring0Msr::WriteIoPortByte(cfg, 0x87) ||
+            !Ring0Msr::WriteIoPortByte(cfg, 0x87))
+        {
+            LOGI("Super I/O 0x%02X: config mode write rejected by the driver", cfg);
+            continue;
+        }
+        Sleep(1);
+
+        const int idHi = ReadSuperIoConfig(cfg, 0x20);
+        const int idLo = ReadSuperIoConfig(cfg, 0x21);
+        if (idHi < 0 || idLo < 0)
+        {
+            LOGI("Super I/O 0x%02X: device ID read failed", cfg);
+            Ring0Msr::WriteIoPortByte(cfg, 0xAA);
+            continue;
+        }
+
+        const unsigned int chipId =
+            ((static_cast<unsigned int>(idHi) << 8) |
+             static_cast<unsigned int>(idLo)) & 0xFFF8u;
+        if (chipId != kNct6793Id)
+        {
+            LOGI("Super I/O 0x%02X: device ID 0x%04X, only NCT6793 (0x%04X) is decoded",
+                 cfg, chipId, kNct6793Id);
+            Ring0Msr::WriteIoPortByte(cfg, 0xAA);
+            continue;
+        }
+        LOGI("Super I/O 0x%02X: Nuvoton NCT6793, device ID 0x%04X", cfg, chipId);
+
+        // The NCT679x family splits its hardware monitor function over several
+        // logical devices, and the firmware picks the I/O address of the
+        // decoded window. Walk the monitor logical devices, clear the I/O space
+        // lock the NCT679x uses to keep a window dark, and collect every base
+        // address the chip reports.
+        static const uint8_t kHwmLd[] = { 0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0x10, 0x11, 0x12 };
+
+        for (const uint8_t ld : kHwmLd)
+        {
+            if (!WriteSuperIoConfig(cfg, 0x07, ld))
+                break;
+            Sleep(1);
+            if (ReadSuperIoConfig(cfg, 0x07) != static_cast<int>(ld))
+                continue;
+
+            const int ena  = ReadSuperIoConfig(cfg, 0x30);
+            const int hi   = ReadSuperIoConfig(cfg, 0x60);
+            const int lo   = ReadSuperIoConfig(cfg, 0x61);
+            const int lock = ReadSuperIoConfig(cfg, kNct6791RegIoLock);
+            // The second I/O range of a logical device: the NCT679x keeps part
+            // of its monitor registers behind it, so log it for LD 0x0B.
+            const int hi2  = ReadSuperIoConfig(cfg, 0x62);
+            const int lo2  = ReadSuperIoConfig(cfg, 0x63);
+
+            if (lock >= 0 && (lock & 0x10))
+            {
+                // While bit 4 is set the window is not decoded; both the kernel
+                // driver and LibreHardwareMonitor clear it before reading.
+                WriteSuperIoConfig(cfg, kNct6791RegIoLock,
+                                   static_cast<uint8_t>(lock & ~0x10));
+            }
+
+            // Registers of an unimplemented logical device read back as all
+            // ones, which would produce the bogus base 0xFFF0.
+            if (hi < 0 || lo < 0 || hi == 0xFF)
+                continue;
+
+            // A base address is only trusted when a second read agrees, the
+            // check LibreHardwareMonitor performs before using it.
+            Sleep(1);
+            const int hiV = ReadSuperIoConfig(cfg, 0x60);
+            const int loV = ReadSuperIoConfig(cfg, 0x61);
+            if (hiV != hi || loV != lo)
+            {
+                LOGI("Super I/O 0x%02X: LD 0x%02X base address read is unstable "
+                     "(0x%02X%02X then 0x%02X%02X)", cfg,
+                     static_cast<unsigned int>(ld),
+                     hi & 0xFF, lo & 0xFF, hiV & 0xFF, loV & 0xFF);
+                continue;
+            }
+
+            // A base address is a 16 bit value aligned to 16 bytes.
+            const unsigned int base =
+                ((static_cast<unsigned int>(hi) << 8) |
+                 static_cast<unsigned int>(lo)) & 0xFFF0u;
+            if (base == 0)
+                continue;
+
+            bool dup = false;
+            for (int i = 0; i < nCand; ++i)
+            {
+                if (candidates[i].base == base) { dup = true; break; }
+            }
+            if (!dup && nCand < static_cast<int>(sizeof(candidates) / sizeof(candidates[0])))
+            {
+                candidates[nCand].cfgPort = cfg;
+                candidates[nCand].base    = static_cast<uint16_t>(base);
+                ++nCand;
+            }
+
+            // The secondary range of the monitor logical device holds part of
+            // the tachometer registers on the NCT679x, so it is a candidate too.
+            const unsigned int base2 =
+                (hi2 == 0xFF || hi2 < 0 || lo2 < 0)
+                    ? 0u
+                    : (((static_cast<unsigned int>(hi2) << 8) |
+                        static_cast<unsigned int>(lo2)) & 0xFFF0u);
+            if (base2 != 0 && base2 != base)
+            {
+                dup = false;
+                for (int i = 0; i < nCand; ++i)
+                {
+                    if (candidates[i].base == base2) { dup = true; break; }
+                }
+                if (!dup && nCand < static_cast<int>(sizeof(candidates) / sizeof(candidates[0])))
+                {
+                    candidates[nCand].cfgPort = cfg;
+                    candidates[nCand].base    = static_cast<uint16_t>(base2);
+                    ++nCand;
+                }
+            }
+
+            LOGI("Super I/O 0x%02X: LD 0x%02X enable=0x%02X lock=0x%02X io=0x%03X secondary=0x%03X",
+                 cfg, static_cast<unsigned int>(ld),
+                 static_cast<unsigned int>(ena & 0xFF),
+                 static_cast<unsigned int>(lock & 0xFF), base, base2);
+        }
+
+        Ring0Msr::WriteIoPortByte(cfg, 0xAA);
+        Sleep(1);
+    }
+
+    // Some firmware writes an address into the monitor logical device without
+    // enabling the decode of that range, while the chip itself still answers on
+    // one of the addresses the NCT677x and NCT679x families ship with. Test
+    // those as well, and leave config mode before doing it.
+    static const uint16_t kDefaultWindows[] = { 0x290, 0x490, 0x680, 0x690 };
+    for (const uint16_t b : kDefaultWindows)
+    {
+        bool dup = false;
+        for (int i = 0; i < nCand; ++i)
+        {
+            if (candidates[i].base == b) { dup = true; break; }
+        }
+        if (dup || nCand >= static_cast<int>(sizeof(candidates) / sizeof(candidates[0])))
+            continue;
+        // Only a monitor logical device that is active decodes its window, so
+        // the search is wrapped up before the fixed addresses are probed.
+        candidates[nCand].cfgPort = 0x00;
+        candidates[nCand].base    = b;
+        ++nCand;
+    }
+
+    // The chip may report more than one window and the firmware may leave the
+    // one it names undecoded, so use the first candidate that answers with the
+    // Nuvoton vendor ID.
+    for (int i = 0; i < nCand; ++i)
+    {
+        int vendor = 0, chipId = 0, chipRev = 0;
+        if (!NctWindowAlive(candidates[i].base, vendor, chipId, chipRev))
+        {
+            if (candidates[i].cfgPort)
+                LOGI("Super I/O 0x%02X: window 0x%03X does not report the Nuvoton "
+                     "vendor ID, probe reads vendor 0x%04X, bank 0 regs 0x00=0x%02X "
+                     "0x01=0x%02X",
+                     candidates[i].cfgPort, candidates[i].base,
+                     vendor & 0xFFFF, chipId & 0xFF, chipRev & 0xFF);
+            else
+                LOGI("Super I/O: default window 0x%03X does not report the Nuvoton "
+                     "vendor ID, probe reads vendor 0x%04X, bank 0 regs 0x00=0x%02X "
+                     "0x01=0x%02X",
+                     candidates[i].base, vendor & 0xFFFF, chipId & 0xFF, chipRev & 0xFF);
+            continue;
+        }
+        LOGI("Super I/O: monitor window at 0x%03X, index 0x%03X data 0x%03X, "
+             "vendor ID 0x%04X, bank 0 regs 0x00=0x%02X 0x01=0x%02X",
+             candidates[i].base,
+             static_cast<unsigned int>(candidates[i].base) + kNctIndexOffset,
+             static_cast<unsigned int>(candidates[i].base) + kNctDataOffset,
+             vendor & 0xFFFF, chipId & 0xFF, chipRev & 0xFF);
+        return candidates[i].base;
+    }
+
+    LOGI("Super I/O: no monitor window decodes - the firmware keeps the "
+         "hardware monitor block disabled, its registers cannot be read");
+    return 0;
+}
+
+// Reads one byte of the monitor window. The index port is base + 5 and the data
+// port base + 6; registers above 0xFF live in a bank selected through index
+// register 0x4E (the sequence used by the nct6775 driver and by
+// LibreHardwareMonitor). Returns the value, or -1 when a port operation failed.
+static int NctReadByte(uint16_t base, uint16_t reg)
+{
+    const uint8_t bank = static_cast<uint8_t>(reg >> 8);
+    if (!Ring0Msr::WriteIoPortByte(static_cast<uint16_t>(base + kNctIndexOffset),
+                                   kNctBankReg))                                return -1;
+    if (!Ring0Msr::WriteIoPortByte(static_cast<uint16_t>(base + kNctDataOffset),
+                                   bank))                                       return -1;
+    if (!Ring0Msr::WriteIoPortByte(static_cast<uint16_t>(base + kNctIndexOffset),
+                                   static_cast<uint8_t>(reg & 0xFF)))           return -1;
+    uint8_t v = 0;
+    if (!Ring0Msr::ReadIoPortByte(static_cast<uint16_t>(base + kNctDataOffset), v))
+        return -1;
+    return static_cast<int>(v);
+}
+
+// Decodes the fan tachometers of the monitor window the way LibreHardwareMonitor
+// and the Linux nct6775 driver do. The 13 bit counter of a channel is built from
+// the byte at the channel register (its high part) and the low 5 bits of the
+// byte at the next address. A counter at or above the maximum means the
+// tachometer sees a stopped fan, a counter below the minimum is too slow to be
+// converted; otherwise RPM is 1350000 / count. Channel 1 is the CPU fan header
+// on the reference design of this chip family, and it is the first entry of the
+// register table, so the first channel that reports a fan is used. Returns the
+// RPM, or -1 when no channel reports a tachometer. verbose logs every channel
+// so the sensor mapping can be checked in the log.
+static int ReadSuperIoFanRpm(uint16_t base, bool verbose)
+{
+    static constexpr size_t kFanChannels =
+        sizeof(kNctFanCountRegs) / sizeof(kNctFanCountRegs[0]);
+
+    if (verbose)
+    {
+        // Raw dump of the tachometer block, logged once per run. Different
+        // bytes in consecutive registers prove that the window index port
+        // really decodes, which the decoded RPM alone cannot show.
+        char dump[80];
+        int off = 0;
+        dump[0] = '\0';
+        for (unsigned int r = 0xB0; r <= 0xBF; ++r)
+        {
+            if (off >= static_cast<int>(sizeof(dump)) - 4)
+                break;
+            const int v = NctReadByte(base, static_cast<uint16_t>(0x400 + r));
+            const int n = snprintf(dump + off, sizeof(dump) - off, "%02X ",
+                                   v < 0 ? 0 : (v & 0xFF));
+            if (n <= 0) break;
+            off += n;
+        }
+        LOGI("Super I/O bank 4, registers 0xB0..0xBF: %s", dump);
+    }
+
+    int rpm = -1;
+    for (size_t i = 0; i < kFanChannels; ++i)
+    {
+        const uint16_t reg = kNctFanCountRegs[i];
+        const int hi = NctReadByte(base, reg);
+        const int lo = NctReadByte(base, static_cast<uint16_t>(reg + 1));
+        if (hi < 0 || lo < 0)
+        {
+            LOGI("Super I/O: tachometer register 0x%03X read failed",
+                 static_cast<unsigned int>(reg));
+            return -1;
+        }
+
+        const unsigned int count =
+            (static_cast<unsigned int>(hi) << 5) |
+            (static_cast<unsigned int>(lo) & 0x1Fu);
+
+        unsigned int val = 0;
+        if (count >= kNctMinFanCount && count < kNctMaxFanCount)
+            val = 1350000u / count;
+        if (val > kNctMaxFanRpm)
+            val = 0;                         // stuck register, not a real fan
+
+        if (verbose)
+            LOGI("Super I/O fan%u: count=0x%04X rpm=%u",
+                 static_cast<unsigned int>(i) + 1u, count, val);
+
+        if (val > 0 && rpm < 0)
+            rpm = static_cast<int>(val);
+    }
+    return rpm;
+}
+
+
+
 
 // Enumerate all properties of a WMI object and log them for diagnostics.
 static void DumpWmiObject(IWbemClassObject* pObj)

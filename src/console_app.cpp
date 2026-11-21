@@ -93,6 +93,15 @@ static std::string BuildProgress(const char* label, double percent, int cols)
     return out;
 }
 
+// Maps a tachometer value to the 0..100 scale BuildProgress expects. The GUI
+// and the web dashboard draw fan charts with a 0..3000 RPM range, so the bar
+// and the charts agree; passing RPM straight to BuildProgress would always
+// fill the bar.
+static double RpmToPercent(int rpm)
+{
+    return (rpm > 0) ? (static_cast<double>(rpm) / 30.0) : 0.0;
+}
+
 // ============================================================================
 // Console width
 // ============================================================================
@@ -268,10 +277,10 @@ static std::string BuildFrame(const CpuMetrics& cpu, const RamMetrics& ram,
     // CPU Fan - bar + value (only when sensor provides data)
     if (cpu.fanRpm > 0)
     {
-        const std::string bar = BuildProgress("CPU Fan", static_cast<double>(cpu.fanRpm), barCols);
-        out += "\n" + cCpuTemp + bar + " " + cReset;
+        const std::string bar = BuildProgress("CPU Fan", RpmToPercent(cpu.fanRpm), barCols);
+        out += "\n" + cGpuFan + bar + " " + cReset;
         snprintf(tmp, sizeof(tmp), "%5d RPM", cpu.fanRpm);
-        out += cCpuTemp + std::string(tmp) + cReset;
+        out += cGpuFan + std::string(tmp) + cReset;
     }
 
     // CPU Power - bar (percent of TDP) + value
@@ -351,7 +360,7 @@ static std::string BuildFrame(const CpuMetrics& cpu, const RamMetrics& ram,
             }
             else if (g.fanRpm > 0)
             {
-                const std::string bar = BuildProgress("Fan", static_cast<double>(g.fanRpm), barCols);
+                const std::string bar = BuildProgress("Fan", RpmToPercent(g.fanRpm), barCols);
                 out += "\n" + cGpuFan + bar + " " + cReset;
                 snprintf(tmp, sizeof(tmp), "%5d RPM", g.fanRpm);
                 out += cGpuFan + std::string(tmp) + cReset;
@@ -505,6 +514,7 @@ int main(int argc, char* argv[])
         wcsncpy(cpu.cpuName, cpuData.cpuName.c_str(), sizeof(cpu.cpuName) / sizeof(wchar_t) - 1);
         cpu.loadPercent  = cpuData.loadPercent;
         cpu.temperature  = cpuData.temperature;
+        cpu.fanRpm       = cpuData.fanRpm;
         cpu.uptimeMs     = cpuData.uptimeMs;
         cpu.powerWatts   = cpuData.powerWatts;
         cpu.tdpWatts     = cpuData.tdpWatts;
@@ -557,6 +567,7 @@ int main(int argc, char* argv[])
         strncpy(cpu.cpuName, cpuData.cpuName.c_str(), sizeof(cpu.cpuName) - 1);
         cpu.loadPercent  = cpuData.loadPercent;
         cpu.temperature  = cpuData.temperature;
+        cpu.fanRpm       = cpuData.fanRpm;
         cpu.uptimeMs     = cpuData.uptimeMs;
         cpu.powerWatts   = cpuData.powerWatts;
         cpu.tdpWatts     = cpuData.tdpWatts;

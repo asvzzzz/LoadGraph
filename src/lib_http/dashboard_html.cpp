@@ -268,7 +268,7 @@ function updateCpu(d) {
   // CPU Fan.
   if (d.fan_rpm > 0) {
     document.getElementById('fanCell').style.display = '';
-    if (!fanChart) fanChart = makeChart('fanChart', '#9c27b0', 3000);
+    if (!fanChart) fanChart = makeChart('fanChart', C.gpuFan, 3000);
     document.getElementById('fanVal').textContent = d.fan_rpm + ' RPM';
     fanChart.push(d.fan_rpm);
   } else {

@@ -20,6 +20,12 @@ namespace Ring0Msr
     // Read a 32-bit I/O port. Returns the value read, or 0 on failure.
     uint32_t ReadIoPortDword(uint16_t port);
 
+    // Read one byte from an I/O port. Super I/O config/data ports are 8 bit
+    // wide, so this is the read width used by the hardware monitor probe.
+    // outValue receives the value; the return value says whether the read
+    // actually reached the hardware.
+    bool ReadIoPortByte(uint16_t port, uint8_t& outValue);
+
     // Write a byte to an I/O port. Returns true on success.
     bool WriteIoPortByte(uint16_t port, uint8_t value);
 

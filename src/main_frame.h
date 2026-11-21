@@ -84,6 +84,12 @@ private:
     GraphPanel* m_cpuTempGraph  = nullptr;
     GraphPanel* m_cpuFanGraph   = nullptr;
 
+    // Sizer of the CPU Temp row. Kept because the fan chart can appear later:
+    // a sensor may start reporting only after the UI was built (Super I/O
+    // probe, LibreHardwareMonitor started afterwards), and the row is then
+    // extended in place, like the web dashboard shows its Fan cell.
+    wxBoxSizer* m_cpuTempRow = nullptr;
+
     // ---- CPU power row (watts) ----
     GraphPanel* m_cpuPowerGraph = nullptr;
 
@@ -136,6 +142,17 @@ private:
                        const std::map<std::string, bool>& initialState);
     void OnViewToggle(wxCommandEvent& evt);
     void ApplyHeightAdjustment(const std::string& key, bool showingItem);
+
+    // Adds the CPU fan chart to the CPU Temp row when the fan sensor starts
+    // reporting data: it can appear only after the UI was built, and the web
+    // dashboard already shows its Fan cell as soon as fan_rpm > 0.
+    void EnsureCpuFanPanel(int fanRpm);
+
+    // Inserts one checkbox into the View menu right after the entry named by
+    // afterKey. Needed for panels that are created at run time, because the
+    // menu is built once from the panels that exist at startup.
+    void AddViewToggleItem(const std::string& key, const wxString& label,
+                           const std::string& afterKey);
 
     // UI created flag (Linux: deferred to first timer tick).
     bool    m_uiCreated = false;

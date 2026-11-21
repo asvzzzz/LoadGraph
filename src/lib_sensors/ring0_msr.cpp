@@ -43,20 +43,45 @@
 static constexpr uint32_t kOlsType = 40000;
 static constexpr uint32_t kIoctlReadMsr     = CTL_CODE(kOlsType, 0x821, METHOD_BUFFERED, FILE_ANY_ACCESS);
 static constexpr uint32_t kIoctlWriteMsr   = CTL_CODE(kOlsType, 0x822, METHOD_BUFFERED, FILE_ANY_ACCESS);
-// I/O port access: instruction byte + USHORT port + ULONG value (input), ULONG data (output).
-static constexpr uint32_t kIoctlReadPortDword = CTL_CODE(kOlsType, 0x802, METHOD_BUFFERED, FILE_ANY_ACCESS);
-static constexpr uint32_t kIoctlWritePortByte = CTL_CODE(kOlsType, 0x803, METHOD_BUFFERED, FILE_ANY_ACCESS);
+// I/O port access IOCTLs. Function codes and access masks follow the
+// OpenLibSys/WinRing0 driver interface (OlsIoctl.h): the read requests are
+// declared with FILE_READ_ACCESS and the write requests with FILE_WRITE_ACCESS,
+// so the CTL_CODE value depends on the access bits as well. Using
+// FILE_ANY_ACCESS or the wrong function code makes the driver reply with
+// STATUS_INVALID_PARAMETER, which is why an earlier version of this file could
+// read MSRs (0x821/0x822 are FILE_ANY_ACCESS) but never touched a port.
+static constexpr uint32_t kIoctlReadPortByte   = CTL_CODE(kOlsType, 0x833, METHOD_BUFFERED, FILE_READ_ACCESS);
+static constexpr uint32_t kIoctlReadPortDword  = CTL_CODE(kOlsType, 0x835, METHOD_BUFFERED, FILE_READ_ACCESS);
+static constexpr uint32_t kIoctlWritePortByte  = CTL_CODE(kOlsType, 0x836, METHOD_BUFFERED, FILE_WRITE_ACCESS);
 
-// Instruction opcodes for I/O port IOCTL.
-static constexpr uint8_t kOlsReadPortDword  = 0x01;
-static constexpr uint8_t kOlsWritePortByte  = 0x05;
-
-// Input buffer layout for port I/O: [instruction:1][port:2(padded)][value:4]
-struct OlsPortIn {
-    uint8_t  instruction;
-    uint16_t pad_port;
-    uint32_t value;
+// Read input buffer: the driver takes the port number as a ULONG at offset 0
+// and requires the input length to be at least sizeof(ULONG_PTR), so the
+// trailing padding is part of the request.
+struct OlsPortReadIn {
+    uint32_t port;
+    uint32_t padding;
 };
+
+// Write input buffer: OLS_WRITE_IO_PORT_INPUT is ULONG PortNumber followed by
+// the value union (pack(4)), i.e. 8 bytes with the byte value in the low byte
+// of the second DWORD.
+struct OlsPortWriteIn {
+    uint32_t port;
+    uint32_t data;
+};
+
+// Reports the first failure of every port operation kind. A rejected request
+// (function code not implemented by the loaded driver, or a port range claimed
+// by a PnP device) is the most common reason a Super I/O read returns nothing,
+// and it must not stay silent. Only the sensor polling thread calls the port
+// helpers, so the plain static bit mask below is race-free.
+static void LogPortIoFailure(unsigned int which, const char* what, DWORD err)
+{
+    static unsigned int s_seen = 0;   // one bit per 'which'
+    if (s_seen & (1u << which)) return;
+    s_seen |= (1u << which);
+    LOGI("MSR: port %s failed err=%lu - Super I/O access unavailable", what, err);
+}
 
 namespace Ring0Msr
 {
@@ -70,9 +95,12 @@ namespace Ring0Msr
     typedef bool(__stdcall* FnIsMsr)();
     typedef int(__stdcall* FnGetDllStatus)();
     typedef int(__stdcall* FnGetDriverType)();
-    // WinRing0 I/O port access (optional - not present in all builds).
+    // WinRing0 I/O port access (optional - not present in all builds). The
+    // export names are the OlsApi.h ones: ReadIoPortByte / ReadIoPortDword /
+    // WriteIoPortByte, undecorated in the x64 build.
     typedef uint32_t(__stdcall* FnReadPortDword)(uint16_t);
-    typedef void(__stdcall* FnWritePortByte)(uint16_t, uint8_t);
+    typedef uint8_t(__stdcall* FnReadPortByte)(uint16_t);
+    typedef bool(__stdcall* FnWritePortByte)(uint16_t, uint8_t);
 
     static HMODULE            s_hDll       = nullptr;
     static FnInitializeOls    s_fnInit     = nullptr;
@@ -82,6 +110,7 @@ namespace Ring0Msr
     static FnGetDllStatus     s_fnDllStatus = nullptr;
     static FnGetDriverType    s_fnDrvType  = nullptr;
     static FnReadPortDword    s_fnReadPort = nullptr;
+    static FnReadPortByte     s_fnReadPortB = nullptr;
     static FnWritePortByte    s_fnWrPortB  = nullptr;
 
     // Driver-state fields (used when backend == Driver).
@@ -152,9 +181,11 @@ namespace Ring0Msr
         s_fnDrvType   = reinterpret_cast<FnGetDriverType>(
                         GetProcAddress(s_hDll, "GetDriverType"));
         s_fnReadPort  = reinterpret_cast<FnReadPortDword>(
-                        GetProcAddress(s_hDll, "ReadPortDword"));
+                        GetProcAddress(s_hDll, "ReadIoPortDword"));
+        s_fnReadPortB = reinterpret_cast<FnReadPortByte>(
+                        GetProcAddress(s_hDll, "ReadIoPortByte"));
         s_fnWrPortB   = reinterpret_cast<FnWritePortByte>(
-                        GetProcAddress(s_hDll, "WritePortByte"));
+                        GetProcAddress(s_hDll, "WriteIoPortByte"));
 
         if (!s_fnInit || !s_fnDeinit || !s_fnRdmsr)
         {
@@ -215,7 +246,7 @@ namespace Ring0Msr
                                  reinterpret_cast<LPBYTE>(path), &size) == ERROR_SUCCESS
                 && path[0])
             {
-                LOGI("MSR driver from registry: %S", path);
+                LOGI("MSR driver from registry: %ls", path);
                 RegCloseKey(hKey);
                 return std::wstring(path);
             }
@@ -246,7 +277,7 @@ namespace Ring0Msr
             path += name;
             if (GetFileAttributesW(path.c_str()) != INVALID_FILE_ATTRIBUTES)
             {
-                LOGI("MSR driver found: %s", path.c_str());
+                LOGI("MSR driver found: %ls", path.c_str());
                 return path;
             }
         }
@@ -268,7 +299,7 @@ namespace Ring0Msr
             if (h != INVALID_HANDLE_VALUE)
             {
                 s_hDevice = h;
-                LOGI("MSR: driver open OK via %s", devName);
+                LOGI("MSR: driver open OK via %ls", devName);
                 s_drvOpened = true;
                 return true;
             }
@@ -295,7 +326,7 @@ namespace Ring0Msr
                     continue;
                 }
             }
-            LOGI("MSR: using existing service %s", knownName);
+            LOGI("MSR: using existing service %ls", knownName);
             return true;
         }
         return false;
@@ -637,6 +668,7 @@ namespace Ring0Msr
         s_fnRdmsr   = nullptr;
         s_fnIsMsr   = nullptr;
         s_fnReadPort = nullptr;
+        s_fnReadPortB = nullptr;
         s_fnWrPortB  = nullptr;
         s_drvOpened  = false;
         s_svcCreated = false;
@@ -645,26 +677,63 @@ namespace Ring0Msr
 
     bool IsOpen() { return s_backend != Backend::None; }
 
+    // Read one byte from an I/O port. Super I/O config and data ports are 8
+    // bit wide, so this is the only safe read width for the LPC interface.
+    // Returns true when the value came from the hardware.
+    bool ReadIoPortByte(uint16_t port, uint8_t& outValue)
+    {
+        outValue = 0;
+
+        // DLL backend: WinRing0x64.dll export ReadIoPortByte.
+        if (s_backend == Backend::Dll)
+        {
+            if (!s_fnReadPortB)
+            {
+                LogPortIoFailure(2, "byte read export missing", 0);
+                return false;
+            }
+            outValue = s_fnReadPortB(port);
+            return true;
+        }
+
+        if (s_backend != Backend::Driver || !s_drvOpened ||
+            s_hDevice == INVALID_HANDLE_VALUE)
+            return false;
+
+        OlsPortReadIn inp{};
+        inp.port     = port;
+        inp.padding  = 0;
+
+        uint8_t data = 0;
+        DWORD bytesReturned = 0;
+        if (!DeviceIoControl(s_hDevice, kIoctlReadPortByte,
+                             &inp, sizeof(inp),
+                             &data, sizeof(data),
+                             &bytesReturned, nullptr))
+        {
+            LogPortIoFailure(0, "byte read", GetLastError());
+            return false;
+        }
+        outValue = data;
+        return true;
+    }
+
     // Read a 32-bit I/O port. Returns the value read, or 0 on failure.
-    // Works via DLL (ReadPortDword export) or driver IOCTL path.
+    // Works via DLL (ReadIoPortDword export) or driver IOCTL path. A dword read
+    // decodes four consecutive ports, so it must never be used on the Super
+    // I/O register pair - ReadIoPortByte is used there instead.
     uint32_t ReadIoPortDword(uint16_t port)
     {
-        // DLL backend: direct call to WinRing0x64.dll's ReadPortDword.
         if (s_backend == Backend::Dll && s_fnReadPort)
             return s_fnReadPort(port);
 
-        // Driver backend: IOCTL path.
         if (s_backend != Backend::Driver || !s_drvOpened ||
             s_hDevice == INVALID_HANDLE_VALUE)
             return 0;
 
-        OlsPortIn inp{};
-        inp.instruction = kOlsReadPortDword;
-        inp.pad_port    = 0;   // port is little-endian at offset 1
-        inp.value       = 0;
-        // Pack port number into bytes 1-2 of the buffer.
-        *reinterpret_cast<uint16_t*>(reinterpret_cast<uint8_t*>(&inp) + 1)
-            = port;
+        OlsPortReadIn inp{};
+        inp.port     = port;
+        inp.padding  = 0;
 
         uint32_t outData = 0;
         DWORD bytesReturned = 0;
@@ -672,7 +741,10 @@ namespace Ring0Msr
                              &inp, sizeof(inp),
                              &outData, sizeof(outData),
                              &bytesReturned, nullptr))
+        {
+            LogPortIoFailure(3, "dword read", GetLastError());
             return 0;
+        }
         return outData;
     }
 
@@ -682,12 +754,9 @@ namespace Ring0Msr
         if (s_backend == Backend::Dll)
         {
             if (s_fnWrPortB)
-            {
-                s_fnWrPortB(port, value);
-                return true;
-            }
-            // DLL backend loaded but WritePortByte not exported - skip driver.
-            LOGI("MSR: WritePortByte not available in DLL, skipping I/O write.");
+                return s_fnWrPortB(port, value);
+            // DLL backend loaded but WriteIoPortByte not exported.
+            LogPortIoFailure(4, "byte write export missing", 0);
             return false;
         }
 
@@ -695,17 +764,20 @@ namespace Ring0Msr
             s_hDevice == INVALID_HANDLE_VALUE)
             return false;
 
-        OlsPortIn inp{};
-        inp.instruction = kOlsWritePortByte;
-        *reinterpret_cast<uint16_t*>(reinterpret_cast<uint8_t*>(&inp) + 1)
-            = port;
-        inp.value = value;
+        OlsPortWriteIn inp{};
+        inp.port = port;
+        inp.data = value;
 
         DWORD bytesReturned = 0;
-        return DeviceIoControl(s_hDevice, kIoctlWritePortByte,
-                               &inp, sizeof(inp),
-                               nullptr, 0,
-                               &bytesReturned, nullptr);
+        if (!DeviceIoControl(s_hDevice, kIoctlWritePortByte,
+                             &inp, sizeof(inp),
+                             nullptr, 0,
+                             &bytesReturned, nullptr))
+        {
+            LogPortIoFailure(1, "byte write", GetLastError());
+            return false;
+        }
+        return true;
     }
 }
 
