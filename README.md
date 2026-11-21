@@ -1,6 +1,6 @@
 # LoadGraph
 
-Real-time system resource monitor tailored for visual oversight of local LLM workloads. Windows 10/11 + Linux (Ubuntu 22.04 / Linux Mint). One graph per metric, single window, no tabs, no scrollbar.
+Real-time system resource monitor tailored for visual oversight of local LLM workloads. Windows 7 SP1/8.1/10/11 + Linux (Ubuntu 22.04 / Linux Mint). One graph per metric, single window, no tabs, no scrollbar.
 
 [Версия на русском языке](README_rus.md)
 
@@ -8,7 +8,9 @@ Real-time system resource monitor tailored for visual oversight of local LLM wor
 
 ## Download
 
-A pre-built 64-bit Windows binary is available at [andyk.ru/files/LoadGraph.zip](https://andyk.ru/files/LoadGraph.zip). Extract and run `LoadGraph.exe` — no installation required. Place a WinRing0-compatible `.sys` file next to the executable for CPU temperature monitoring (see [Driver](#driver)).
+A pre-built 64-bit Windows binary is available at [andyk.ru/files/LoadGraph.zip](https://andyk.ru/files/LoadGraph.zip). Extract and run `LoadGraph.exe` — no installation required. The binary is self-contained: the C runtime is linked statically, so *no* "Visual C++ Redistributable" has to be installed and nothing is copied next to the executable. Place a WinRing0-compatible `.sys` file next to the executable for CPU temperature monitoring (see [Driver](#driver)).
+
+> **Windows 7 note:** the x64 build runs on Windows 7 SP1 and later. Windows 7 RTM (no service pack) is not supported, and the console version (`LoadGraphTTY`) relies on ANSI escape sequences that the Windows 7 console does not understand - use the GUI there.
 
 ## Why this exists
 
@@ -142,12 +144,37 @@ On systems where HVCI / Memory Integrity is disabled and the CPU does not block 
 
 ### Windows (MSVC)
 
+LoadGraph links the C runtime statically (`/MT`), so **every** static library it links
+must be built with the static CRT as well - including wxWidgets. Mixing `/MT` objects
+with `/MD`-built libraries would embed a second CRT in the process (two heaps, two
+locale states) and would re-introduce the `VCRUNTIME140.dll` dependency. Build the wx
+libraries once like this:
+
+```powershell
+cmake -S C:\wxWidgets -B C:\wxWidgets\build_static_mt -G "Visual Studio 17 2022" -A x64 `
+      -DBUILD_SHARED_LIBS=OFF -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded
+cmake --build C:\wxWidgets\build_static_mt --config Release `
+      --target wxbase wxcore wxpng wxjpeg wxtiff wxzlib wxregex
+```
+
+Then build the application:
+
 ```powershell
 cd build
 cmake .. -G "Visual Studio 17 2022" -A x64
 cmake --build . --config Release
 .\bin\Release\LoadGraph.exe
 ```
+
+`CMakeLists.txt` picks the libraries up from `C:\wxWidgets\build_static_mt\lib\vc_x64_lib`
+(`-DWX_WIN_BUILD_DIR=<dir>` and `-DWX_CONFIG_PATH=<root>` override that) and stops with a
+message telling you to run the commands above if they are missing. Only `Release` is
+supported for the GUI: a `Debug` build needs the debug wx libraries
+(`wxmsw32ud_core.lib` etc.), which the commands above do not produce.
+
+The Windows targets pin `_WIN32_WINNT=0x0601` and link with `/SUBSYSTEM:WINDOWS,6.01` /
+`/SUBSYSTEM:CONSOLE,6.01`, so the SDK headers reject any API newer than Windows 7 and the
+PE header declares Windows 7 as the minimum OS.
 
 ### Linux
 

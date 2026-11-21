@@ -1,6 +1,6 @@
 # LoadGraph
 
-Монитор системных ресурсов в реальном времени, созданный для визуального контроля локальных LLM-нагрузок. Windows 10/11 + Linux (Ubuntu 22.04 / Linux Mint). Одна диаграмма на метрику, одно окно, без вкладок и полосы прокрутки.
+Монитор системных ресурсов в реальном времени, созданный для визуального контроля локальных LLM-нагрузок. Windows 7 SP1/8.1/10/11 + Linux (Ubuntu 22.04 / Linux Mint). Одна диаграмма на метрику, одно окно, без вкладок и полосы прокрутки.
 
 [English version](README.md)
 
@@ -8,7 +8,9 @@
 
 ## Скачать
 
-Предсобранный 64-битный Windows-бинарь доступен по адресу [andyk.ru/files/LoadGraph.zip](https://andyk.ru/files/LoadGraph.zip). Распакуйте и запустите `LoadGraph.exe` — установка не требуется. Для мониторинга температуры CPU поместите совместимый с WinRing0 файл `.sys` рядом с исполняемым (см. [Драйвер](#драйвер)).
+Предсобранный 64-битный Windows-бинарь доступен по адресу [andyk.ru/files/LoadGraph.zip](https://andyk.ru/files/LoadGraph.zip). Распакуйте и запустите `LoadGraph.exe` — установка не требуется. Бинарь самодостаточен: Си-рантайм слинкован статически, поэтому устанавливать "Visual C++ Redistributable" не нужно и рядом с исполняемым файлом ничего не размещается. Для мониторинга температуры CPU поместите совместимый с WinRing0 файл `.sys` рядом с исполняемым (см. [Драйвер](#драйвер)).
+
+> **Примечание для Windows 7:** x64-сборка работает на Windows 7 SP1 и новее. Windows 7 RTM (без пакета обновлений) не поддерживается, а консольная версия (`LoadGraphTTY`) полагается на ANSI escape-последовательности, которые консоль Windows 7 не понимает — там используйте GUI.
 
 ## Зачем это нужно
 
@@ -141,12 +143,37 @@ WinRing0x64.sys
 
 ### Windows (MSVC)
 
+LoadGraph линкует Си-рантайм статически (`/MT`), поэтому **все** статические библиотеки,
+которые в него входят, должны быть собраны со статическим CRT — включая wxWidgets. Смешивание
+`/MT`-объектов с `/MD`-библиотеками добавило бы в процесс вторую копию CRT (две кучи, два
+состояния locale) и снова вернуло бы зависимость от `VCRUNTIME140.dll`. Соберите библиотеки wx
+один раз так:
+
+```powershell
+cmake -S C:\wxWidgets -B C:\wxWidgets\build_static_mt -G "Visual Studio 17 2022" -A x64 `
+      -DBUILD_SHARED_LIBS=OFF -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded
+cmake --build C:\wxWidgets\build_static_mt --config Release `
+      --target wxbase wxcore wxpng wxjpeg wxtiff wxzlib wxregex
+```
+
+Затем соберите приложение:
+
 ```powershell
 cd build
 cmake .. -G "Visual Studio 17 2022" -A x64
 cmake --build . --config Release
 .\bin\Release\LoadGraph.exe
 ```
+
+`CMakeLists.txt` берёт библиотеки из `C:\wxWidgets\build_static_mt\lib\vc_x64_lib`
+(переопределяется через `-DWX_WIN_BUILD_DIR=<каталог>` и `-DWX_CONFIG_PATH=<корень>`) и
+останавливается с подсказкой выполнить команды выше, если их нет. Для GUI поддерживается
+только `Release`: для `Debug` нужны debug-библиотеки wx (`wxmsw32ud_core.lib` и т.д.),
+которые команды выше не создают.
+
+Windows-цели фиксируют `_WIN32_WINNT=0x0601` и линкуются с `/SUBSYSTEM:WINDOWS,6.01` /
+`/SUBSYSTEM:CONSOLE,6.01`, поэтому заголовки SDK не дают использовать API новее Windows 7,
+а заголовок PE объявляет Windows 7 минимальной ОС.
 
 ### Linux
 

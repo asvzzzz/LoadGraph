@@ -5,6 +5,34 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+# ============================================================================
+# Windows: the binaries must run on a clean OS install (Windows 7 SP1+) with
+# nothing installed by the user.
+#
+# By default MSVC links the CRT dynamically, so the executables import
+# VCRUNTIME140.dll, VCRUNTIME140_1.dll, MSVCP140.dll and the Universal CRT
+# api-ms-win-crt-*.dll forwarders.  None of them exist on a fresh Windows
+# install (they come with the "Visual C++ Redistributable"), and the process
+# simply refuses to start with a missing-DLL error.  Selecting the static
+# runtime makes the linker pull the CRT (and the static UCRT) into the .exe,
+# so the only remaining imports are base system DLLs.
+#
+# IMPORTANT: every static library that is linked in must use the SAME runtime.
+# The wxWidgets libraries below are rebuilt with the static CRT as well -
+# mixing /MT application objects with /MD-built libraries would link two
+# independent CRT copies (two heaps, two locale states, two stack-protector
+# contexts) which is undefined behaviour.  See README, "Static CRT build".
+# ============================================================================
+if(MSVC)
+    # MultiThreaded = /MT (release), MultiThreadedDebug = /MTd (debug).
+    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+
+    # Windows 7 SP1 is the oldest supported OS.  Pinning the SDK API level makes
+    # the headers hide everything newer, so using a Windows 8+ API becomes a
+    # compile error instead of a "entry point not found" crash on the target.
+    add_compile_definitions(WINVER=0x0601 _WIN32_WINNT=0x0601)
+endif()
+
 # Force static library naming convention: lib<name>.a on Linux, <name>.lib on Windows.
 set(CMAKE_STATIC_LIBRARY_PREFIX "lib")
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
@@ -41,6 +69,13 @@ elseif(DEFINED ENV{WX_CONFIG})
     set(WX_CONFIG_EXECUTABLE "$ENV{WX_CONFIG}")
 elseif(WIN32)
     set(WX_CONFIG_PATH "C:/wxWidgets" CACHE PATH "wxWidgets installation root")
+    # Static wxWidgets libraries built with the STATIC MSVC CRT (/MT), matching
+    # CMAKE_MSVC_RUNTIME_LIBRARY above.  The plain "build_static" tree in this
+    # checkout was built with /MD and cannot be used any more: linking it into
+    # an /MT application would pull in VCRUNTIME140/MSVCP140 again and would
+    # create a second CRT copy inside the process.
+    set(WX_WIN_BUILD_DIR "build_static_mt" CACHE STRING
+        "Static-CRT wxWidgets build directory, relative to WX_CONFIG_PATH")
 else()
     find_program(WX_CONFIG_EXECUTABLE wx-config-3.2)
     if(NOT WX_CONFIG_EXECUTABLE)
@@ -91,20 +126,40 @@ if(DEFINED WX_CONFIG_EXECUTABLE AND NOT WIN32)
 endif()
 
 if(WIN32 AND DEFINED WX_CONFIG_PATH)
+    set(WX_LIB_DIR "${WX_CONFIG_PATH}/${WX_WIN_BUILD_DIR}/lib/vc_x64_lib")
     set(wxWidgets_INCLUDE_DIRS
         "${WX_CONFIG_PATH}/include"
-        "${WX_CONFIG_PATH}/build_static/lib/vc_x64_lib/mswu"
-        "${WX_CONFIG_PATH}/build_static/lib/vc_x64_lib/mswu/wx"
+        "${WX_LIB_DIR}/mswu"
+        "${WX_LIB_DIR}/mswu/wx"
     )
     set(wxWidgets_LIBRARIES
-        "${WX_CONFIG_PATH}/build_static/lib/vc_x64_lib/wxmsw32u_core.lib"
-        "${WX_CONFIG_PATH}/build_static/lib/vc_x64_lib/wxbase32u.lib"
-        "${WX_CONFIG_PATH}/build_static/lib/vc_x64_lib/wxpng.lib"
-        "${WX_CONFIG_PATH}/build_static/lib/vc_x64_lib/wxtiff.lib"
-        "${WX_CONFIG_PATH}/build_static/lib/vc_x64_lib/wxjpeg.lib"
-        "${WX_CONFIG_PATH}/build_static/lib/vc_x64_lib/wxregexu.lib"
-        "${WX_CONFIG_PATH}/build_static/lib/vc_x64_lib/wxzlib.lib"
+        "${WX_LIB_DIR}/wxmsw32u_core.lib"
+        "${WX_LIB_DIR}/wxbase32u.lib"
+        "${WX_LIB_DIR}/wxpng.lib"
+        "${WX_LIB_DIR}/wxtiff.lib"
+        "${WX_LIB_DIR}/wxjpeg.lib"
+        "${WX_LIB_DIR}/wxregexu.lib"
+        "${WX_LIB_DIR}/wxzlib.lib"
     )
+
+    # Fail early with the exact recipe instead of failing at link time with a
+    # wall of unresolved externals.
+    set(_wx_missing "")
+    foreach(_wx_lib ${wxWidgets_LIBRARIES})
+        if(NOT EXISTS "${_wx_lib}")
+            string(APPEND _wx_missing "  ${_wx_lib}\n")
+        endif()
+    endforeach()
+    if(_wx_missing)
+        message(FATAL_ERROR
+            "Static-CRT wxWidgets libraries are missing:\n${_wx_missing}"
+            "Build them once with (release only, static CRT):\n"
+            "  cmake -S ${WX_CONFIG_PATH} -B ${WX_CONFIG_PATH}/${WX_WIN_BUILD_DIR} "
+            "-G \"Visual Studio 17 2022\" -A x64 -DBUILD_SHARED_LIBS=OFF "
+            "-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded\n"
+            "  cmake --build ${WX_CONFIG_PATH}/${WX_WIN_BUILD_DIR} --config Release "
+            "--target wxbase wxcore wxpng wxjpeg wxtiff wxzlib wxregex")
+    endif()
 endif()
 
 # ============================================================================
@@ -311,7 +366,11 @@ if(WIN32)
 
     target_compile_definitions(LoadGraphGUI PRIVATE _CRT_SECURE_NO_WARNINGS USE_HTTP_SERVER)
     target_compile_options(LoadGraphGUI PRIVATE /W4 /WX-)
-    target_link_options(LoadGraphGUI PRIVATE /SUBSYSTEM:WINDOWS)
+    # Subsystem version 6.01 = Windows 7: the PE header then declares the real
+    # minimum OS.  /OPT:REF /OPT:ICF drop the unused parts of the statically
+    # linked CRT and wxWidgets, keeping the single-file build small.
+    target_link_options(LoadGraphGUI PRIVATE
+        /SUBSYSTEM:WINDOWS,6.01 /OPT:REF /OPT:ICF)
 else()
     # Linux build.
     target_link_libraries(LoadGraphGUI
@@ -364,6 +423,9 @@ if(WIN32)
     )
     target_compile_definitions(LoadGraphTTY PRIVATE _CRT_SECURE_NO_WARNINGS USE_HTTP_SERVER)
     target_compile_options(LoadGraphTTY PRIVATE /W4 /WX-)
+    # Same Windows 7 baseline and dead-code stripping as LoadGraphGUI.
+    target_link_options(LoadGraphTTY PRIVATE
+        /SUBSYSTEM:CONSOLE,6.01 /OPT:REF /OPT:ICF)
 else()
     target_link_libraries(LoadGraphTTY
         loadgraph_logger
