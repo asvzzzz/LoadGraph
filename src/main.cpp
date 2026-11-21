@@ -5,6 +5,7 @@
 #include "metrics_api.h"
 #include "http_server.h"
 #include "app_config.h"
+#include "jsonl_log.h"
 #include "app_signals.h"
 #include <cstdio>
 #include <cstdlib>
@@ -117,6 +118,16 @@ public:
         Logger::Init((logDir + "/loadgraph.log").c_str());
 
         AppConfig appCfg = LoadAppConfig();
+
+        // JSONL snapshot log for the GUI as well: enabled by "log_file",
+        // MainFrame::OnTimer feeds JsonlLogSnapshot() every second and the
+        // writer keeps the 5 s cadence itself.
+        if (appCfg.log_file)
+        {
+            const std::string jsonlPath = logDir + "/loadgraph.jsonl";
+            JsonlLogSetPath(jsonlPath);
+            LOGI("JSONL log enabled: %s", jsonlPath.c_str());
+        }
 
         LOGI("Starting...");
         LOGI("wxWidgets %ls", wxVERSION_STRING);

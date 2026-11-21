@@ -84,7 +84,7 @@ Features:
 - **Colored output** — reads colors from `loadgraph.cfg`; Windows uses WinAPI console colors, Linux uses ANSI escape sequences
 - **UTF-8 progress bars** — `█` block characters for the filled part, plain spaces for the empty part, on both platforms
 - **Optional HTTP server** — pass `-port 9115` to serve the web dashboard alongside the TTY display
-- **File logging** — writes `loadgraph.jsonl` snapshots to the config directory when `"log_file": true` in config (one snapshot every 5 s, one file per run: the first snapshot rewrites it)
+- **File logging** — writes `loadgraph.jsonl` snapshots to the config directory when `"log_file": true` in config (one snapshot every 5 s, one file per run: the first snapshot rewrites it); the same writer runs in the GUI build too
 
 ### Screenshots
 
@@ -219,7 +219,7 @@ All settings are stored in a single `loadgraph.cfg` JSON file, in the same per-u
 - **Windows**: `%USERPROFILE%\.config\loadgraph\loadgraph.cfg`
 - **Linux**: `$XDG_CONFIG_HOME/loadgraph/loadgraph.cfg` (defaults to `~/.config/loadgraph/loadgraph.cfg`)
 
-`loadgraph.log` (GUI) and `loadgraph.jsonl` (console) are written to that same directory — nothing is placed next to the executable. Both are recreated on every start: the previous run's contents are discarded. When the HTTP server runs with `"http_log": true`, `loadgraph_http.log` (access log: client IPs, invalid request texts) is written there too.
+`loadgraph.log` (GUI) and `loadgraph.jsonl` (written by both the GUI and the console build when `"log_file": true`) are written to that same directory — nothing is placed next to the executable. Both are recreated on every start: the previous run's contents are discarded. When the HTTP server runs with `"http_log": true`, `loadgraph_http.log` (access log: client IPs, invalid request texts) is written there too.
 
 ```jsonc
 {

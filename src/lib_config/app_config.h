@@ -46,7 +46,7 @@ struct AppConfig
     // IP:port and raw request text. Created lazily on the first event and
     // appended to across restarts, never truncated.
     bool    http_log       = true;
-    bool    log_file       = false; // console (TTY): write loadgraph.jsonl snapshots when true
+    bool    log_file       = false; // GUI and console (TTY): write loadgraph.jsonl snapshots when true
     bool    superio_fan    = false; // enable Super I/O fan probe via WinRing0
     // Window position and size saved between sessions.
     // (0,0,0,0 means "let OS decide" - default placement).

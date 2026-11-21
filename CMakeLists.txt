@@ -188,10 +188,19 @@ set(COMMON_HEADERS
 # ============================================================================
 # libloadgraph_logger - minimal vfprintf-based logger, wxWidgets-free.
 # Linked by all other libs so the static member Logger::s_file is defined once.
+# Also hosts the JSONL metrics snapshot writer (jsonl_log) shared by the GUI
+# and the TTY: it only reads lib_sensors structs, so the include path below
+# carries the headers, no link dependency is needed.
 # ============================================================================
-add_library(loadgraph_logger STATIC src/lib_logger/logger.h src/lib_logger/logger.cpp)
+add_library(loadgraph_logger STATIC
+    src/lib_logger/logger.h
+    src/lib_logger/logger.cpp
+    src/lib_logger/jsonl_log.h
+    src/lib_logger/jsonl_log.cpp
+)
 target_include_directories(loadgraph_logger PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src/lib_logger
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/lib_sensors
     ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 
@@ -380,6 +389,7 @@ if(WIN32)
 else()
     # Linux build.
     target_link_libraries(LoadGraphGUI
+        loadgraph_logger
         loadgraph_sensors
         loadgraph_config
         loadgraph_theme

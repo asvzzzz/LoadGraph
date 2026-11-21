@@ -5,6 +5,7 @@
 #include "metrics_api.h"
 #include "storage_monitor.h"
 #include "app_config.h"
+#include "jsonl_log.h"
 #include "app_signals.h"
 #include "http_server.h"
 #include <wx/display.h>
@@ -713,6 +714,9 @@ void MainFrame::OnTimer(wxTimerEvent&)
 	RamData  ram{};
 	MetricsGetRam(ram);
 	const std::vector<GpuData> gpus = MetricsGetGpus();
+
+	// JSONL snapshot log (self-throttled to 5 s, no-op when disabled).
+	JsonlLogSnapshot(cpu, ram, gpus);
 
 	// React to live light/dark theme switches.
 	if (Theme::Update()) ApplyTheme();

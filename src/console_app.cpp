@@ -16,8 +16,6 @@
 #include <cstdlib>
 #include <cstring>
 #include <cstdint>
-#include <atomic>
-#include <ctime>
 #include <thread>
 #include <chrono>
 #include <algorithm>
@@ -43,6 +41,7 @@
 #include "ram_monitor.h"
 #include "gpu_monitor.h"
 #include "metrics_api.h"
+#include "jsonl_log.h"
 #include "http_server.h"
 #include "console_colors.h"
 #ifdef PLATFORM_WINDOWS
@@ -118,111 +117,6 @@ static int GetConsoleWidth()
     return 80;
 }
 #endif
-
-// ============================================================================
-// GPU load classification - determine workload type from utilization patterns.
-// Returns descriptive string for display and logging.
-// ============================================================================
-static std::string ClassifyGpuLoad(double load, double temp, double power, double fanPct)
-{
-    // High load + high temperature + high power = compute-intensive (LLM inference, rendering)
-    if (load > 80.0 && temp > 65.0 && power > 50.0)
-        return "compute";
-    // Moderate load with variable patterns = general purpose
-    if (load > 20.0)
-        return "mixed";
-    // Very low load = idle or light task
-    if (load < 5.0)
-        return "idle";
-    // Medium load with cooling activity = sustained workload
-    if (fanPct > 50.0)
-        return "sustained";
-    return "light";
-}
-
-// ============================================================================
-// JSONL logger - append one line per snapshot for easy parsing and diffing.
-// Format: {"timestamp":"...","cpu":{...},"gpus":[...]}
-// Reopens file on each write to avoid lock issues. The first snapshot of a run
-// rewrites the file (mode "w"), so loadgraph.jsonl holds only the current
-// session - same fresh-per-run behavior as loadgraph.log.
-// ============================================================================
-
-// Cleared after the first successful write of this process. Only touched by
-// the single TTY loop thread, atomic keeps it race-free by construction.
-static std::atomic<bool> s_jsonlFreshWrite{true};
-
-static void LogJsonlSnapshot(const std::string& logPath,
-                              const CpuMetrics& cpu,
-                              const RamMetrics& ram,
-                              const std::vector<GpuMetrics>& gpus)
-{
-    if (logPath.empty()) return;
-
-    // Get current timestamp in ISO 8601 format.
-    auto now = std::chrono::system_clock::now();
-    auto time_t_now = std::chrono::system_clock::to_time_t(now);
-    auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-        now.time_since_epoch()) % 1000;
-    char timeBuf[64];
-    struct tm tm_info;
-#ifdef PLATFORM_WINDOWS
-    localtime_s(&tm_info, &time_t_now);
-    strftime(timeBuf, sizeof(timeBuf), "%Y-%m-%dT%H:%M:%S", &tm_info);
-#else
-    localtime_r(&time_t_now, &tm_info);
-    strftime(timeBuf, sizeof(timeBuf), "%Y-%m-%dT%H:%M:%S", &tm_info);
-#endif
-    std::string timestamp = std::string(timeBuf) + "." + std::to_string(ms.count()) + "Z";
-
-    // Build JSON manually to avoid dependency on JSON library.
-    std::string json;
-    json += "{\"timestamp\":\"" + timestamp + "\",";
-    json += "\"cpu\":{\"load\":" + std::to_string(cpu.loadPercent) + ",";
-    json += "\"temp\":" + std::to_string(cpu.temperature) + ",";
-    json += "\"fan\":" + std::to_string(cpu.fanRpm) + ",";
-    json += "\"power\":" + std::to_string(cpu.powerWatts) + ",";
-    json += "\"tdp\":" + std::to_string(cpu.tdpWatts) + "},";
-    json += "\"ram\":{\"load\":" + std::to_string(ram.loadPercent) + ",";
-    json += "\"total\":" + std::to_string(static_cast<double>(ram.totalBytes) / (1024.0*1024*1024)) + ",";
-    json += "\"used\":" + std::to_string(static_cast<double>(ram.totalBytes - ram.freeBytes) / (1024.0*1024*1024)) + "},";
-    json += "\"gpus\":[";
-
-    for (size_t i = 0; i < gpus.size(); ++i)
-    {
-        const auto& g = gpus[i];
-        std::string loadType = ClassifyGpuLoad(g.loadPercent, g.temperature, g.powerWatts, g.fanPercent);
-        if (i > 0) json += ",";
-        json += "{\"idx\":" + std::to_string(i) + ",";
-        json += "\"load\":" + std::to_string(g.loadPercent) + ",";
-        json += "\"temp\":" + std::to_string(g.temperature) + ",";
-        json += "\"fan\":" + std::to_string(g.fanRpm) + ",";
-        json += "\"power\":" + std::to_string(g.powerWatts) + ",";
-        json += "\"vram_total\":" + std::to_string(static_cast<double>(g.vramTotalBytes) / (1024.0*1024*1024)) + ",";
-        json += "\"vram_used\":" + std::to_string(static_cast<double>(g.vramUsedBytes) / (1024.0*1024*1024)) + ",";
-        json += "\"type\":\"" + loadType + "\"}";
-    }
-
-    json += "]}";
-
-    // Write to file: the first snapshot of this run truncates it, the rest
-    // append. The fresh flag is cleared only after a successful write, so a
-    // failed open does not turn the next attempt into an append over the old
-    // file of the previous run.
-    const bool fresh = s_jsonlFreshWrite.load();
-    FILE* fp = nullptr;
-#ifdef PLATFORM_WINDOWS
-    fopen_s(&fp, logPath.c_str(), fresh ? "w" : "a");
-#else
-    fp = fopen(logPath.c_str(), fresh ? "w" : "a");
-#endif
-    if (fp)
-    {
-        fprintf(fp, "%s\n", json.c_str());
-        fclose(fp);
-        s_jsonlFreshWrite.store(false);
-    }
-}
 
 // ============================================================================
 // OutputFrame - unified ANSI output on both platforms.
@@ -566,20 +460,18 @@ int main(int argc, char* argv[])
     // Bar width: ~60% of available columns, min 20, max 60.
     const int barCols = std::min(60, std::max(20, (consW - 18) * 60 / 100));
 
-    // Log path stored for reopen-on-each-write pattern (avoids file lock).
-    static std::string s_logPath;
+    // JSONL snapshot log: same per-user directory as loadgraph.cfg on both
+    // platforms; the current directory is the fallback when none could be
+    // resolved. The writer throttles itself to one snapshot per 5 s.
     if (cfg.log_file)
     {
-        // Same per-user directory as loadgraph.cfg on both platforms; the
-        // current directory is the fallback when none could be resolved.
         const std::string dir = GetAppConfigDir();
-        s_logPath = dir.empty() ? std::string("loadgraph.jsonl")
-                                : dir + "/loadgraph.jsonl";
-        fprintf(stdout, "console: logging enabled file=%s\n", s_logPath.c_str());
+        const std::string logPath = dir.empty() ? std::string("loadgraph.jsonl")
+                                                : dir + "/loadgraph.jsonl";
+        JsonlLogSetPath(logPath);
+        fprintf(stdout, "console: logging enabled file=%s\n", logPath.c_str());
         fflush(stdout);
     }
-
-    auto lastLog = std::chrono::steady_clock::now();
 
     bool httpActive = cfg.http_enabled || cliPort >= 0;
 
@@ -646,13 +538,9 @@ int main(int argc, char* argv[])
             lastRender = now;
         }
 
-        // Log metrics every 5 seconds if logging is enabled.
-        // Reopen file each time to avoid lock issues when user views log.
-        if (!s_logPath.empty() && now - lastLog >= std::chrono::seconds(5))
-        {
-            LogJsonlSnapshot(s_logPath, cpu, ram, gpus);
-            lastLog = now;
-        }
+        // JSONL snapshot (self-throttled to 5 s, no-op when disabled).
+        // Raw MetricsGet* data is logged, no UI-struct conversion needed.
+        JsonlLogSnapshot(cpuData, ramData, gpuDatas);
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
 #else // PLATFORM_LINUX
@@ -714,13 +602,9 @@ int main(int argc, char* argv[])
             lastRender = now;
         }
 
-        // Log metrics every 5 seconds if logging is enabled.
-        // Reopen file each time to avoid lock issues when user views log.
-        if (!s_logPath.empty() && now - lastLog >= std::chrono::seconds(5))
-        {
-            LogJsonlSnapshot(s_logPath, cpu, ram, gpus);
-            lastLog = now;
-        }
+        // JSONL snapshot (self-throttled to 5 s, no-op when disabled).
+        // Raw MetricsGet* data is logged, no UI-struct conversion needed.
+        JsonlLogSnapshot(cpuData, ramData, gpuDatas);
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
 #endif
