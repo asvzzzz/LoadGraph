@@ -38,11 +38,17 @@ set(CMAKE_STATIC_LIBRARY_PREFIX "lib")
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
 
 # ============================================================================
-# wxWidgets configuration (cross-platform) — only needed by LoadGraphGUI.
+# wxWidgets configuration (cross-platform) - only needed by LoadGraphGUI.
 # ============================================================================
 if(DEFINED ENV{WXSTATIC_ROOT})
     set(WXSTATIC_ROOT "$ENV{WXSTATIC_ROOT}")
     message(STATUS "Using static wxWidgets from: ${WXSTATIC_ROOT}")
+
+    # A stale WX_CONFIG_EXECUTABLE left in the CMake cache (for example from a
+    # configure run made without WXSTATIC_ROOT) must not re-enable the
+    # wx-config branch below: mixing system wx headers with static libraries
+    # breaks the build (wxUSE_GRAPHICS_CONTEXT=0 in the distro wx 3.0).
+    unset(WX_CONFIG_EXECUTABLE CACHE)
 
     set(wxWidgets_INCLUDE_DIRS
         "${WXSTATIC_ROOT}/include"
@@ -86,7 +92,7 @@ else()
     endif()
 endif()
 
-# Run wx-config to extract flags/libs — needed for both WX_CONFIG env and auto-detect.
+# Run wx-config to extract flags/libs - needed for both WX_CONFIG env and auto-detect.
 if(DEFINED WX_CONFIG_EXECUTABLE AND NOT WIN32)
     message(STATUS "Using wx-config: ${WX_CONFIG_EXECUTABLE}")
     execute_process(COMMAND ${WX_CONFIG_EXECUTABLE} --cflags
@@ -169,7 +175,7 @@ find_library(NVML_LIB nvidia-ml PATHS /usr/lib/x86_64-linux-gnu /usr/local/cuda/
 if(NVML_LIB)
     message(STATUS "Found NVML: ${NVML_LIB}")
 else()
-    message(STATUS "NVML not found — GPU monitoring unavailable on this system")
+    message(STATUS "NVML not found - GPU monitoring unavailable on this system")
 endif()
 
 # ============================================================================
@@ -180,7 +186,7 @@ set(COMMON_HEADERS
 )
 
 # ============================================================================
-# libloadgraph_logger — minimal vfprintf-based logger, wxWidgets-free.
+# libloadgraph_logger - minimal vfprintf-based logger, wxWidgets-free.
 # Linked by all other libs so the static member Logger::s_file is defined once.
 # ============================================================================
 add_library(loadgraph_logger STATIC src/lib_logger/logger.h src/lib_logger/logger.cpp)
@@ -190,7 +196,7 @@ target_include_directories(loadgraph_logger PUBLIC
 )
 
 # ============================================================================
-# libloadgraph_config — AppConfig + platform config storage + color_utils.
+# libloadgraph_config - AppConfig + platform config storage + color_utils.
 # Dependencies: logger.
 # ============================================================================
 set(CONFIG_SOURCES
@@ -212,7 +218,7 @@ if(WIN32)
 endif()
 
 # ============================================================================
-# libloadgraph_sensors — all hardware sensor polling behind MetricsGet* API.
+# libloadgraph_sensors - all hardware sensor polling behind MetricsGet* API.
 # Dependencies: logger, platform.  No wxWidgets.
 # ============================================================================
 set(SENSORS_SOURCES
@@ -238,14 +244,14 @@ set(SENSORS_SOURCES
     src/lib_sensors/ring0_msr.cpp
 )
 if(WIN32)
-    # Windows sensors — all files are used as-is.
+    # Windows sensors - all files are used as-is.
 elseif(UNIX AND NOT APPLE)
     # Linux sensor implementations replace the Win32-only files above.
     list(REMOVE_ITEM SENSORS_SOURCES
         src/lib_sensors/cpu_monitor.cpp
         src/lib_sensors/gpu_monitor.cpp
         src/lib_sensors/ram_monitor.cpp
-        # Windows-only MSRs / ring0 driver / WMI — all code inside #ifdef _WIN32,
+        # Windows-only MSRs / ring0 driver / WMI - all code inside #ifdef _WIN32,
         # so on Linux they compile to empty TUs and leave missing symbols.
         src/lib_sensors/msr_sensor.cpp
         src/lib_sensors/ring0_msr.cpp
@@ -269,7 +275,7 @@ if(WIN32)
 endif()
 
 # ============================================================================
-# libloadgraph_theme — console terminal colors only (wxWidgets-free).
+# libloadgraph_theme - console terminal colors only (wxWidgets-free).
 # GUI-specific theme (theme.cpp / theme_linux.cpp) is compiled directly into
 # LoadGraphGUI since it depends on wxColour.
 # Dependencies: lib_config (HexToRgb).
@@ -290,7 +296,7 @@ if(WIN32)
 endif()
 
 # ============================================================================
-# libloadgraph_http — cross-platform HTTP server + web dashboard HTML.
+# libloadgraph_http - cross-platform HTTP server + web dashboard HTML.
 # Dependencies: lib_sensors (MetricsGet* API), lib_config, logger.
 # ============================================================================
 set(HTTP_SOURCES
@@ -311,7 +317,7 @@ if(WIN32)
 endif()
 
 # ============================================================================
-# LoadGraphGUI — wxWidgets desktop application.
+# LoadGraphGUI - wxWidgets desktop application.
 # ============================================================================
 set(GUI_SOURCES
     src/main.cpp
@@ -394,7 +400,7 @@ else()
 endif()
 
 # ============================================================================
-# LoadGraphTTY — console-only binary (htop-like, no wxWidgets).
+# LoadGraphTTY - console-only binary (htop-like, no wxWidgets).
 # ============================================================================
 set(TTY_SOURCES
     src/console_app.cpp
