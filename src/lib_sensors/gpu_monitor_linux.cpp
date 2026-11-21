@@ -203,31 +203,25 @@ bool GpuMonitor::IsAvailable() const
 
 void GpuMonitor::Collect()
 {
-    // Список перезаписывается каждый цикл целиком: без очистки AMD-вставка
-    // через insert накапливает дубли, когда NVML недоступен или не вернул
-    // ни одного устройства (Ubuntu без NVIDIA-драйвера).
-    {
-        std::lock_guard<std::mutex> lock(m_mutex);
-        m_metrics.clear();
-    }
+    // Метрики собираются в локальный вектор и публикуются одним swap под
+    // мьютексом: читатель (UI при старте, HTTP-эндпоинт) не должен видеть
+    // очищенный список. Локальный вектор заодно исключает накопление дублей
+    // при AMD-вставке - свежий список каждый цикл.
+    std::vector<GpuMetrics> collected;
 
     // Primary source: NVML.
-    size_t nvmlCount = 0;
     if (m_nvvmAvailable)
-    {
-        CollectNvml();
-        std::lock_guard<std::mutex> lock(m_mutex);
-        nvmlCount = m_metrics.size();
-    }
+        CollectNvml(collected);
+
+    const size_t nvmlCount = collected.size();
 
     // Merge AMD GPU metrics (if any).
     if (m_amdMonitor && m_amdMonitor->IsAvailable())
     {
-        auto amdMetrics = m_amdMonitor->GetMetrics();
-        std::lock_guard<std::mutex> lock(m_mutex);
-        m_metrics.insert(m_metrics.end(),
-                        std::make_move_iterator(amdMetrics.begin()),
-                        std::make_move_iterator(amdMetrics.end()));
+        std::vector<GpuMetrics> amdMetrics = m_amdMonitor->GetMetrics();
+        collected.insert(collected.end(),
+                         std::make_move_iterator(amdMetrics.begin()),
+                         std::make_move_iterator(amdMetrics.end()));
     }
 
     // NVML не вернул ни одного устройства (драйвера нет или его не видно):
@@ -238,14 +232,13 @@ void GpuMonitor::Collect()
     {
         std::vector<GpuMetrics> nvidiaStub;
         AppendUndrivenNvidia(nvidiaStub);
-        if (!nvidiaStub.empty())
-        {
-            std::lock_guard<std::mutex> lock(m_mutex);
-            m_metrics.insert(m_metrics.end(),
-                            std::make_move_iterator(nvidiaStub.begin()),
-                            std::make_move_iterator(nvidiaStub.end()));
-        }
+        collected.insert(collected.end(),
+                         std::make_move_iterator(nvidiaStub.begin()),
+                         std::make_move_iterator(nvidiaStub.end()));
     }
+
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_metrics.swap(collected);
 }
 
 // Dynamically load libnvidia-ml.so and resolve entry points.
@@ -344,7 +337,7 @@ void GpuMonitor::FreeNvml()
     m_fnGetPowerLimit = nullptr;
 }
 
-void GpuMonitor::CollectNvml()
+void GpuMonitor::CollectNvml(std::vector<GpuMetrics>& out)
 {
     if (!m_fnGetCount || !m_fnGetHandle)
         return;
@@ -354,8 +347,7 @@ void GpuMonitor::CollectNvml()
     if (ret != NVML_SUCCESS || count == 0)
         return;
 
-    std::vector<GpuMetrics> localMetrics;
-    localMetrics.reserve(count);
+    out.reserve(out.size() + count);
 
     for (unsigned int i = 0; i < count; ++i)
     {
@@ -439,15 +431,7 @@ void GpuMonitor::CollectNvml()
                 meta.powerLimitWatts = static_cast<double>(tdp);
         }
 
-        localMetrics.push_back(meta);
-    }
-
-    if (localMetrics.empty())
-        return;
-
-    {
-        std::lock_guard<std::mutex> lock(m_mutex);
-        m_metrics = std::move(localMetrics);
+        out.push_back(meta);
     }
 }
 

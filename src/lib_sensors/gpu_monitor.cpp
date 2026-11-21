@@ -186,37 +186,39 @@ bool GpuMonitor::IsAvailable() const
 
 void GpuMonitor::Collect()
 {
-    // Список перезаписывается каждый цикл целиком: без очистки AMD-вставка
-    // через insert накапливает дубли, когда NVML/NVAPI недоступны или
-    // не вернули ни одного устройства (Ubuntu без NVIDIA-драйвера).
-    {
-        std::lock_guard<std::mutex> lock(m_mutex);
-        m_metrics.clear();
-    }
+    // Метрики собираются в локальный вектор и публикуются одним swap под
+    // мьютексом. Раньше список сначала очищался, а затем заполнялся долгим
+    // опросом NVML/NVAPI/ADL: читатель (UI при старте или HTTP-эндпоинт)
+    // попадал в это окно и видел пустой список, из-за чего GUI мог вообще не
+    // создать панели GPU. Локальный вектор заодно исключает накопление дублей
+    // при AMD-вставке (свежий список каждый цикл).
+    std::vector<GpuMetrics> collected;
 
     // Primary source: NVML.
     if (m_nvvmAvailable)
     {
-        CollectNvml();
+        CollectNvml(collected);
     }
     else if (m_available)
     {
         // Fallback: NVAPI.
-        CollectNvApi();
+        CollectNvApi(collected);
     }
 
     // Merge AMD GPU metrics (if any).
     if (m_amdMonitor && m_amdMonitor->IsAvailable())
     {
-        auto amdMetrics = m_amdMonitor->GetMetrics();
-        std::lock_guard<std::mutex> lock(m_mutex);
-        m_metrics.insert(m_metrics.end(),
-                        std::make_move_iterator(amdMetrics.begin()),
-                        std::make_move_iterator(amdMetrics.end()));
+        std::vector<GpuMetrics> amdMetrics = m_amdMonitor->GetMetrics();
+        collected.insert(collected.end(),
+                         std::make_move_iterator(amdMetrics.begin()),
+                         std::make_move_iterator(amdMetrics.end()));
     }
+
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_metrics.swap(collected);
 }
 
-void GpuMonitor::CollectNvApi()
+void GpuMonitor::CollectNvApi(std::vector<GpuMetrics>& out)
 {
     // Enumerate GPUs.
     void* hGpus[NVAPI_MAX_GPUS] = {};
@@ -225,8 +227,7 @@ void GpuMonitor::CollectNvApi()
     if (ret != NVAPI_OK || count == 0)
         return;
 
-    std::vector<GpuMetrics> localMetrics;
-    localMetrics.reserve(count);
+    out.reserve(out.size() + count);
 
     for (unsigned int i = 0; i < count; ++i)
     {
@@ -305,19 +306,14 @@ void GpuMonitor::CollectNvApi()
             }
         }
 
-        localMetrics.push_back(meta);
-    }
-
-    {
-        std::lock_guard<std::mutex> lock(m_mutex);
-        m_metrics = std::move(localMetrics);
+        out.push_back(meta);
     }
 }
 
 // Collect metrics from NVML for all devices.
 // Runs only on the collector thread; NVML was initialized in constructor
 // on the main thread — nvmlInit/nvmlShutdown are never called concurrently.
-void GpuMonitor::CollectNvml()
+void GpuMonitor::CollectNvml(std::vector<GpuMetrics>& out)
 {
     if (!m_fnNvmlGetCount || !m_fnNvmlGetHandle)
         return;
@@ -327,8 +323,7 @@ void GpuMonitor::CollectNvml()
     if (ret != NVML_SUCCESS || count == 0)
         return;
 
-    std::vector<GpuMetrics> localMetrics;
-    localMetrics.reserve(count);
+    out.reserve(out.size() + count);
 
     for (unsigned int i = 0; i < count; ++i)
     {
@@ -421,15 +416,7 @@ void GpuMonitor::CollectNvml()
                 meta.powerLimitWatts = static_cast<double>(tdp);
         }
 
-        localMetrics.push_back(meta);
-    }
-
-    if (localMetrics.empty())
-        return;
-
-    {
-        std::lock_guard<std::mutex> lock(m_mutex);
-        m_metrics = std::move(localMetrics);
+        out.push_back(meta);
     }
 }
 

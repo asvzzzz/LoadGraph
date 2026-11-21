@@ -330,6 +330,18 @@ bool LogOsDisplayDevices()
     return seesAmd;
 }
 
+/// Длина строки с явным ограничением: чтение останавливается на limit байтах,
+/// поэтому незавершенная строка в полях ADL безопасна.
+size_t StrLenN(const char* text, size_t limit)
+{
+    if (!text)
+        return 0;
+    size_t n = 0;
+    while (n < limit && text[n] != '\0')
+        ++n;
+    return n;
+}
+
 /// Колбэк аллокации ADL (ADL_MAIN_MALLOC_CALLBACK).
 /// ADL вызывает его для своих внутренних буферов.
 void* __stdcall AdlMallocCallback(int iSize)
@@ -611,15 +623,20 @@ void AmdMonitor::CollectViaAdl(std::vector<GpuMetrics>& out, bool diag)
     if (diag)
         LogAdlAdapters(adapters);
 
-    // Один физический адаптер может занимать несколько записей с одинаковым
-    // iAdapterIndex - оставляем первую подходящую.
+    // Один физический адаптер может занимать несколько записей - оставляем
+    // первую подходящую.
     struct AdapterRef
     {
-        int         index;      // ADL adapter index
+        int         index;      // ADL adapter index (первая запись адаптера)
+        int         bus;        // адрес на шине PCI: признак адаптера
+        int         dev;
+        int         func;
+        std::string udid;       // UDID одинаков у всех путей одного адаптера
         unsigned    ordinal;    // порядковый номер среди AMD-адаптеров
         std::string name;
     };
     std::vector<AdapterRef> targets;
+    size_t duplicateEntries = 0;
 
     for (const ADLAdapterInfo& a : adapters)
     {
@@ -640,20 +657,38 @@ void AmdMonitor::CollectViaAdl(std::vector<GpuMetrics>& out, bool diag)
         if (!a.iPresent && !a.iExist && !onPciBus)
             continue;
 
+        // ADL перечисляет отдельной записью каждый дисплейный путь: у R9 280
+        // это 8 записей с индексами 0..7, но одним адресом PCI
+        // (bus=3 dev=0 func=0). Физический адаптер опознается по адресу на
+        // шине (и по UDID), а не по iAdapterIndex, иначе одна карта
+        // превращается в восемь.
+        const std::string udid(a.strUDID, StrLenN(a.strUDID, ADL_MAX_PATH - 1));
         bool dup = false;
         for (const AdapterRef& t : targets)
         {
-            if (t.index == a.iAdapterIndex)
+            const bool samePci = (a.iBusNumber >= 0) &&
+                                 (t.bus  == a.iBusNumber) &&
+                                 (t.dev  == a.iDeviceNumber) &&
+                                 (t.func == a.iFunctionNumber);
+            const bool sameUdid = !t.udid.empty() && t.udid == udid;
+            if (samePci || sameUdid)
             {
                 dup = true;
                 break;
             }
         }
         if (dup)
+        {
+            ++duplicateEntries;
             continue;
+        }
 
         AdapterRef ref{};
         ref.index   = a.iAdapterIndex;
+        ref.bus     = a.iBusNumber;
+        ref.dev     = a.iDeviceNumber;
+        ref.func    = a.iFunctionNumber;
+        ref.udid    = udid;
         ref.ordinal = static_cast<unsigned>(targets.size());
         if (a.strAdapterName[0] != '\0')
             ref.name = a.strAdapterName;
@@ -665,7 +700,11 @@ void AmdMonitor::CollectViaAdl(std::vector<GpuMetrics>& out, bool diag)
     }
 
     if (diag)
-        LOGI("AMD: %zu adapter(s) recognized as AMD GPU(s).", targets.size());
+    {
+        LOGI("AMD: %zu physical adapter(s) from %zu ADL entry(ies), "
+             "%zu display path(s) skipped as duplicates.",
+             targets.size(), targets.size() + duplicateEntries, duplicateEntries);
+    }
 
     for (const AdapterRef& t : targets)
     {

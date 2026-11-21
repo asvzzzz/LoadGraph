@@ -103,11 +103,14 @@ private:
 
     bool LoadNvml();
     void FreeNvml();
-    void CollectNvml();
+    /// NVML-метрики всех GPU: результат дописывается в out. Опубликован
+    /// (заменен целиком) список может быть только в Collect().
+    void CollectNvml(std::vector<GpuMetrics>& out);
 
     bool LoadNvApi();
     void FreeNvApi();
-    void CollectNvApi();
+    /// NVAPI-метрики всех GPU: результат дописывается в out.
+    void CollectNvApi(std::vector<GpuMetrics>& out);
 #else
 private:
     // Linux: only NVML via dlopen (no NVAPI).
@@ -140,7 +143,9 @@ private:
 
     bool LoadNvml();
     void FreeNvml();
-    void CollectNvml();
+    /// NVML-метрики всех GPU: результат дописывается в out. Опубликован
+    /// (заменен целиком) список может быть только в Collect().
+    void CollectNvml(std::vector<GpuMetrics>& out);
 #endif
 
     std::vector<GpuMetrics> m_metrics;
