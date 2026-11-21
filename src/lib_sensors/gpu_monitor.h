@@ -100,6 +100,10 @@ private:
     FnNvAPI_GPU_GetAllClockFrequencies m_fnGetAllClockFrequencies = nullptr;
     FnNvAPI_Unload                     m_fnUnload           = nullptr;
     bool                               m_initialized       = false;  // true only after successful NVAPI_Initialize.
+    // Одноразовая диагностика NVAPI: коды возврата отдельных вызовов печатаются
+    // только в первом цикле сбора. Флаг пишется и читается только потоком
+    // сборщика (Collect вызывает CollectNvApi последовательно), мьютекс не нужен.
+    bool                               m_nvapiDiagLogged   = false;
 
     bool LoadNvml();
     void FreeNvml();

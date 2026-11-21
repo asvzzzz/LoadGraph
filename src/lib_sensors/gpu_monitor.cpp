@@ -229,6 +229,10 @@ void GpuMonitor::CollectNvApi(std::vector<GpuMetrics>& out)
 
     out.reserve(out.size() + count);
 
+    // Флаг одноразовой диагностики: первый цикл логирует коды возврата NVAPI,
+    // последующие циклы молчат, иначе в лог идёт 2+ строки каждую секунду.
+    const bool diag = !m_nvapiDiagLogged;
+
     for (unsigned int i = 0; i < count; ++i)
     {
         GpuMetrics meta{};
@@ -252,16 +256,21 @@ void GpuMonitor::CollectNvApi(std::vector<GpuMetrics>& out)
         }
 
         // Memory info. NV_DISPLAY_DRIVER_MEMORY_INFO_V1 (20 bytes, VER=1).
-        // All size fields are in KB — convert to bytes. For cards > 4 GB the
-        // U32 wraps; NVML is the accurate source — this path is a fallback only.
+        // All size fields are in KB - convert to bytes. For cards > 4 GB the
+        // U32 wraps; NVML is the accurate source - this path is a fallback only.
+        // Коды возврата печатаются только в первом цикле: при опросе раз в
+        // секунду такие строки превращают лог в бесконечный поток.
         if (m_fnGetMemoryInfo)
         {
             NvMemoryInfo memInfo{};
             memInfo.version = MAKE_NVAPI_VERSION(sizeof(memInfo), 1);
             int rcMi = m_fnGetMemoryInfo(hGpus[i], &memInfo);
-            LOGI("NvAPI_GPU_GetMemoryInfo gpu%u rc=%d vramKB=%u availKB=%u",
-                 i, rcMi, memInfo.dedicatedVideoMemory,
-                 memInfo.availableDedicatedVideoMemory);
+            if (diag)
+            {
+                LOGI("NvAPI_GPU_GetMemoryInfo gpu%u rc=%d vramKB=%u availKB=%u",
+                     i, rcMi, memInfo.dedicatedVideoMemory,
+                     memInfo.availableDedicatedVideoMemory);
+            }
             if (rcMi == NVAPI_OK)
             {
                 // dedicatedVideoMemory and availableDedicatedVideoMemory are in KB.
@@ -294,7 +303,8 @@ void GpuMonitor::CollectNvApi(std::vector<GpuMetrics>& out)
             NvClockFrequencies clocks{};
             clocks.version = MAKE_NVAPI_VERSION(sizeof(clocks), 1);
             int rcClk = m_fnGetAllClockFrequencies(hGpus[i], &clocks);
-            LOGI("NvAPI_GPU_GetAllClockFrequencies gpu%u rc=%d", i, rcClk);
+            if (diag)
+                LOGI("NvAPI_GPU_GetAllClockFrequencies gpu%u rc=%d", i, rcClk);
             if (rcClk == NVAPI_OK)
             {
                 if (clocks.domain[NVAPI_CLOCK_DOMAIN_GPU].bIsPresent)
@@ -308,11 +318,15 @@ void GpuMonitor::CollectNvApi(std::vector<GpuMetrics>& out)
 
         out.push_back(meta);
     }
+
+    // Диагностика NVAPI выполнена: дальше цикл сбора не печатает ничего, чтобы
+    // лог не рос на 2+ строки каждую секунду (дежурный режим с LLM).
+    m_nvapiDiagLogged = true;
 }
 
 // Collect metrics from NVML for all devices.
 // Runs only on the collector thread; NVML was initialized in constructor
-// on the main thread — nvmlInit/nvmlShutdown are never called concurrently.
+// on the main thread - nvmlInit/nvmlShutdown are never called concurrently.
 void GpuMonitor::CollectNvml(std::vector<GpuMetrics>& out)
 {
     if (!m_fnNvmlGetCount || !m_fnNvmlGetHandle)
