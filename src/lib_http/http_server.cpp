@@ -315,9 +315,11 @@ static bool AuthorizeRequest(const std::string& req, const char* path)
 // HTTP access log (loadgraph_http.log, kept separate from loadgraph.log).
 // Opened in StartHttpServer() with mode "w" (previous run's contents are
 // discarded, same rule as the other per-user files) and written ONLY from
-// the server thread, so no locking is needed. Every connection produces
-// one line with the client IP:port; invalid requests (no request bytes,
-// 401, 404) additionally log the raw request text.
+// the server thread, so no locking is needed. Only INVALID requests are
+// logged - connections that sent no request bytes (scanners), 401 auth
+// failures and 404 unknown paths - one line each with the client IP:port
+// plus the raw request text. Valid 200 responses are never logged, so the
+// file stays quiet while the dashboard polls.
 // ============================================================================
 
 static FILE* g_httpLogFile = nullptr;
@@ -392,8 +394,9 @@ static std::string EscapeRaw(const std::string& rawReq)
     return r;
 }
 
-// One line per connection: "HH:MM:SS ip:port METHOD PATH -> CODE".
-// rawReq != nullptr appends the sanitized request text (invalid requests).
+// One line per invalid event: "HH:MM:SS ip:port METHOD PATH -> CODE".
+// rawReq != nullptr appends the sanitized request text (401/404); the
+// no-request case has no text to log. Never called for valid 200 responses.
 static void HttpLogAccess(const char* peer, const char* method, const char* path,
                           int status, const std::string* rawReq)
 {
@@ -537,7 +540,6 @@ static void HttpServeLoop(SOCKET srv, int port, const AppConfig& cfg)
         else if (isIndex)    body = RenderDashboard(port, cfg);
         else if (isFavicon)
         {
-            HttpLogAccess(peerTxt, method, path, 200, nullptr);
             // Build the full header in one string to avoid partial-send over-read.
             char hdr[128];
             int hlen = snprintf(hdr, sizeof(hdr),
@@ -577,9 +579,6 @@ static void HttpServeLoop(SOCKET srv, int port, const AppConfig& cfg)
             closesocket(client);
             continue;
         }
-
-        // Remaining route: metrics/index answered with 200 below.
-        HttpLogAccess(peerTxt, method, path, 200, nullptr);
 
         char hdr[512] = {};
         int hlen = snprintf(hdr, sizeof(hdr),
@@ -702,7 +701,6 @@ static void HttpServeLoop(int srv, int port, const AppConfig& cfg)
         else if (isIndex)    body = RenderDashboard(port, cfg);
         else if (isFavicon)
         {
-            HttpLogAccess(peerTxt, method, path, 200, nullptr);
             char hdr[128];
             int hlen = snprintf(hdr, sizeof(hdr),
                 "HTTP/1.1 200 OK\r\n"
@@ -739,9 +737,6 @@ static void HttpServeLoop(int srv, int port, const AppConfig& cfg)
             close(client);
             continue;
         }
-
-        // Remaining route: metrics/index answered with 200 below.
-        HttpLogAccess(peerTxt, method, path, 200, nullptr);
 
         char hdr[512] = {};
         int hlen = snprintf(hdr, sizeof(hdr),
