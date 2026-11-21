@@ -422,12 +422,12 @@ bool AmdMonitor::LoadAdl()
     for (const GpuMetrics& g : probe)
     {
         LOGI("AMD: GPU '%s': load=%.0f%%, temp=%.0fC, power=%.1f/%.1f W, "
-             "vram=%llu/%llu MB, fan=%.0f%%/%d rpm",
+             "vram=%llu/%llu MB, fan=%.0f%%/%d rpm max=%d rpm",
              g.name.c_str(), g.loadPercent, g.temperature, g.powerWatts,
              g.powerLimitWatts,
              static_cast<unsigned long long>(g.vramUsedBytes / (1024ULL * 1024ULL)),
              static_cast<unsigned long long>(g.vramTotalBytes / (1024ULL * 1024ULL)),
-             g.fanPercent, g.fanRpm);
+             g.fanPercent, g.fanRpm, g.fanMaxRpm);
     }
 
     LOGI("AMD: monitor ready, %zu AMD GPU(s), source: %s.",
@@ -594,6 +594,39 @@ void AmdMonitor::CollectAdl(std::vector<GpuMetrics>& out)
         CollectDxgiOnly(out, diag);
 
     m_enumLogged = true;
+}
+
+// Maximum tachometer reading the card's fan controller reports (iMaxRPM of
+// ADLFanSpeedInfo). Kept per adapter because ADL2_Overdrive5_FanSpeedInfo_Get
+// has to be called once per thermal controller while the number itself never
+// changes; a -1 result is cached as well so unsupported cards are not
+// re-queried on every poll.
+int AmdMonitor::QueryFanMaxRpm(int adapterIndex)
+{
+    const auto cached = m_fanMaxRpmCache.find(adapterIndex);
+    if (cached != m_fanMaxRpmCache.end())
+        return cached->second;
+
+    int maxRpm = -1;
+    if (m_adlContext && m_fnOD5FanInfo)
+    {
+        for (int c = 0; c < ADL_OD5_MAX_THERMAL_CONTROLLERS; ++c)
+        {
+            ADLFanSpeedInfo info{};
+            info.iSize = sizeof(ADLFanSpeedInfo);
+            if (m_fnOD5FanInfo(m_adlContext, adapterIndex, c, &info) != ADL_OK)
+                continue;
+            if ((info.iFlags & ADL_DL_FANCTRL_SUPPORTS_RPM_READ) &&
+                info.iMaxRPM > 0 && info.iMaxRPM < 30000)
+            {
+                maxRpm = info.iMaxRPM;
+                break;
+            }
+        }
+    }
+
+    m_fanMaxRpmCache[adapterIndex] = maxRpm;
+    return maxRpm;
 }
 
 /// Metrics via ADL: adapter enumeration and Overdrive5/Overdrive6 queries.
@@ -836,6 +869,11 @@ void AmdMonitor::CollectViaAdl(std::vector<GpuMetrics>& out, bool diag)
                 }
             }
         }
+
+        // Chart scale: the upper tachometer bound of the card's fan controller
+        // when it reports one. Cached per adapter, so this costs no ADL calls
+        // after the first poll.
+        gm.fanMaxRpm = QueryFanMaxRpm(t.index);
 
         // Power: ADL2_Overdrive6_CurrentPower_Get, iPowerType = 0
         // ("ASIC Total Power"), the value is Watts with 8 fractional bits.

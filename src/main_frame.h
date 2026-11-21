@@ -113,6 +113,10 @@ private:
         GraphPanel* vramGraph  = nullptr;
         GraphPanel* fanGraph   = nullptr;
         GraphPanel* powerGraph = nullptr;
+        // Unit the fan panel was created with. Drivers may start or stop
+        // reporting RPM later, but a panel must not change its scale and unit
+        // under the user, so the choice is fixed when the panel is built.
+        bool          fanInPercent = false;
     };
     std::vector<GpuPanelData> m_gpuPanels;
 

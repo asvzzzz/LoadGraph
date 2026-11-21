@@ -93,13 +93,22 @@ static std::string BuildProgress(const char* label, double percent, int cols)
     return out;
 }
 
-// Maps a tachometer value to the 0..100 scale BuildProgress expects. The GUI
-// and the web dashboard draw fan charts with a 0..3000 RPM range, so the bar
-// and the charts agree; passing RPM straight to BuildProgress would always
-// fill the bar.
-static double RpmToPercent(int rpm)
+// Maps a tachometer value to the 0..100 scale BuildProgress expects. The upper
+// bound is the fan maximum the card reports; where the driver gives none
+// (NVIDIA on both platforms, CPU tachometers) the shared 0..3000 RPM range of
+// the GUI and the web dashboard is used, so bar and charts agree. Passing RPM
+// straight to BuildProgress would always fill the bar.
+static double RpmToPercent(int rpm, int maxRpm = -1)
 {
-    return (rpm > 0) ? (static_cast<double>(rpm) / 30.0) : 0.0;
+    if (rpm <= 0)
+        return 0.0;
+    // Rounded up to 500 RPM exactly like the GUI and the web dashboard, so the
+    // bar and the charts of one card have the same scale.
+    const double maxR = (maxRpm > 0)
+        ? std::ceil(static_cast<double>(maxRpm) / 500.0) * 500.0
+        : 3000.0;
+    const double pct  = static_cast<double>(rpm) * 100.0 / maxR;
+    return (pct > 100.0) ? 100.0 : pct;
 }
 
 // ============================================================================
@@ -351,18 +360,18 @@ static std::string BuildFrame(const CpuMetrics& cpu, const RamMetrics& ram,
                 snprintf(tmp, sizeof(tmp), "%4.1f GB / %4.1f GB", usedGb, totGb);
                 out += cDim + std::string(tmp) + cReset;
             }
-            if (g.fanPercent >= 0.0)
+            if (g.fanRpm >= 0)
+            {
+                const std::string bar = BuildProgress("Fan", RpmToPercent(g.fanRpm, g.fanMaxRpm), barCols);
+                out += "\n" + cGpuFan + bar + " " + cReset;
+                snprintf(tmp, sizeof(tmp), "%5d RPM", g.fanRpm);
+                out += cGpuFan + std::string(tmp) + cReset;
+            }
+            else if (g.fanPercent >= 0.0)
             {
                 const std::string bar = BuildProgress("Fan", g.fanPercent, barCols);
                 out += "\n" + cGpuFan + bar + " " + cReset;
                 snprintf(tmp, sizeof(tmp), "%5.0f%%", g.fanPercent);
-                out += cGpuFan + std::string(tmp) + cReset;
-            }
-            else if (g.fanRpm > 0)
-            {
-                const std::string bar = BuildProgress("Fan", RpmToPercent(g.fanRpm), barCols);
-                out += "\n" + cGpuFan + bar + " " + cReset;
-                snprintf(tmp, sizeof(tmp), "%5d RPM", g.fanRpm);
                 out += cGpuFan + std::string(tmp) + cReset;
             }
             if (g.powerWatts > 0.0)
@@ -535,6 +544,7 @@ int main(int argc, char* argv[])
             gm.vramUsedBytes   = gd.vramUsedBytes;
             gm.fanPercent      = gd.fanPercent;
             gm.fanRpm          = gd.fanRpm;
+            gm.fanMaxRpm       = gd.fanMaxRpm;
             gm.powerWatts      = gd.powerWatts;
             gm.powerLimitWatts = gd.powerLimitWatts;
             gpus.push_back(gm);
@@ -588,6 +598,7 @@ int main(int argc, char* argv[])
             gm.vramUsedBytes   = gd.vramUsedBytes;
             gm.fanPercent      = gd.fanPercent;
             gm.fanRpm          = gd.fanRpm;
+            gm.fanMaxRpm       = gd.fanMaxRpm;
             gm.powerWatts      = gd.powerWatts;
             gm.powerLimitWatts = gd.powerLimitWatts;
             gpus.push_back(gm);

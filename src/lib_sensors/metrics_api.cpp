@@ -98,7 +98,11 @@ std::vector<GpuData> MetricsGetGpus()
         d.vramUsedBytes  = m.vramUsedBytes;
         d.fanRpm         = m.fanRpm;
         d.fanPercent     = m.fanPercent;
+        d.fanMaxRpm      = m.fanMaxRpm;
         d.powerWatts     = m.powerWatts;
+        // The limit was never copied: the web power chart and the TTY power bar
+        // always fell back to their hard coded maximum.
+        d.powerLimitWatts = m.powerLimitWatts;
         out.push_back(d);
     }
     return out;

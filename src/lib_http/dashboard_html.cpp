@@ -200,10 +200,18 @@ let fanChart      = null;
 let totalPowerChart = null;
 
 const gpuCharts  = {};
+// Unit of each GPU fan chart ('rpm' or 'pct'), remembered between ticks so a
+// chart never mixes RPM and percentage points when a driver starts reporting
+// both later; a unit change recreates the chart instead.
+const gpuFanUnit = {};
 
 // -- Helpers ---------------------------------------------------------------
 function esc(s)  { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;'); }
 function tempColor(t) { return t > 80 ? '#ff0000' : C.cpuTemp; }
+// Upper bound of a fan chart in RPM: the maximum reported by the card rounded
+// up to 500 RPM, otherwise the shared 0..3000 scale used by the CPU fan chart
+// (NVIDIA NVML and NVAPI report no RPM maximum at all).
+function fanYMax(maxRpm) { return (maxRpm > 0) ? Math.ceil(maxRpm / 500) * 500 : 3000; }
 
 // -- CPU section update ----------------------------------------------------
 function updateCpu(d) {
@@ -368,7 +376,17 @@ static const char* kHtmlPageBody3 = R"(
 
     var fvEl = document.getElementById('gpu'+i+'FanVal');
     var fKey = 'gpu'+i+'FanChart';
-    if (g.fan_percent >= 0) {
+    // RPM first, like in the GUI; the percentage is used only when the driver
+    // never reports RPM. Stopping a fan (RPM 0) keeps the chart, it does not
+    // turn the cell into N/A.
+    var fUnit = (g.fan_rpm >= 0) ? 'rpm' : ((g.fan_percent >= 0) ? 'pct' : '');
+    if (gpuFanUnit[i] && gpuFanUnit[i] !== fUnit) delete gpuCharts[fKey];
+    gpuFanUnit[i] = fUnit;
+    if (fUnit === 'rpm') {
+      fvEl.textContent = g.fan_rpm + ' RPM';
+      if (!gpuCharts[fKey]) gpuCharts[fKey] = makeChart(fKey, C.gpuFan, fanYMax(g.fan_max_rpm));
+      gpuCharts[fKey].push(g.fan_rpm);
+    } else if (fUnit === 'pct') {
       fvEl.textContent = g.fan_percent.toFixed(0) + '%';
       if (!gpuCharts[fKey]) gpuCharts[fKey] = makeChart(fKey, C.gpuFan, 100);
       gpuCharts[fKey].push(g.fan_percent);

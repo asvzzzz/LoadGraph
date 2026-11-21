@@ -506,10 +506,19 @@ void MainFrame::BuildGpuSection(wxBoxSizer* container, wxWindow* parent)
 		}
 		if (gpu.fanPercent >= 0.0 || gpu.fanRpm >= 0)
 		{
-			const bool inPercent = (gpu.fanPercent >= 0.0);
+			// RPM is preferred because the CPU fan chart is in RPM too; the
+			// percentage is only used when the driver never reports RPM.
+			const bool inPercent = !(gpu.fanRpm >= 0);
+			data.fanInPercent = inPercent;
 			data.fanGraph = new GraphPanel(parent, "Fan", inPercent ? "%" : "RPM");
-			// Fixed range: 0..100% (or 0..3000 RPM for the RPM fallback).
-			data.fanGraph->SetYRange(0.0, inPercent ? 100.0 : 3000.0);
+			// Fixed range: 0..100% for a percentage panel. For RPM the scale is
+			// the fan maximum reported by the card rounded up to 500 RPM, and
+			// the shared 0..3000 scale when the driver gives no maximum (NVIDIA
+			// NVML and NVAPI have no RPM limit at all).
+			const double rpmMax = (gpu.fanMaxRpm > 0)
+				? std::ceil(static_cast<double>(gpu.fanMaxRpm) / 500.0) * 500.0
+				: 3000.0;
+			data.fanGraph->SetYRange(0.0, inPercent ? 100.0 : rpmMax);
 			data.fanGraph->SetColor(HexColor(m_cfg.gpu_fan_color));
 			data.fanGraph->SetBgColor(HexColor(m_cfg.chart_bg_color));
 			row2->Add(data.fanGraph, (gpu.vramTotalBytes > 0) ? 1 : 2,
@@ -905,8 +914,16 @@ void MainFrame::OnTimer(wxTimerEvent&)
 			d.vramGraph->AddPoint(BytesToGbs(gpu.vramUsedBytes));
 		if (d.fanGraph)
 		{
-			if (gpu.fanPercent >= 0.0)      d.fanGraph->AddPoint(gpu.fanPercent);
-			else if (gpu.fanRpm >= 0)       d.fanGraph->AddPoint(static_cast<double>(gpu.fanRpm));
+			// The unit is fixed when the panel is created, so a chart never
+			// mixes RPM and percentage points if a driver starts reporting
+			// both later.
+			if (d.fanInPercent)
+			{
+				if (gpu.fanPercent >= 0.0)
+					d.fanGraph->AddPoint(gpu.fanPercent);
+			}
+			else if (gpu.fanRpm >= 0)
+				d.fanGraph->AddPoint(static_cast<double>(gpu.fanRpm));
 		}
 		if (d.powerGraph && gpu.powerWatts >= 0.0) d.powerGraph->AddPoint(gpu.powerWatts);
 

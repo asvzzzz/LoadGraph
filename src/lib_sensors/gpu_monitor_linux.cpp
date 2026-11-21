@@ -36,6 +36,18 @@ struct NvmlMemory
     unsigned long long used;
 };
 
+// NVML nvmlFanSpeedInfo_v1 (nvml.h): fan index in, RPM out. The version field
+// is NVML_STRUCT_VERSION(FanSpeedInfo, 1) = size | (version << 24).
+struct NvmlFanSpeedInfo
+{
+    unsigned int version;
+    unsigned int fan;
+    unsigned int speed;
+};
+
+static const unsigned int NVML_FANSPEED_INFO_V1 =
+    static_cast<unsigned int>(sizeof(NvmlFanSpeedInfo)) | (1u << 24);
+
 // ----------------------------------------------------------------------------
 // An NVIDIA card without the proprietary driver: libnvidia-ml is missing, but
 // the device itself is visible on the bus (/sys/bus/pci/devices exists in any
@@ -282,6 +294,9 @@ bool GpuMonitor::LoadNvml()
     RESOLVE(GetTemp,   "nvmlDeviceGetTemperature");
     RESOLVE(GetClock,  "nvmlDeviceGetClockInfo");
     RESOLVE(GetFan,    "nvmlDeviceGetFanSpeed");
+    // Optional symbol: absent before NVML 12.4 (driver branch R550), then the
+    // fan chart falls back to the percentage of the call above.
+    RESOLVE(GetFanRpm, "nvmlDeviceGetFanSpeedRPM");
     RESOLVE(GetPower,      "nvmlDeviceGetPowerUsage");
     RESOLVE(GetPowerLimit, "nvmlDeviceGetPowerManagementLimit");
 
@@ -333,6 +348,7 @@ void GpuMonitor::FreeNvml()
     m_fnGetTemp   = nullptr;
     m_fnGetClock  = nullptr;
     m_fnGetFan    = nullptr;
+    m_fnGetFanRpm = nullptr;
     m_fnGetPower  = nullptr;
     m_fnGetPowerLimit = nullptr;
 }
@@ -400,6 +416,18 @@ void GpuMonitor::CollectNvml(std::vector<GpuMetrics>& out)
                 meta.vramFreqMhz = static_cast<double>(mhz);
         }
 
+        // Fan speed: RPM first (nvmlDeviceGetFanSpeedRPM, NVML 12.4+), the
+        // percentage kept as fallback. NVML exposes no RPM maximum for NVIDIA
+        // cards, so fanMaxRpm stays -1 and the chart uses the shared scale.
+        if (m_fnGetFanRpm)
+        {
+            NvmlFanSpeedInfo fanInfo{};
+            fanInfo.version = NVML_FANSPEED_INFO_V1;
+            fanInfo.fan     = 0;
+            if (m_fnGetFanRpm(hDevice, &fanInfo) == NVML_SUCCESS &&
+                fanInfo.speed < 30000u)
+                meta.fanRpm = static_cast<int>(fanInfo.speed);
+        }
         if (m_fnGetFan)
         {
             unsigned int fanPct = 0;

@@ -47,6 +47,7 @@ struct GpuData {
     uint64_t    vramUsedBytes   = 0;
     int         fanRpm          = -1;
     double      fanPercent      = -1.0;
+    int         fanMaxRpm       = -1;    // Reported fan maximum, -1 = unknown
     double      powerWatts      = -1.0;
     double      powerLimitWatts = -1.0;
 };

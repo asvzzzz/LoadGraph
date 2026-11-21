@@ -84,6 +84,13 @@ private:
     /// ADL-only metrics. diag = print the one-time ADL diagnostics.
     void CollectViaAdl(std::vector<GpuMetrics>& out, bool diag);
 
+    /// Maximum tachometer reading of one adapter, from
+    /// ADL2_Overdrive5_FanSpeedInfo_Get (iMaxRPM). -1 when the card reports no
+    /// such number. The result is cached per adapter index: it is a static
+    /// property of the card, and walking 8 thermal controllers every second
+    /// would be needless driver traffic.
+    int QueryFanMaxRpm(int adapterIndex);
+
     /// Fallback source: adapters visible to DXGI (name and VRAM), when ADL does
     /// not enumerate the card. diag = print the message only once.
     void CollectDxgiOnly(std::vector<GpuMetrics>& out, bool diag);
@@ -118,6 +125,10 @@ private:
     FnOD5FanGet      m_fnOD5Fan       = nullptr;
     FnOD6PowerGet    m_fnOD6Power     = nullptr;
     FnMemInfo2Get    m_fnMemInfo2     = nullptr;
+
+    /// Fan maximum (RPM) per ADL adapter index, -1 = no such number. Written
+    /// and read only by the poll thread (GpuMonitor::Collect), no mutex needed.
+    std::map<int, int> m_fanMaxRpmCache;
 #else
     bool LoadSysfs();
     void CollectSysfs(std::vector<GpuMetrics>& out);

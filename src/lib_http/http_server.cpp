@@ -125,12 +125,12 @@ static std::string BuildJson()
         snprintf(buf, sizeof(buf),
             "\",\"load_percent\":%.1f,\"temperature\":%.1f,"
              "\"vram_used_bytes\":%llu,\"vram_total_bytes\":%llu,"
-             "\"fan_rpm\":%d,\"fan_percent\":%.1f,"
+             "\"fan_rpm\":%d,\"fan_percent\":%.1f,\"fan_max_rpm\":%d,"
              "\"power_watts\":%.1f,\"power_limit_watts\":%.1f}",
             SafeDouble(g.loadPercent), SafeDouble(g.temperature),
             (unsigned long long)g.vramUsedBytes,
             (unsigned long long)g.vramTotalBytes,
-            g.fanRpm, SafeDouble(g.fanPercent),
+            g.fanRpm, SafeDouble(g.fanPercent), g.fanMaxRpm,
             SafeDouble(g.powerWatts), SafeDouble(g.powerLimitWatts));
         out += buf;
     }

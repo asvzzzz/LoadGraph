@@ -23,8 +23,14 @@ struct GpuMetrics
     double      vramLoadPercent = 0.0;   // VRAM usage percentage
     double      vramFreqMhz     = 0.0;   // Current VRAM frequency in MHz
     double      temperature     = -1.0;  // GPU temp in Celsius, -1.0 means N/A
-    int         fanRpm          = -1;    // Fan speed in RPM, -1 means N/A
+    int         fanRpm          = -1;    // Fan speed in RPM, -1 means N/A (0 = stopped)
     double      fanPercent      = -1.0;  // Fan speed in percent [0,100], -1.0 = N/A
+    // Upper tachometer bound of this card reported by the driver. Only AMD/ADL
+    // exposes it (ADLFanSpeedInfo.iMaxRPM); NVIDIA has no RPM maximum in NVML
+    // or NVAPI, so this stays -1 there and the charts use the shared 3000 RPM
+    // scale. hwmon fanN_max is deliberately not used: it is an alarm threshold,
+    // not a rated fan speed.
+    int         fanMaxRpm       = -1;    // Maximum fan speed in RPM, -1 means N/A
     double      powerWatts      = -1.0;  // Current GPU power draw in watts, -1.0 = N/A
     double      powerLimitWatts = -1.0;  // Maximum GPU power limit in watts, -1.0 = N/A
 };
@@ -64,6 +70,10 @@ private:
     using FnNvmlDeviceGetTemperature    = int (__cdecl*)(void*, unsigned int, unsigned int*);
     using FnNvmlDeviceGetClockInfo      = int (__cdecl*)(void*, unsigned int, unsigned int*);
     using FnNvmlDeviceGetFanSpeed       = int (__cdecl*)(void*, unsigned int*);
+    // nvmlDeviceGetFanSpeedRPM, added in NVML 12.4 (driver branch R550 and
+    // newer): the argument is nvmlFanSpeedInfo_v1 (fan index in, RPM out).
+    // Missing on older drivers, so the pointer is optional.
+    using FnNvmlDeviceGetFanSpeedRPM    = int (__cdecl*)(void*, void*);
     using FnNvmlDeviceGetPowerUsage     = int (__cdecl*)(void*, unsigned int*);
     using FnNvmlDeviceGetPowerLimit     = int (__cdecl*)(void*, unsigned int*);
 
@@ -75,6 +85,9 @@ private:
     using FnNvAPI_GPU_GetMemoryInfo    = int (__cdecl*)(void*, void*);
     using FnNvAPI_GPU_GetThermalSettings = int (__cdecl*)(void*, unsigned int, void*);
     using FnNvAPI_GPU_GetAllClockFrequencies = int (__cdecl*)(void*, void*);
+    // NvAPI_GPU_GetTachReading: current fan tachometer in RPM. Only source of
+    // NVIDIA RPM on drivers whose NVML is too old for nvmlDeviceGetFanSpeedRPM.
+    using FnNvAPI_GPU_GetTachReading   = int (__cdecl*)(void*, unsigned int*);
     using FnNvAPI_Unload               = int (__cdecl*)();
 
     HMODULE                            m_hNvApi  = nullptr;
@@ -89,6 +102,7 @@ private:
     FnNvmlDeviceGetTemperature         m_fnNvmlGetTemp       = nullptr;
     FnNvmlDeviceGetClockInfo           m_fnNvmlGetClock      = nullptr;
     FnNvmlDeviceGetFanSpeed            m_fnNvmlGetFan        = nullptr;
+    FnNvmlDeviceGetFanSpeedRPM         m_fnNvmlGetFanRpm     = nullptr;
     FnNvmlDeviceGetPowerUsage          m_fnNvmlGetPower      = nullptr;
     FnNvmlDeviceGetPowerLimit          m_fnNvmlGetPowerLimit = nullptr;
     FnNvAPI_Initialize                 m_fnInitialize       = nullptr;
@@ -98,6 +112,7 @@ private:
     FnNvAPI_GPU_GetMemoryInfo          m_fnGetMemoryInfo    = nullptr;
     FnNvAPI_GPU_GetThermalSettings     m_fnGetThermalSettings = nullptr;
     FnNvAPI_GPU_GetAllClockFrequencies m_fnGetAllClockFrequencies = nullptr;
+    FnNvAPI_GPU_GetTachReading         m_fnGetTachReading    = nullptr;
     FnNvAPI_Unload                     m_fnUnload           = nullptr;
     bool                               m_initialized       = false;  // true only after successful NVAPI_Initialize.
     // One-shot NVAPI diagnostics: return codes of individual calls are printed
@@ -128,6 +143,9 @@ private:
     using FnGetTemp         = int (*)(void*, unsigned int, unsigned int*);
     using FnGetClock        = int (*)(void*, unsigned int, unsigned int*);
     using FnGetFan          = int (*)(void*, unsigned int*);
+    // nvmlDeviceGetFanSpeedRPM (NVML 12.4+, optional symbol), see the Windows
+    // declaration: the argument is nvmlFanSpeedInfo_v1.
+    using FnGetFanRpm       = int (*)(void*, void*);
     using FnGetPower        = int (*)(void*, unsigned int*);
     using FnGetPowerLimit   = int (*)(void*, unsigned int*);
 
@@ -142,6 +160,7 @@ private:
     FnGetTemp    m_fnGetTemp       = nullptr;
     FnGetClock   m_fnGetClock      = nullptr;
     FnGetFan     m_fnGetFan        = nullptr;
+    FnGetFanRpm  m_fnGetFanRpm     = nullptr;
     FnGetPower   m_fnGetPower      = nullptr;
     FnGetPowerLimit m_fnGetPowerLimit = nullptr;
 

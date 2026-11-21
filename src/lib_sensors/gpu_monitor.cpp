@@ -19,6 +19,7 @@ static const unsigned int NVAPI_GPU_GET_DYNAMIC_PSTATES_EX_ID = 0x60DED2ED;
 static const unsigned int NVAPI_GPU_GET_MEMORY_INFO_ID       = 0x07F9B368;
 static const unsigned int NVAPI_GPU_GET_THERMAL_SETTINGS_ID  = 0xE3640A56;
 static const unsigned int NVAPI_GPU_GET_ALL_CLOCK_FREQS_ID   = 0xDCB616C3;
+static const unsigned int NVAPI_GPU_GET_TACH_READING_ID      = 0x5F608315;
 static const unsigned int NVAPI_UNLOAD_ID                    = 0xD22BDD7E;
 
 // NVAPI struct definitions (minimal, for dynamic loading).
@@ -127,6 +128,18 @@ struct NvmlMemory
     unsigned long long free;
     unsigned long long used;
 };
+
+// NVML nvmlFanSpeedInfo_v1 (nvml.h): fan index in, RPM out. The version field
+// is NVML_STRUCT_VERSION(FanSpeedInfo, 1) = size | (version << 24).
+struct NvmlFanSpeedInfo
+{
+    unsigned int version;
+    unsigned int fan;
+    unsigned int speed;
+};
+
+static const unsigned int NVML_FANSPEED_INFO_V1 =
+    static_cast<unsigned int>(sizeof(NvmlFanSpeedInfo)) | (1u << 24);
 
 // Type of nvapi_QueryInterface.
 using FnNvAPI_QueryInterface = void* (__cdecl*)(unsigned int interfaceId);
@@ -296,6 +309,19 @@ void GpuMonitor::CollectNvApi(std::vector<GpuMetrics>& out)
                 meta.temperature = static_cast<double>(thermal.sensor[0].currentTemp);
         }
 
+        // Fan tachometer in RPM. NVAPI has no cooler/fan-percentage interface,
+        // so this fallback path can only report RPM (and no RPM maximum); many
+        // GeForce models answer NOT_SUPPORTED, which is why NVML is primary.
+        if (m_fnGetTachReading)
+        {
+            unsigned int rpm = 0;
+            int rcTach = m_fnGetTachReading(hGpus[i], &rpm);
+            if (diag)
+                LOGI("NvAPI_GPU_GetTachReading gpu%u rc=%d rpm=%u", i, rcTach, rpm);
+            if (rcTach == NVAPI_OK && rpm < 30000u)
+                meta.fanRpm = static_cast<int>(rpm);
+        }
+
         // Clock frequencies. bIsPresent is a bit-field, frequency is 31-bit.
         // domain[NVAPI_MAX_GPU_PUBLIC_CLOCKS] where the constant equals 32.
         if (m_fnGetAllClockFrequencies)
@@ -398,7 +424,21 @@ void GpuMonitor::CollectNvml(std::vector<GpuMetrics>& out)
                 meta.vramFreqMhz = static_cast<double>(mhz);
         }
 
-        // Fan speed in percent (stable NVML API does not expose RPM).
+        // Fan speed. The UI prefers RPM, which comes from
+        // nvmlDeviceGetFanSpeedRPM (NVML 12.4 / driver R550 and newer); the
+        // percent value of the older call stays as the fallback for drivers
+        // that do not export the RPM symbol. NVML reports no RPM maximum
+        // (nvmlDeviceGetMinMaxFanSpeed is a percentage limit), so fanMaxRpm
+        // is left at -1 for NVIDIA cards.
+        if (m_fnNvmlGetFanRpm)
+        {
+            NvmlFanSpeedInfo fanInfo{};
+            fanInfo.version = NVML_FANSPEED_INFO_V1;
+            fanInfo.fan     = 0;
+            if (m_fnNvmlGetFanRpm(hDevice, &fanInfo) == NVML_SUCCESS &&
+                fanInfo.speed < 30000u)
+                meta.fanRpm = static_cast<int>(fanInfo.speed);
+        }
         if (m_fnNvmlGetFan)
         {
             unsigned int fanPct = 0;
@@ -455,6 +495,8 @@ bool GpuMonitor::LoadNvml()
     m_fnNvmlGetTemp  = reinterpret_cast<FnNvmlDeviceGetTemperature>(GetProcAddress(m_hNvml, "nvmlDeviceGetTemperature"));
     m_fnNvmlGetClock = reinterpret_cast<FnNvmlDeviceGetClockInfo>(GetProcAddress(m_hNvml, "nvmlDeviceGetClockInfo"));
     m_fnNvmlGetFan   = reinterpret_cast<FnNvmlDeviceGetFanSpeed>(GetProcAddress(m_hNvml, "nvmlDeviceGetFanSpeed"));
+    // Optional: absent before NVML 12.4, the RPM chart then falls back to percent.
+    m_fnNvmlGetFanRpm = reinterpret_cast<FnNvmlDeviceGetFanSpeedRPM>(GetProcAddress(m_hNvml, "nvmlDeviceGetFanSpeedRPM"));
     m_fnNvmlGetPower = reinterpret_cast<FnNvmlDeviceGetPowerUsage>(GetProcAddress(m_hNvml, "nvmlDeviceGetPowerUsage"));
     m_fnNvmlGetPowerLimit = reinterpret_cast<FnNvmlDeviceGetPowerLimit>(GetProcAddress(m_hNvml, "nvmlDeviceGetPowerManagementLimit"));
 
@@ -470,6 +512,8 @@ bool GpuMonitor::LoadNvml()
          reinterpret_cast<void*>(m_fnNvmlGetTemp),
          reinterpret_cast<void*>(m_fnNvmlGetClock),
          reinterpret_cast<void*>(m_fnNvmlGetFan));
+    LOGI("nvmlDeviceGetFanSpeedRPM=%p (0 means the driver is older than NVML 12.4, fan shown in percent).",
+         reinterpret_cast<void*>(m_fnNvmlGetFanRpm));
     LOGI("nvmlDeviceGetPowerUsage=%p nvmlDeviceGetPowerManagementLimit=%p",
          reinterpret_cast<void*>(m_fnNvmlGetPower),
          reinterpret_cast<void*>(m_fnNvmlGetPowerLimit));
@@ -521,6 +565,7 @@ void GpuMonitor::FreeNvml()
     m_fnNvmlGetTemp   = nullptr;
     m_fnNvmlGetClock  = nullptr;
     m_fnNvmlGetFan    = nullptr;
+    m_fnNvmlGetFanRpm = nullptr;
     m_fnNvmlGetPower  = nullptr;
     m_fnNvmlGetPowerLimit = nullptr;
 }
@@ -569,6 +614,8 @@ bool GpuMonitor::LoadNvApi()
         queryInterface(NVAPI_GPU_GET_THERMAL_SETTINGS_ID));
     m_fnGetAllClockFrequencies = reinterpret_cast<FnNvAPI_GPU_GetAllClockFrequencies>(
         queryInterface(NVAPI_GPU_GET_ALL_CLOCK_FREQS_ID));
+    m_fnGetTachReading         = reinterpret_cast<FnNvAPI_GPU_GetTachReading>(
+        queryInterface(NVAPI_GPU_GET_TACH_READING_ID));
     m_fnUnload               = reinterpret_cast<FnNvAPI_Unload>(
         queryInterface(NVAPI_UNLOAD_ID));
 
